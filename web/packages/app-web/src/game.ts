@@ -19,8 +19,10 @@ import {
   type RenderState,
   type JudgmentFlash,
   type HitFlash,
+  type SkinTextures,
 } from './renderer.js';
 import { channelToLane, LANE_LAYOUT, laneSpec } from './lane-layout.js';
+import { XrControllers } from './xr-controllers.js';
 
 const COUNTDOWN_MS = 2000;
 const BGM_CHANNEL = 0x01;
@@ -65,12 +67,12 @@ export class Game {
   private status: 'idle' | 'playing' | 'finished' = 'idle';
   private judgmentFlash: JudgmentFlash | null = null;
   private hitFlashes: HitFlash[] = [];
-  private rafHandle = 0;
   private onRestart: (() => void) | null = null;
   private bgmSources: AudioBufferSourceNode[] = [];
+  private readonly xrControllers: XrControllers;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
-    this.renderer = new Renderer(canvas);
+  constructor(private readonly canvas: HTMLCanvasElement, skin: SkinTextures = {}) {
+    this.renderer = new Renderer(canvas, skin);
     this.engine = new AudioEngine();
     this.input = new KeyboardInput();
     this.input.attach();
@@ -80,6 +82,17 @@ export class Game {
         this.onRestart?.();
       }
     });
+    this.xrControllers = new XrControllers(this.renderer.webgl, this.renderer.scene);
+    this.xrControllers.onHit((e) => this.handleLaneHit(e));
+  }
+
+  /** Enter a WebXR immersive-vr session (Quest browser). Throws if unsupported. */
+  async enterXR(onEnded: () => void): Promise<void> {
+    await this.renderer.enterXR(() => {
+      this.xrControllers.stop();
+      onEnded();
+    });
+    this.xrControllers.start();
   }
 
   async loadAndStart(
@@ -133,18 +146,18 @@ export class Game {
 
     this.scheduleBgm(this.song);
 
-    cancelAnimationFrame(this.rafHandle);
-    const frame = () => {
-      this.tick();
-      this.rafHandle = requestAnimationFrame(frame);
-    };
-    this.rafHandle = requestAnimationFrame(frame);
+    this.renderer.onFrame(() => this.tick());
   }
 
   stop(): void {
-    cancelAnimationFrame(this.rafHandle);
     this.input.detach();
     this.stopBgm();
+    this.renderer.dispose();
+  }
+
+  /** Expose the Three.js renderer so the caller can request an XR session. */
+  get display(): Renderer {
+    return this.renderer;
   }
 
   private stopBgm(): void {
@@ -234,6 +247,7 @@ export class Game {
   }
 
   private tick(): void {
+    this.xrControllers.tick();
     if (!this.song) return;
     const songTime = this.engine.songTimeMs();
 

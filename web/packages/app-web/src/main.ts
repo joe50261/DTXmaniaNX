@@ -3,6 +3,8 @@ import { dirname, SongScanner, type ChartEntry, type SongEntry } from '@dtxmania
 import { Game, type GameFsContext } from './game.js';
 import { HandleFileSystemBackend } from './fs/handle-backend.js';
 import { clearRootHandle, loadRootHandle, saveRootHandle } from './fs/handle-store.js';
+import { loadSkin } from './skin.js';
+import type { SkinTextures } from './renderer.js';
 
 const canvas = requireEl<HTMLCanvasElement>('game');
 const overlay = requireEl<HTMLDivElement>('overlay');
@@ -10,8 +12,14 @@ const statusEl = requireEl<HTMLDivElement>('status');
 const pickBtn = requireEl<HTMLButtonElement>('pick-folder');
 const demoBtn = requireEl<HTMLButtonElement>('start-demo');
 const forgetBtn = requireEl<HTMLButtonElement>('forget-folder');
+const xrBtn = requireEl<HTMLButtonElement>('enter-xr');
 const songListEl = requireEl<HTMLDivElement>('song-list');
 const scanErrorsEl = requireEl<HTMLDivElement>('scan-errors');
+
+// Preload skin PNGs once at boot. Games created later reuse these textures.
+const skinPromise: Promise<SkinTextures> = loadSkin(import.meta.env.BASE_URL);
+
+let activeGame: Game | null = null;
 
 interface Library {
   handle: FileSystemDirectoryHandle;
@@ -191,12 +199,20 @@ async function playDemo(): Promise<void> {
 }
 
 async function launchGame(dtxText: string, fs?: GameFsContext): Promise<void> {
-  const game = new Game(canvas);
+  if (activeGame) {
+    activeGame.stop();
+    activeGame = null;
+  }
+  const skin = await skinPromise;
+  const game = new Game(canvas, skin);
+  activeGame = game;
   const startOpts: Parameters<Game['loadAndStart']>[1] = {
     onRestart: () => {
       game.stop();
+      activeGame = null;
       overlay.style.display = 'grid';
       setStatus('Pick another chart or change folder.');
+      refreshXrButton();
     },
   };
   if (fs) {
@@ -211,12 +227,40 @@ async function launchGame(dtxText: string, fs?: GameFsContext): Promise<void> {
   try {
     await game.loadAndStart(dtxText, startOpts);
     overlay.style.display = 'none';
+    refreshXrButton();
   } catch (e) {
     setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
     game.stop();
+    activeGame = null;
     throw e;
   }
 }
+
+function refreshXrButton(): void {
+  if (!navigator.xr || !activeGame) {
+    xrBtn.style.display = 'none';
+    return;
+  }
+  navigator.xr
+    .isSessionSupported('immersive-vr')
+    .then((supported) => {
+      xrBtn.style.display = supported && activeGame ? 'inline-block' : 'none';
+    })
+    .catch(() => {
+      xrBtn.style.display = 'none';
+    });
+}
+
+xrBtn.addEventListener('click', () =>
+  run(async () => {
+    if (!activeGame) return;
+    await activeGame.enterXR(() => {
+      // Session ended — ensure overlay is back if the game was finished.
+      setStatus('Exited VR.');
+    });
+    setStatus('In VR — use controllers to play.');
+  })
+);
 
 function run(fn: () => Promise<void>): void {
   fn().catch((e) => {
