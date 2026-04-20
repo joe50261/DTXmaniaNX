@@ -79,6 +79,24 @@ registered.
 - 🚧 XR session + Touch controllers
 - 🚧 Capacitor APK packaging
 
+## Security
+
+Dev-dep advisories are caught by two independent layers:
+
+1. **GitHub Dependabot** (alerts + security-update PRs) is enabled on the
+   repository — handles detection and triage automatically, no CI needed.
+2. **Local `pnpm audit`** for on-demand checks during development:
+
+   ```sh
+   pnpm run audit        # moderate+ (current gate)
+   pnpm run audit:high   # high+ only, useful for noisy baselines
+   ```
+
+There are no runtime third-party deps today (all workspace packages are
+`workspace:*`), so the attack surface is limited to the build toolchain
+(`vite`, `vitest`, `typescript`). Upgrades that resolve advisories should
+preserve the Volta pin in root `package.json` — bump both together.
+
 ## Scope
 
 v1 focuses on DTX drum play. BMS/GDA/G2D, `.dtxc` cache, Discord, plugins, DTXCreator, guitar/bass, and AVI playback are out of scope.
