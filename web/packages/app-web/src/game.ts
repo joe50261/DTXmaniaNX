@@ -5,10 +5,12 @@ import {
   classifyDeltaMs,
   Judgment,
   HIT_RANGES_MS,
+  joinPath,
   type Chip,
+  type FileSystemBackend,
   type Song,
 } from '@dtxmania/dtx-core';
-import { AudioEngine } from '@dtxmania/audio-engine';
+import { AudioEngine, SampleBank } from '@dtxmania/audio-engine';
 import { KeyboardInput, type LaneHitEvent, type LaneValue } from '@dtxmania/input';
 import {
   Renderer,
@@ -21,6 +23,7 @@ import {
 import { channelToLane, LANE_LAYOUT, laneSpec } from './lane-layout.js';
 
 const COUNTDOWN_MS = 2000;
+const BGM_CHANNEL = 0x01;
 const LANE_CHANNELS = new Set<number>([
   0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
 ]);
@@ -31,6 +34,12 @@ interface PlayableChip {
   scheduled: boolean;
   hit: boolean;
   missed: boolean;
+}
+
+export interface GameFsContext {
+  backend: FileSystemBackend;
+  /** Folder containing the .dtx being played; BGM WAV paths resolve here. */
+  folder: string;
 }
 
 export class Game {
@@ -47,6 +56,7 @@ export class Game {
   private hitFlashes: HitFlash[] = [];
   private rafHandle = 0;
   private onRestart: (() => void) | null = null;
+  private bgmSources: AudioBufferSourceNode[] = [];
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = new Renderer(canvas);
@@ -61,8 +71,12 @@ export class Game {
     });
   }
 
-  async loadAndStart(dtxText: string, opts: { onRestart?: () => void } = {}): Promise<void> {
+  async loadAndStart(
+    dtxText: string,
+    opts: { onRestart?: () => void; fs?: GameFsContext } = {}
+  ): Promise<void> {
     this.onRestart = opts.onRestart ?? null;
+    this.stopBgm();
     await this.engine.resume();
 
     this.song = computeTiming(parseDtx(dtxText));
@@ -77,8 +91,19 @@ export class Game {
 
     this.tracker = new ScoreTracker(this.playables.length);
     this.nextScheduleIdx = 0;
+
+    // Preload BGM buffers before starting the song clock so the countdown
+    // covers decoding latency on slower devices (Quest browser takes ~200ms
+    // to decode a 5MB OGG). Missing or undecodable samples are just skipped;
+    // the chart still plays without BGM.
+    const bgmBuffers = opts.fs
+      ? await this.preloadBgmBuffers(this.song, opts.fs)
+      : new Map<number, AudioBuffer>();
+
     this.status = 'playing';
     this.engine.startSongClock(COUNTDOWN_MS);
+
+    this.scheduleBgm(this.song, bgmBuffers);
 
     cancelAnimationFrame(this.rafHandle);
     const frame = () => {
@@ -91,6 +116,61 @@ export class Game {
   stop(): void {
     cancelAnimationFrame(this.rafHandle);
     this.input.detach();
+    this.stopBgm();
+  }
+
+  private stopBgm(): void {
+    for (const src of this.bgmSources) {
+      try {
+        src.stop();
+      } catch {
+        /* already stopped / not yet started */
+      }
+    }
+    this.bgmSources.length = 0;
+  }
+
+  private async preloadBgmBuffers(
+    song: Song,
+    fs: GameFsContext
+  ): Promise<Map<number, AudioBuffer>> {
+    const uniqueWavIds = new Set<number>();
+    for (const chip of song.chips) {
+      if (chip.channel === BGM_CHANNEL && chip.wavId !== undefined) {
+        uniqueWavIds.add(chip.wavId);
+      }
+    }
+    if (uniqueWavIds.size === 0) return new Map();
+
+    const bank = new SampleBank(this.engine.ctx, (rel) =>
+      fs.backend.readFile(joinPath(fs.folder, rel))
+    );
+
+    const out = new Map<number, AudioBuffer>();
+    await Promise.all(
+      Array.from(uniqueWavIds).map(async (id) => {
+        const def = song.wavTable.get(id);
+        if (!def || !def.path) return;
+        const buf = await bank.load(def.path);
+        if (buf) out.set(id, buf);
+      })
+    );
+    return out;
+  }
+
+  private scheduleBgm(song: Song, buffers: Map<number, AudioBuffer>): void {
+    if (buffers.size === 0) return;
+    for (const chip of song.chips) {
+      if (chip.channel !== BGM_CHANNEL) continue;
+      if (chip.wavId === undefined) continue;
+      const buffer = buffers.get(chip.wavId);
+      if (!buffer) continue;
+      const def = song.wavTable.get(chip.wavId);
+      const volume = def ? def.volume / 100 : 1;
+      const pan = def ? def.pan / 100 : 0;
+      const src = this.engine.scheduleBuffer(buffer, chip.playbackTimeMs, { volume, pan });
+      this.bgmSources.push(src);
+    }
   }
 
   private tick(): void {
