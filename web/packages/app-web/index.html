@@ -3,7 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-    <title>DTXmania Web (MVP)</title>
+    <meta name="theme-color" content="#0b0f1a" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <title>DTXmania Web</title>
     <style>
       html,
       body {
@@ -33,30 +37,98 @@
         inset: 0;
         display: grid;
         place-items: center;
-        background: rgba(0, 0, 0, 0.8);
+        background: rgba(0, 0, 0, 0.86);
         z-index: 10;
+        overflow: auto;
       }
-      #overlay button {
-        font: inherit;
-        font-size: 18px;
-        padding: 14px 28px;
-        background: #3355ff;
-        color: #fff;
-        border: 0;
-        border-radius: 8px;
-        cursor: pointer;
+      #overlay .panel {
+        min-width: 520px;
+        max-width: 720px;
+        padding: 28px 32px;
+        box-sizing: border-box;
       }
       #overlay .title {
         font-size: 28px;
+        margin-bottom: 6px;
+      }
+      #overlay .subtitle {
+        opacity: 0.6;
+        font-size: 13px;
         margin-bottom: 18px;
       }
+      #overlay .status {
+        font-size: 14px;
+        opacity: 0.85;
+        margin: 10px 0 14px;
+        min-height: 1.4em;
+      }
+      #overlay .buttons {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      #overlay button {
+        font: inherit;
+        font-size: 14px;
+        padding: 10px 16px;
+        background: #3355ff;
+        color: #fff;
+        border: 0;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      #overlay button.ghost {
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+      }
+      #overlay button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
       #overlay .hint {
-        margin-top: 14px;
-        opacity: 0.7;
-        font-size: 13px;
-        max-width: 520px;
-        text-align: center;
+        margin-top: 18px;
+        opacity: 0.55;
+        font-size: 12px;
         line-height: 1.5;
+      }
+      #song-list {
+        margin-top: 16px;
+        max-height: 56vh;
+        overflow-y: auto;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      .song {
+        padding: 10px 4px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .song-title {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 14px;
+      }
+      .chart-row {
+        display: flex;
+        gap: 6px;
+      }
+      .chart-btn {
+        font-size: 12px !important;
+        padding: 4px 10px !important;
+        background: #1e2a55 !important;
+      }
+      .chart-btn:hover {
+        background: #3355ff !important;
+      }
+      .errors {
+        margin-top: 10px;
+        font-size: 12px;
+        opacity: 0.55;
       }
     </style>
   </head>
@@ -65,13 +137,21 @@
       <canvas id="game" width="1280" height="720"></canvas>
     </div>
     <div id="overlay">
-      <div>
-        <div class="title">DTXmania Web — MVP</div>
-        <button id="start">Start (click to allow audio)</button>
+      <div class="panel">
+        <div class="title">DTXmania Web</div>
+        <div class="subtitle">TypeScript / WebXR rewrite — Canvas 2D preview</div>
+        <div class="status" id="status">Pick your Songs folder to begin.</div>
+        <div class="buttons">
+          <button id="pick-folder">Pick folder</button>
+          <button id="start-demo" class="ghost">Play bundled demo</button>
+          <button id="forget-folder" class="ghost" style="display:none">Forget folder</button>
+        </div>
+        <div id="song-list"></div>
+        <div class="errors" id="scan-errors"></div>
         <div class="hint">
           Keys: S/D = Snare, Space = Bass, H = HiHat, J = Left Cymbal, F = Crash,
-          U/O = HiTom, A/P = LoTom, G = FloorTom. Drum sounds are synthesized
-          for this demo. Esc to restart.
+          U/O = HiTom, A/P = LoTom, G = FloorTom. Escape returns here.
+          Folder access uses the File System Access API (Chrome / Edge / Quest Browser).
         </div>
       </div>
     </div>

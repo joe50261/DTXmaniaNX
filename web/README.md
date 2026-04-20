@@ -40,19 +40,42 @@ pnpm --filter @dtxmania/app-web dev      # http://localhost:5173/
 pnpm --filter @dtxmania/app-web build    # prod bundle in packages/app-web/dist
 ```
 
-The demo app loads `packages/app-web/public/demo.dtx` (a 4-measure drum chart
-with a mid-song BPM change). Click Start to unlock audio, then play with
-the DTXMania default keys (S/D = Snare, Space = Bass, H = HiHat, J = LC, F = Crash, etc).
+### Playing
 
-## Status (MVP)
+Two paths:
+
+- **Pick folder** — opens a File System Access API directory picker. Select your
+  `DTXmaniaNX/Songs/` (or any folder with `.dtx` charts / `set.def` song groups).
+  The directory handle is persisted in IndexedDB, so revisits only need a
+  one-click permission re-grant. Requires Chromium-based browsers (Chrome, Edge,
+  Quest Browser).
+- **Play bundled demo** — plays the built-in 4-measure chart at
+  `packages/app-web/public/demo.dtx` (mid-song BPM change). Works in any
+  browser.
+
+Default keys: S/D = Snare, Space = Bass, H = HiHat, J = Left Cymbal, F = Crash,
+U/O = HiTom, A/P = LoTom, G = FloorTom, K = Open HH. Escape returns to the
+library. Drum sounds are synthesized in this preview; real WAV samples are a
+later milestone.
+
+### PWA
+
+The app ships a `manifest.webmanifest` + minimal service worker, so it's
+installable to the home screen / Quest library. The service worker uses
+cache-first for the app shell and network-first for everything else (so fresh
+JS is always pulled when online). In dev (`vite`) the SW is intentionally not
+registered.
+
+## Status
 
 - ✅ DTX parsing (metadata, WAV/BPM tables, chip lines, hex ch.03, #BASEBPM)
 - ✅ Timing (mid-measure BPM changes, multi-measure gaps)
 - ✅ Scoring (judgment windows + 1M-point simplified score)
-- ✅ Scanner (abstract FS, set.def, recursive walk)
-- ✅ MVP playable: falling notes, keyboard hits, judgment flashes, combo/score HUD
-- 🚧 Three.js renderer (Canvas 2D in MVP; plan upgrades to Three.js for XR)
+- ✅ Scanner + FS Access API backend + IndexedDB handle persistence
+- ✅ Playable Canvas 2D prototype: falling notes, keyboard hits, judgment flashes, HUD
+- ✅ PWA manifest + service worker (installable, offline shell)
 - 🚧 WAV sample playback (synth drums only for now)
+- 🚧 Three.js renderer (Canvas 2D today; upgrades to Three.js for XR)
 - 🚧 XR session + Touch controllers
 - 🚧 Capacitor APK packaging
 
