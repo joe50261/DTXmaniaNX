@@ -102,6 +102,55 @@ describe('SongScanner', () => {
     expect(index.songs).toHaveLength(0);
   });
 
+  it('parses a UTF-16 LE BOM-prefixed set.def (DTXCreator Windows output)', async () => {
+    // Seen in the wild with DTXCreator: SET.def saved as UTF-16 LE with BOM.
+    // Before BOM detection the file decoded as Shift_JIS garbage → 0 blocks
+    // → the whole folder fell through to per-.dtx rows instead of grouping.
+    const utf16leWithBom = (s: string): Uint8Array => {
+      const buf = new Uint8Array(2 + s.length * 2);
+      buf[0] = 0xff;
+      buf[1] = 0xfe;
+      for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        buf[2 + i * 2] = c & 0xff;
+        buf[2 + i * 2 + 1] = (c >> 8) & 0xff;
+      }
+      return buf;
+    };
+    const fs = new MemoryFs();
+    fs.setFile(
+      'Songs/Rock/SET.def',
+      utf16leWithBom(
+        [
+          '#TITLE 天ノ弱',
+          '#L1LABEL BASIC',
+          '#L1FILE bsc.dtx',
+          '#L2LABEL ADVANCED',
+          '#L2FILE adv.dtx',
+          '#L3LABEL EXTREME',
+          '#L3FILE ext.dtx',
+          '#L4LABEL MASTER',
+          '#L4FILE mstr.dtx',
+          '',
+        ].join('\r\n')
+      )
+    );
+    fs.setFile('Songs/Rock/bsc.dtx', '#TITLE 天ノ弱');
+    fs.setFile('Songs/Rock/adv.dtx', '#TITLE 天ノ弱');
+    fs.setFile('Songs/Rock/ext.dtx', '#TITLE 天ノ弱');
+    fs.setFile('Songs/Rock/mstr.dtx', '#TITLE 天ノ弱');
+    const index = await new SongScanner(fs).scan('Songs');
+    expect(index.songs).toHaveLength(1);
+    expect(index.songs[0]?.title).toBe('天ノ弱');
+    expect(index.songs[0]?.fromSetDef).toBe(true);
+    expect(index.songs[0]?.charts.map((c) => c.label)).toEqual([
+      'BASIC',
+      'ADVANCED',
+      'EXTREME',
+      'MASTER',
+    ]);
+  });
+
   it('falls back to .dtx scan when set.def yields zero surviving songs', async () => {
     // set.def refers to files that are not on disk (common with renamed charts
     // or case mismatches on case-sensitive filesystems). Before the fallback

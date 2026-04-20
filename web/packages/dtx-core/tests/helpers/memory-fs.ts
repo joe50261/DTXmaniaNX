@@ -1,4 +1,8 @@
-import type { DirEntry, FileSystemBackend } from '../../src/scanner/fs-backend.js';
+import {
+  decodeTextWithBom,
+  type DirEntry,
+  type FileSystemBackend,
+} from '../../src/scanner/fs-backend.js';
 
 type Entry = { kind: 'file'; bytes: Uint8Array } | { kind: 'dir' };
 
@@ -49,11 +53,10 @@ export class MemoryFs implements FileSystemBackend {
     return e.bytes.slice().buffer;
   }
 
-  async readText(path: string, _encoding?: string): Promise<string> {
+  async readText(path: string, encoding: string = 'shift-jis'): Promise<string> {
     const e = this.entries.get(normalize(path));
     if (!e || e.kind !== 'file') throw new Error(`not a file: ${path}`);
-    // MemoryFs always stores as UTF-8; tests don't exercise shift-jis decoding.
-    return new TextDecoder('utf-8').decode(e.bytes);
+    return decodeTextWithBom(e.bytes.buffer.slice(e.bytes.byteOffset, e.bytes.byteOffset + e.bytes.byteLength) as ArrayBuffer, encoding);
   }
 
   async exists(path: string): Promise<boolean> {

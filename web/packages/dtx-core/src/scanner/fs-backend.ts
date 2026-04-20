@@ -57,3 +57,37 @@ export function extname(path: string): string {
   const idx = base.lastIndexOf('.');
   return idx <= 0 ? '' : base.slice(idx).toLowerCase();
 }
+
+/**
+ * Decode a file's raw bytes to text, honouring any Unicode byte-order mark.
+ *
+ * Real-world DTX + set.def files come in three flavours:
+ *   - UTF-16 LE with BOM (DTXCreator default on Windows; very common)
+ *   - UTF-8 with BOM (newer charts saved from Notepad / VSCode)
+ *   - Shift_JIS with no BOM (legacy, still the most common for .dtx bodies)
+ *
+ * If no BOM is present we try the caller's expected encoding (usually
+ * `shift-jis`) with `fatal: true`; if that throws (invalid bytes in that
+ * encoding) we fall back to `utf-8` non-fatal so at least something comes
+ * out. Callers that know the encoding can still pass it explicitly.
+ */
+export function decodeTextWithBom(
+  buf: ArrayBuffer,
+  fallbackEncoding: string = 'shift-jis'
+): string {
+  const bytes = new Uint8Array(buf);
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return new TextDecoder('utf-8').decode(bytes.subarray(3));
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return new TextDecoder('utf-16le').decode(bytes.subarray(2));
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return new TextDecoder('utf-16be').decode(bytes.subarray(2));
+  }
+  try {
+    return new TextDecoder(fallbackEncoding, { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+}
