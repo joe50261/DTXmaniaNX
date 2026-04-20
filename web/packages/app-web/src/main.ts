@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
-import { SongScanner, type ChartEntry, type SongEntry } from '@dtxmania/dtx-core';
-import { Game } from './game.js';
+import { dirname, SongScanner, type ChartEntry, type SongEntry } from '@dtxmania/dtx-core';
+import { Game, type GameFsContext } from './game.js';
 import { HandleFileSystemBackend } from './fs/handle-backend.js';
 import { clearRootHandle, loadRootHandle, saveRootHandle } from './fs/handle-store.js';
 
@@ -148,24 +148,27 @@ function renderScanErrors(errors: { path: string; message: string }[]): void {
 async function startChart(chart: ChartEntry): Promise<void> {
   if (!library) throw new Error('no library loaded');
   const text = await library.backend.readText(chart.chartPath);
-  await launchGame(text);
+  await launchGame(text, { backend: library.backend, folder: dirname(chart.chartPath) });
 }
 
 async function playDemo(): Promise<void> {
   const res = await fetch(`${import.meta.env.BASE_URL}demo.dtx`);
   if (!res.ok) throw new Error(`failed to load demo.dtx: ${res.status}`);
+  // Demo ships without accompanying WAVs, so no fs context.
   await launchGame(await res.text());
 }
 
-async function launchGame(dtxText: string): Promise<void> {
+async function launchGame(dtxText: string, fs?: GameFsContext): Promise<void> {
   overlay.style.display = 'none';
   const game = new Game(canvas);
-  await game.loadAndStart(dtxText, {
+  const startOpts: Parameters<Game['loadAndStart']>[1] = {
     onRestart: () => {
       game.stop();
       overlay.style.display = 'grid';
     },
-  });
+  };
+  if (fs) startOpts.fs = fs;
+  await game.loadAndStart(dtxText, startOpts);
 }
 
 function run(fn: () => Promise<void>): void {

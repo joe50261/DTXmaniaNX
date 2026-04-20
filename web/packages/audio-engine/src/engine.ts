@@ -51,4 +51,41 @@ export class AudioEngine {
     if (pan !== undefined) opts.pan = pan;
     this.drums.play(voice, Math.max(this.ctx.currentTime, ctxWhen), opts);
   }
+
+  /**
+   * Schedule a pre-decoded AudioBuffer at an absolute song time. If the song
+   * time is already in the past (e.g. BGM scheduled after the song has
+   * started) the buffer starts immediately but `offset` advances into it so
+   * playback stays aligned with the song clock.
+   *
+   * The returned source can be `.stop()`-ed on restart / scene change.
+   */
+  scheduleBuffer(
+    buffer: AudioBuffer,
+    songTimeMs: number,
+    options: { volume?: number; pan?: number } = {}
+  ): AudioBufferSourceNode {
+    const volume = options.volume ?? 1;
+    const pan = options.pan ?? 0;
+    const target = this._songStartCtxTime + songTimeMs / 1000;
+    const now = this.ctx.currentTime;
+    const when = target < now ? now : target;
+    const offset = target < now ? now - target : 0;
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    const gain = this.ctx.createGain();
+    gain.gain.value = volume;
+    src.connect(gain);
+    if (pan !== 0 && typeof this.ctx.createStereoPanner === 'function') {
+      const panner = this.ctx.createStereoPanner();
+      panner.pan.value = pan;
+      gain.connect(panner);
+      panner.connect(this.ctx.destination);
+    } else {
+      gain.connect(this.ctx.destination);
+    }
+    src.start(when, offset);
+    return src;
+  }
 }

@@ -102,6 +102,23 @@ describe('SongScanner', () => {
     expect(index.songs).toHaveLength(0);
   });
 
+  it('falls back to .dtx scan when set.def yields zero surviving songs', async () => {
+    // set.def refers to files that are not on disk (common with renamed charts
+    // or case mismatches on case-sensitive filesystems). Before the fallback
+    // the whole folder was silently dropped; now we still surface the .dtx.
+    const fs = makeFs({
+      'Songs/Rock/SET.def': [
+        '#TITLE My Song',
+        '#L1FILE nonexistent.dtx',
+      ].join('\n'),
+      'Songs/Rock/bsc.dtx': '#TITLE B',
+      'Songs/Rock/adv.dtx': '#TITLE A',
+    });
+    const index = await new SongScanner(fs).scan('Songs');
+    expect(index.songs.map((s) => s.title).sort()).toEqual(['adv', 'bsc']);
+    expect(index.songs.every((s) => !s.fromSetDef)).toBe(true);
+  });
+
   it('only picks up .dtx (not .gda/.bms/.bme) in v1', async () => {
     const fs = makeFs({
       'Songs/A/a.dtx': '#TITLE A',

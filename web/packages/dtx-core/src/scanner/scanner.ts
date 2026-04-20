@@ -85,6 +85,7 @@ export class SongScanner {
     );
 
     if (setDefEntry) {
+      let pushedFromSetDef = 0;
       try {
         const text = await this.fs.readText(setDefEntry.path, 'shift-jis');
         const blocks = parseSetDef(text);
@@ -100,10 +101,22 @@ export class SongScanner {
           if (survivingCharts.length > 0) {
             song.charts = survivingCharts;
             songs.push(song);
+            pushedFromSetDef++;
           }
         }
       } catch (e) {
         errors.push({ path: setDefEntry.path, message: errorMessage(e) });
+      }
+
+      // If the set.def yielded nothing usable (malformed file, broken chart
+      // references, wrong case on a case-sensitive FS), fall through to a
+      // plain .dtx scan so the folder still shows up in the library.
+      if (pushedFromSetDef === 0) {
+        for (const entry of entries) {
+          if (!entry.isFile) continue;
+          if (extname(entry.name) !== '.dtx') continue;
+          songs.push(singleDtxToSong(entry, path));
+        }
       }
     } else {
       // No set.def: collect .dtx files as individual songs.
