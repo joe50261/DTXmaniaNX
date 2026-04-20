@@ -152,7 +152,7 @@ async function startChart(chart: ChartEntry): Promise<void> {
 }
 
 async function playDemo(): Promise<void> {
-  const res = await fetch('/demo.dtx');
+  const res = await fetch(`${import.meta.env.BASE_URL}demo.dtx`);
   if (!res.ok) throw new Error(`failed to load demo.dtx: ${res.status}`);
   await launchGame(await res.text());
 }
@@ -183,9 +183,10 @@ function setStatus(text: string): void {
 function registerServiceWorker(): void {
   if (!('serviceWorker' in navigator)) return;
   if (import.meta.env.DEV) return; // Vite dev server serves modules; skip SW in dev.
+  const base = import.meta.env.BASE_URL;
   window.addEventListener('load', () => {
     navigator.serviceWorker
-      .register('/sw.js')
+      .register(`${base}sw.js`, { scope: base })
       .catch((e) => console.warn('service worker registration failed', e));
   });
 }

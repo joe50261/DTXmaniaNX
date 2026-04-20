@@ -79,6 +79,23 @@ registered.
 - 🚧 XR session + Touch controllers
 - 🚧 Capacitor APK packaging
 
+## Deploy (GitHub Pages)
+
+Every push to `master` runs `.github/workflows/deploy.yml`, which gates on
+`audit:high` + typecheck + tests + build, then publishes
+`packages/app-web/dist/` to GitHub Pages. PRs run the same gate without
+deploying. Live URL:
+
+    https://joe50261.github.io/DTXmaniaNX/
+
+One-time repo setup: **Settings → Pages → Source: GitHub Actions**.
+
+The Vite `base` is `/DTXmaniaNX/` on GitHub Actions (toggled by
+`process.env.GITHUB_ACTIONS`) and `/` for local dev / other CI. All
+runtime URL construction goes through `import.meta.env.BASE_URL` and the
+service worker derives its shell paths from `self.location`, so the same
+source works at either base.
+
 ## Security
 
 Dev-dep advisories are caught by two independent layers:

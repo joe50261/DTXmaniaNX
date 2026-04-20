@@ -1,13 +1,23 @@
 // Minimal Service Worker for install-ability.
 //
-// The goal here is installability (PWA manifest + registered SW) so users can
+// The goal is installability (PWA manifest + registered SW) so users can
 // add the app to their home screen / Quest library. Smart caching of hashed
-// Vite assets is deferred — we use a runtime stale-while-revalidate strategy
-// for the app shell (index.html, icons, manifest) and network-first for
-// everything else so fresh JS/WASM is always fetched when online.
+// Vite assets is deferred — we use cache-first for the app shell
+// (index.html, icons, manifest) and network-first for everything else so
+// fresh JS/WASM is always fetched when online.
+//
+// Paths are derived from the SW's own location so the same file works at
+// site root (`/sw.js`) and under a project-site base (`/DTXmaniaNX/sw.js`).
 
+const BASE_PATH = new URL('./', self.location).pathname; // "/" or "/DTXmaniaNX/"
 const SHELL_CACHE = 'dtxmania-shell-v1';
-const SHELL_URLS = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg', '/icon-maskable.svg'];
+const SHELL_URLS = [
+  BASE_PATH,
+  BASE_PATH + 'index.html',
+  BASE_PATH + 'manifest.webmanifest',
+  BASE_PATH + 'icon.svg',
+  BASE_PATH + 'icon-maskable.svg',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
