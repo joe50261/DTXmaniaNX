@@ -16,7 +16,23 @@ packages/
 
 ## Dev
 
+### Toolchain
+
+Node 22 + pnpm 9 are pinned via the `volta` field in `package.json`.
+
+**If you already have pnpm** (Corepack, Homebrew, etc.): just `pnpm install`.
+
+**If you only have [Volta](https://volta.sh/)**: one-time setup, then Volta
+auto-switches to the pinned versions whenever you `cd` into `web/`:
+
 ```sh
+volta install pnpm@9        # one-time, Volta fetches Node 22 automatically on first use
+```
+
+### Commands
+
+```sh
+cd web
 pnpm install
 pnpm -r test           # 52 unit/e2e tests (dtx-core)
 pnpm -r typecheck      # all packages
