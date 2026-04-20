@@ -15,6 +15,31 @@ importers:
         specifier: ^1.6.0
         version: 1.6.1(@types/node@22.19.17)
 
+  packages/app-web:
+    dependencies:
+      '@dtxmania/audio-engine':
+        specifier: workspace:*
+        version: link:../audio-engine
+      '@dtxmania/dtx-core':
+        specifier: workspace:*
+        version: link:../dtx-core
+      '@dtxmania/input':
+        specifier: workspace:*
+        version: link:../input
+    devDependencies:
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+      vite:
+        specifier: ^5.4.0
+        version: 5.4.21(@types/node@22.19.17)
+
+  packages/audio-engine:
+    devDependencies:
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+
   packages/dtx-core:
     devDependencies:
       '@types/node':
@@ -26,6 +51,12 @@ importers:
       vitest:
         specifier: ^1.6.0
         version: 1.6.1(@types/node@22.19.17)
+
+  packages/input:
+    devDependencies:
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
 
 packages:
 
