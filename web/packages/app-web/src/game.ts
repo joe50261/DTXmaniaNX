@@ -34,12 +34,16 @@ interface PlayableChip {
   scheduled: boolean;
   hit: boolean;
   missed: boolean;
+  /** Real WAV sample for this chip, if one was preloaded. null → use synth fallback. */
+  buffer: AudioBuffer | null;
 }
 
 export interface GameFsContext {
   backend: FileSystemBackend;
-  /** Folder containing the .dtx being played; BGM WAV paths resolve here. */
+  /** Folder containing the .dtx being played; BGM + drum sample paths resolve here. */
   folder: string;
+  /** Optional progress callback for long preloads (e.g. 30+ WAV samples). */
+  onProgress?: (loaded: number, total: number) => void;
 }
 
 export class Game {
@@ -49,6 +53,7 @@ export class Game {
 
   private song: Song | null = null;
   private playables: PlayableChip[] = [];
+  private sampleByWavId = new Map<number, AudioBuffer>();
   private nextScheduleIdx = 0;
   private tracker = new ScoreTracker(0);
   private status: 'idle' | 'playing' | 'finished' = 'idle';
@@ -77,33 +82,43 @@ export class Game {
   ): Promise<void> {
     this.onRestart = opts.onRestart ?? null;
     this.stopBgm();
+    this.sampleByWavId.clear();
     await this.engine.resume();
 
     this.song = computeTiming(parseDtx(dtxText));
+
+    // Preload every sample the chart references (BGM + drums) in one batch.
+    // Missing or undecodable (e.g. .xa) samples are just absent from the map;
+    // the drum scheduler falls through to the synth voice for those chips.
+    if (opts.fs) {
+      this.sampleByWavId = await this.preloadSamples(this.song, opts.fs);
+    }
+
     this.playables = this.song.chips
       .filter((c) => LANE_CHANNELS.has(c.channel))
       .map<PlayableChip | null>((chip) => {
         const lane = channelToLane(chip.channel);
         if (!lane) return null;
-        return { chip, laneValue: lane.lane, scheduled: false, hit: false, missed: false };
+        const buffer =
+          chip.wavId !== undefined ? this.sampleByWavId.get(chip.wavId) ?? null : null;
+        return {
+          chip,
+          laneValue: lane.lane,
+          scheduled: false,
+          hit: false,
+          missed: false,
+          buffer,
+        };
       })
       .filter((p): p is PlayableChip => p !== null);
 
     this.tracker = new ScoreTracker(this.playables.length);
     this.nextScheduleIdx = 0;
 
-    // Preload BGM buffers before starting the song clock so the countdown
-    // covers decoding latency on slower devices (Quest browser takes ~200ms
-    // to decode a 5MB OGG). Missing or undecodable samples are just skipped;
-    // the chart still plays without BGM.
-    const bgmBuffers = opts.fs
-      ? await this.preloadBgmBuffers(this.song, opts.fs)
-      : new Map<number, AudioBuffer>();
-
     this.status = 'playing';
     this.engine.startSongClock(COUNTDOWN_MS);
 
-    this.scheduleBgm(this.song, bgmBuffers);
+    this.scheduleBgm(this.song);
 
     cancelAnimationFrame(this.rafHandle);
     const frame = () => {
@@ -130,13 +145,19 @@ export class Game {
     this.bgmSources.length = 0;
   }
 
-  private async preloadBgmBuffers(
+  /**
+   * Preload every WAV/OGG/MP3 referenced by a BGM or drum chip. Samples the
+   * browser can't decode (e.g. DTXMania's .xa files) are silently skipped and
+   * the corresponding chip will fall through to the synth voice.
+   */
+  private async preloadSamples(
     song: Song,
     fs: GameFsContext
   ): Promise<Map<number, AudioBuffer>> {
     const uniqueWavIds = new Set<number>();
     for (const chip of song.chips) {
-      if (chip.channel === BGM_CHANNEL && chip.wavId !== undefined) {
+      if (chip.wavId === undefined) continue;
+      if (chip.channel === BGM_CHANNEL || LANE_CHANNELS.has(chip.channel)) {
         uniqueWavIds.add(chip.wavId);
       }
     }
@@ -146,24 +167,34 @@ export class Game {
       fs.backend.readFile(joinPath(fs.folder, rel))
     );
 
+    const total = uniqueWavIds.size;
+    let done = 0;
+    fs.onProgress?.(0, total);
+
     const out = new Map<number, AudioBuffer>();
     await Promise.all(
       Array.from(uniqueWavIds).map(async (id) => {
-        const def = song.wavTable.get(id);
-        if (!def || !def.path) return;
-        const buf = await bank.load(def.path);
-        if (buf) out.set(id, buf);
+        try {
+          const def = song.wavTable.get(id);
+          if (def && def.path) {
+            const buf = await bank.load(def.path);
+            if (buf) out.set(id, buf);
+          }
+        } finally {
+          done++;
+          fs.onProgress?.(done, total);
+        }
       })
     );
     return out;
   }
 
-  private scheduleBgm(song: Song, buffers: Map<number, AudioBuffer>): void {
-    if (buffers.size === 0) return;
+  private scheduleBgm(song: Song): void {
+    if (this.sampleByWavId.size === 0) return;
     for (const chip of song.chips) {
       if (chip.channel !== BGM_CHANNEL) continue;
       if (chip.wavId === undefined) continue;
-      const buffer = buffers.get(chip.wavId);
+      const buffer = this.sampleByWavId.get(chip.wavId);
       if (!buffer) continue;
       const def = song.wavTable.get(chip.wavId);
       const volume = def ? def.volume / 100 : 1;
@@ -171,6 +202,19 @@ export class Game {
       const src = this.engine.scheduleBuffer(buffer, chip.playbackTimeMs, { volume, pan });
       this.bgmSources.push(src);
     }
+  }
+
+  private playChipSample(p: PlayableChip, songTimeMs: number, volume: number): void {
+    if (p.buffer) {
+      const def =
+        p.chip.wavId !== undefined ? this.song?.wavTable.get(p.chip.wavId) : undefined;
+      const v = def ? (def.volume / 100) * volume : volume;
+      const pan = def ? def.pan / 100 : 0;
+      this.engine.scheduleBuffer(p.buffer, songTimeMs, { volume: v, pan });
+      return;
+    }
+    const spec = laneSpec(p.laneValue);
+    if (spec) this.engine.scheduleDrum(spec.voice, songTimeMs, volume);
   }
 
   private tick(): void {
@@ -182,8 +226,7 @@ export class Game {
       const p = this.playables[this.nextScheduleIdx]!;
       if (p.chip.playbackTimeMs > songTime + 300) break;
       if (!p.scheduled) {
-        const spec = laneSpec(p.laneValue);
-        if (spec) this.engine.scheduleDrum(spec.voice, p.chip.playbackTimeMs, 0.5);
+        this.playChipSample(p, p.chip.playbackTimeMs, 0.5);
         p.scheduled = true;
       }
       this.nextScheduleIdx++;
@@ -246,7 +289,7 @@ export class Game {
     }
 
     if (bestIdx < 0) {
-      // Stray hit: play sound for feedback, no score change.
+      // Stray hit: synth feedback at current time, no score change.
       const spec = LANE_LAYOUT.find((s) => s.lane === event.lane);
       if (spec) this.engine.drums.play(spec.voice, this.engine.ctx.currentTime, { volume: 0.55 });
       this.hitFlashes.push({ lane: event.lane, spawnedMs: songTime });
@@ -265,9 +308,13 @@ export class Game {
     };
     this.hitFlashes.push({ lane: event.lane, spawnedMs: songTime });
 
-    // Play the hit sound via the user press (so feedback matches keystroke).
-    const spec = LANE_LAYOUT.find((s) => s.lane === event.lane);
-    if (spec) this.engine.drums.play(spec.voice, this.engine.ctx.currentTime, { volume: 0.7 });
+    // Matched-chip hit: if the chip was already auto-scheduled we don't
+    // stack a second playback (that created a noticeable echo). Only play
+    // a synth accent for crisp keystroke feedback when there's no sample.
+    if (!p.buffer) {
+      const spec = LANE_LAYOUT.find((s) => s.lane === event.lane);
+      if (spec) this.engine.drums.play(spec.voice, this.engine.ctx.currentTime, { volume: 0.7 });
+    }
   }
 }
 

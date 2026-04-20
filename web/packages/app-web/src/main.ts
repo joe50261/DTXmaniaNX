@@ -113,23 +113,55 @@ function renderSongList(songs: SongEntry[]): void {
   for (const song of songs) {
     const row = document.createElement('div');
     row.className = 'song';
+
+    const head = document.createElement('div');
+    head.className = 'song-head';
     const title = document.createElement('div');
     title.className = 'song-title';
     title.textContent = song.title;
-    row.appendChild(title);
+    head.appendChild(title);
+    const metaText = formatSongMeta(song);
+    if (metaText) {
+      const meta = document.createElement('div');
+      meta.className = 'song-meta';
+      meta.textContent = metaText;
+      head.appendChild(meta);
+    }
+    row.appendChild(head);
 
     const charts = document.createElement('div');
     charts.className = 'chart-row';
     for (const chart of song.charts) {
       const btn = document.createElement('button');
       btn.className = 'chart-btn';
-      btn.textContent = chart.label;
+      const label = document.createElement('span');
+      label.textContent = chart.label;
+      btn.appendChild(label);
+      if (chart.drumLevel !== undefined && chart.drumLevel > 0) {
+        const lvl = document.createElement('span');
+        lvl.className = 'level';
+        lvl.textContent = formatLevel(chart.drumLevel);
+        btn.appendChild(lvl);
+      }
       btn.addEventListener('click', () => run(() => startChart(chart)));
       charts.appendChild(btn);
     }
     row.appendChild(charts);
     songListEl.appendChild(row);
   }
+}
+
+function formatSongMeta(song: SongEntry): string {
+  const parts: string[] = [];
+  if (song.artist) parts.push(song.artist);
+  if (song.genre) parts.push(song.genre);
+  if (song.bpm) parts.push(`BPM ${Math.round(song.bpm)}`);
+  return parts.join(' · ');
+}
+
+// DTXMania stores #DLEVEL as 0..1000 (three digits shown as e.g. "5.62").
+function formatLevel(dlevel: number): string {
+  return (dlevel / 100).toFixed(2);
 }
 
 function renderScanErrors(errors: { path: string; message: string }[]): void {
@@ -159,16 +191,31 @@ async function playDemo(): Promise<void> {
 }
 
 async function launchGame(dtxText: string, fs?: GameFsContext): Promise<void> {
-  overlay.style.display = 'none';
   const game = new Game(canvas);
   const startOpts: Parameters<Game['loadAndStart']>[1] = {
     onRestart: () => {
       game.stop();
       overlay.style.display = 'grid';
+      setStatus('Pick another chart or change folder.');
     },
   };
-  if (fs) startOpts.fs = fs;
-  await game.loadAndStart(dtxText, startOpts);
+  if (fs) {
+    setStatus('Loading samples…');
+    startOpts.fs = {
+      ...fs,
+      onProgress: (loaded, total) => {
+        setStatus(`Loading samples… ${loaded}/${total}`);
+      },
+    };
+  }
+  try {
+    await game.loadAndStart(dtxText, startOpts);
+    overlay.style.display = 'none';
+  } catch (e) {
+    setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+    game.stop();
+    throw e;
+  }
 }
 
 function run(fn: () => Promise<void>): void {

@@ -168,6 +168,35 @@ describe('SongScanner', () => {
     expect(index.songs.every((s) => !s.fromSetDef)).toBe(true);
   });
 
+  it('fills chart.drumLevel / song.artist from each .dtx header when parseMeta is on', async () => {
+    const fs = makeFs({
+      'Songs/Rock/song.dtx': [
+        '#TITLE Tricky Song',
+        '#ARTIST The Band',
+        '#GENRE Rock',
+        '#BPM 172',
+        '#DLEVEL 562',
+      ].join('\n'),
+    });
+    const index = await new SongScanner(fs).scan('Songs');
+    expect(index.songs).toHaveLength(1);
+    const song = index.songs[0]!;
+    expect(song.artist).toBe('The Band');
+    expect(song.genre).toBe('Rock');
+    expect(song.bpm).toBe(172);
+    expect(song.charts[0]?.drumLevel).toBe(562);
+    expect(song.charts[0]?.bpm).toBe(172);
+  });
+
+  it('skips header parse when parseMeta is disabled', async () => {
+    const fs = makeFs({
+      'Songs/Rock/song.dtx': '#TITLE X\n#ARTIST Y\n#DLEVEL 300',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    expect(index.songs[0]?.artist).toBeUndefined();
+    expect(index.songs[0]?.charts[0]?.drumLevel).toBeUndefined();
+  });
+
   it('only picks up .dtx (not .gda/.bms/.bme) in v1', async () => {
     const fs = makeFs({
       'Songs/A/a.dtx': '#TITLE A',
