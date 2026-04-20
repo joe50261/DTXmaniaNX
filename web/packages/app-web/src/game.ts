@@ -31,7 +31,6 @@ const LANE_CHANNELS = new Set<number>([
 interface PlayableChip {
   chip: Chip;
   laneValue: LaneValue;
-  scheduled: boolean;
   hit: boolean;
   missed: boolean;
   /** Real WAV sample for this chip, if one was preloaded. null → use synth fallback. */
@@ -55,12 +54,13 @@ export class Game {
   private playables: PlayableChip[] = [];
   private sampleByWavId = new Map<number, AudioBuffer>();
   /**
-   * Last real-sample buffer that played on each lane. Used by stray (off-note)
-   * keystrokes to sound like a real drum hit on that lane instead of falling
-   * back to the synth. Populated in the auto-scheduler as chips fire.
+   * Per-lane "current" real-sample buffer used by any keystroke (matched or
+   * stray). Seeded at loadAndStart with the first chip on each lane that has
+   * a preloaded buffer, so test-taps before the song even starts sound like
+   * real drums. Updated as the player hits chips so a lane can change sample
+   * mid-song (e.g. ghost notes on SD).
    */
   private lastBufferByLane = new Map<LaneValue, { buffer: AudioBuffer; wavId: number }>();
-  private nextScheduleIdx = 0;
   private tracker = new ScoreTracker(0);
   private status: 'idle' | 'playing' | 'finished' = 'idle';
   private judgmentFlash: JudgmentFlash | null = null;
@@ -111,7 +111,6 @@ export class Game {
         return {
           chip,
           laneValue: lane.lane,
-          scheduled: false,
           hit: false,
           missed: false,
           buffer,
@@ -119,8 +118,15 @@ export class Game {
       })
       .filter((p): p is PlayableChip => p !== null);
 
+    // Seed per-lane default sample from the first chip on each lane that has
+    // a preloaded buffer. Playables are already sorted by playbackTimeMs.
+    for (const p of this.playables) {
+      if (!p.buffer || p.chip.wavId === undefined) continue;
+      if (this.lastBufferByLane.has(p.laneValue)) continue;
+      this.lastBufferByLane.set(p.laneValue, { buffer: p.buffer, wavId: p.chip.wavId });
+    }
+
     this.tracker = new ScoreTracker(this.playables.length);
-    this.nextScheduleIdx = 0;
 
     this.status = 'playing';
     this.engine.startSongClock(COUNTDOWN_MS);
@@ -231,16 +237,9 @@ export class Game {
     if (!this.song) return;
     const songTime = this.engine.songTimeMs();
 
-    // Schedule upcoming drum audio ~300ms ahead to keep the queue short.
-    while (this.nextScheduleIdx < this.playables.length) {
-      const p = this.playables[this.nextScheduleIdx]!;
-      if (p.chip.playbackTimeMs > songTime + 300) break;
-      if (!p.scheduled) {
-        this.playChipSample(p, p.chip.playbackTimeMs, 0.5);
-        p.scheduled = true;
-      }
-      this.nextScheduleIdx++;
-    }
+    // Drum chips don't auto-play; audio only fires on the player's keystroke
+    // (handleLaneHit). BGM is still auto-scheduled via scheduleBgm so the
+    // music continues. Missed chips are silent — standard rhythm-game feel.
 
     // Miss detection: any unhit chip whose judgment window has fully passed.
     for (const p of this.playables) {
