@@ -1,3 +1,4 @@
+import { parseDtx } from '../parser/parser.js';
 import { extname, joinPath, type DirEntry, type FileSystemBackend } from './fs-backend.js';
 import { parseSetDef, type SetDefBlock } from './setdef.js';
 
@@ -13,6 +14,10 @@ export interface ChartEntry {
   label: string;
   /** Absolute path (relative to the backend root) of the .dtx file. */
   chartPath: string;
+  /** #DLEVEL from the .dtx header (0..1000). Undefined if meta parsing was skipped/failed. */
+  drumLevel?: number;
+  /** #BPM from the .dtx header. Populated alongside drumLevel. */
+  bpm?: number;
 }
 
 export interface SongEntry {
@@ -24,6 +29,14 @@ export interface SongEntry {
   fromSetDef: boolean;
   fontColor?: string;
   charts: ChartEntry[];
+  /**
+   * Optional song-wide metadata, cheap to extract from any single chart's
+   * header (#ARTIST / #GENRE / #BPM). Filled when parseMeta is enabled and
+   * at least one chart parsed successfully.
+   */
+  artist?: string;
+  genre?: string;
+  bpm?: number;
 }
 
 export interface SongIndex {
@@ -42,6 +55,13 @@ export interface ScanOptions {
   skipDirs?: string[];
   /** Max recursion depth (root = 0). Default 12. */
   maxDepth?: number;
+  /**
+   * When true (default), read each .dtx header after detection and fill in
+   * `chart.drumLevel` / `chart.bpm` and `song.artist` / `song.genre`. Costs
+   * one read per chart; for very large libraries with cold FS caches you
+   * may want to disable and parse lazily on selection.
+   */
+  parseMeta?: boolean;
 }
 
 const DEFAULT_SKIP_DIRS = new Set(['system', '$recycle.bin', 'node_modules', '.git']);
@@ -49,19 +69,42 @@ const DEFAULT_SKIP_DIRS = new Set(['system', '$recycle.bin', 'node_modules', '.g
 export class SongScanner {
   private readonly skipDirs: Set<string>;
   private readonly maxDepth: number;
+  private readonly parseMeta: boolean;
 
   constructor(private readonly fs: FileSystemBackend, options: ScanOptions = {}) {
     this.skipDirs = new Set(
       (options.skipDirs ?? Array.from(DEFAULT_SKIP_DIRS)).map((s) => s.toLowerCase())
     );
     this.maxDepth = options.maxDepth ?? 12;
+    this.parseMeta = options.parseMeta ?? true;
   }
 
   async scan(rootPath: string): Promise<SongIndex> {
     const songs: SongEntry[] = [];
     const errors: ScanError[] = [];
     await this.walk(rootPath, 0, songs, errors);
+    if (this.parseMeta) {
+      for (const song of songs) {
+        await this.fillSongMeta(song, errors);
+      }
+    }
     return { rootPath, songs, errors };
+  }
+
+  private async fillSongMeta(song: SongEntry, errors: ScanError[]): Promise<void> {
+    for (const chart of song.charts) {
+      try {
+        const text = await this.fs.readText(chart.chartPath);
+        const parsed = parseDtx(text);
+        chart.drumLevel = parsed.drumLevel;
+        chart.bpm = parsed.baseBpm;
+        if (song.artist === undefined && parsed.artist) song.artist = parsed.artist;
+        if (song.genre === undefined && parsed.genre) song.genre = parsed.genre;
+        if (song.bpm === undefined) song.bpm = parsed.baseBpm;
+      } catch (e) {
+        errors.push({ path: chart.chartPath, message: errorMessage(e) });
+      }
+    }
   }
 
   private async walk(
