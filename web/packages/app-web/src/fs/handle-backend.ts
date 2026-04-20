@@ -1,4 +1,4 @@
-import type { DirEntry, FileSystemBackend } from '@dtxmania/dtx-core';
+import { decodeTextWithBom, type DirEntry, type FileSystemBackend } from '@dtxmania/dtx-core';
 
 /**
  * FileSystemBackend implementation backed by a FileSystemDirectoryHandle
@@ -35,13 +35,7 @@ export class HandleFileSystemBackend implements FileSystemBackend {
 
   async readText(path: string, encoding = 'shift-jis'): Promise<string> {
     const buf = await this.readFile(path);
-    try {
-      return new TextDecoder(encoding, { fatal: true }).decode(buf);
-    } catch {
-      // DTX files in the wild are usually Shift_JIS but some newer ones are UTF-8.
-      // Fall back to UTF-8 if the declared encoding can't decode the bytes.
-      return new TextDecoder('utf-8').decode(buf);
-    }
+    return decodeTextWithBom(buf, encoding);
   }
 
   async exists(path: string): Promise<boolean> {
