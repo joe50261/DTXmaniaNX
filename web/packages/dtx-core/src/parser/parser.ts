@@ -38,9 +38,12 @@ export function parseDtx(text: string, options: ParseOptions = {}): Song {
     if (line.length === 0 || !line.startsWith('#')) continue;
 
     const chipMatch = CHIP_LINE.exec(line);
-    if (chipMatch && chipMatch[3]?.match(/^[0-9A-Za-z]*$/)) {
-      ingestChipLine(song, chipMatch, opts);
-      continue;
+    if (chipMatch) {
+      const payload = (chipMatch[3] ?? '').replace(/\s+/g, '');
+      if (/^[0-9A-Za-z]*$/.test(payload)) {
+        ingestChipLine(song, chipMatch, opts);
+        continue;
+      }
     }
 
     const cmdMatch = COMMAND_LINE.exec(line);
@@ -68,10 +71,15 @@ function ingestChipLine(song: Song, match: RegExpExecArray, opts: Required<Parse
   const slots = data.length / 2;
   const tickStep = MEASURE_TICKS / slots;
 
+  // Channel 0x03 (direct BPM change) is parsed as 2-digit *hex* (0..255).
+  // Every other channel is parsed as 2-digit base-36 (zz id 0..1295).
+  // See CDTX.cs:6856-6865.
+  const parsePair = channel === Channel.BPMChange ? parseHexPair : decodeZz;
+
   for (let i = 0; i < slots; i++) {
     const pair = data.slice(i * 2, i * 2 + 2);
     if (pair === '00') continue;
-    const value = decodeZz(pair);
+    const value = parsePair(pair);
 
     const chip: Chip = {
       channel,
@@ -90,6 +98,14 @@ function ingestChipLine(song: Song, match: RegExpExecArray, opts: Required<Parse
 
     song.chips.push(chip);
   }
+}
+
+function parseHexPair(pair: string): number {
+  const n = parseInt(pair, 16);
+  if (!Number.isFinite(n)) {
+    throw new Error(`invalid hex pair: ${JSON.stringify(pair)}`);
+  }
+  return n;
 }
 
 const KNOWN_CHANNELS: ReadonlySet<number> = new Set<number>([
@@ -134,6 +150,11 @@ function ingestCommand(song: Song, name: string, value: string): void {
     case 'BPM': {
       const n = parseFloat(trimmed);
       if (Number.isFinite(n) && n > 0) song.baseBpm = n;
+      return;
+    }
+    case 'BASEBPM': {
+      const n = parseFloat(trimmed);
+      if (Number.isFinite(n)) song.basebpmOffset = n;
       return;
     }
     case 'DLEVEL': {

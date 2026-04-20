@@ -49,7 +49,9 @@ export function computeTiming(song: Song): Song {
       const next = song.bpmTable.get(chip.bpmId);
       if (next !== undefined && next > 0) currentBpm = next;
     } else if (chip.channel === Channel.BPMChange && chip.rawBpm !== undefined) {
-      if (chip.rawBpm > 0) currentBpm = chip.rawBpm;
+      // Channel 0x03: bpm = BASEBPM + hexValue (CDTX.cs:3799).
+      const next = song.basebpmOffset + chip.rawBpm;
+      if (next > 0) currentBpm = next;
     }
   }
 

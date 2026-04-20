@@ -38,8 +38,13 @@ export interface Song {
   genre: string;
   comment: string;
 
-  /** #BPM (main). */
+  /** #BPM (main, starting BPM). */
   baseBpm: number;
+  /**
+   * #BASEBPM, added to every channel-0x03 BPM-change value. Defaults to 0
+   * (so channel 0x03 effectively sets absolute BPM 0..255).
+   */
+  basebpmOffset: number;
   /** #BPMxx values keyed by xx id. */
   bpmTable: Map<number, number>;
   /** #WAVxx definitions. */
@@ -67,6 +72,7 @@ export function createEmptySong(): Song {
     genre: '',
     comment: '',
     baseBpm: 120,
+    basebpmOffset: 0,
     bpmTable: new Map(),
     wavTable: new Map(),
     drumLevel: 0,
