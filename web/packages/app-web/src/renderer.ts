@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Chip } from '@dtxmania/dtx-core';
 import { LANE_LAYOUT, channelToLane, type LaneSpec } from './lane-layout.js';
+import { PAD_ATLAS, PAD_SIZE, padRect } from './pad-atlas.js';
 import type { LaneValue } from '@dtxmania/input';
 
 export const CANVAS_W = 1280;
@@ -73,7 +74,10 @@ export class Renderer {
   private readonly hudTexture: THREE.CanvasTexture;
   private readonly hudMesh: THREE.Mesh;
   private bgMesh: THREE.Mesh | null = null;
-  private padsMesh: THREE.Mesh | null = null;
+  /** Dim quad that sits between bg and HUD so the busy background doesn't eat chips. */
+  private dimMesh: THREE.Mesh | null = null;
+  /** One sprite per lane, sliced from 7_pads.png. */
+  private padMeshes: THREE.Mesh[] = [];
 
   /** XR session (null when in desktop ortho mode). */
   private xrSession: XRSession | null = null;
@@ -138,23 +142,51 @@ export class Renderer {
     if (skin.background && !this.bgMesh) {
       const mat = new THREE.MeshBasicMaterial({ map: skin.background, transparent: false });
       this.bgMesh = new THREE.Mesh(new THREE.PlaneGeometry(CANVAS_W, CANVAS_H), mat);
-      this.bgMesh.position.z = -1; // behind HUD
+      this.bgMesh.position.z = -1; // behind everything
       this.playfield.add(this.bgMesh);
+
+      // Dim the busy background so HUD + chips stay readable. Sits between
+      // bg and HUD. 55 % black is the sweet spot — still see the skin, chips
+      // don't get eaten.
+      const dimMat = new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: 0.55,
+      });
+      this.dimMesh = new THREE.Mesh(new THREE.PlaneGeometry(CANVAS_W, CANVAS_H), dimMat);
+      this.dimMesh.position.z = -0.5;
+      this.playfield.add(this.dimMesh);
     }
-    if (skin.pads && !this.padsMesh) {
-      // 7_pads.png is a horizontal strip of lane-pad sprites. For MVP we just
-      // stretch the whole image across the lane band at the judge line; future
-      // passes can slice it into per-lane quads.
-      const mat = new THREE.MeshBasicMaterial({ map: skin.pads, transparent: true });
-      const padsW = LANE_LAYOUT[LANE_LAYOUT.length - 1]!.x + LANE_LAYOUT[LANE_LAYOUT.length - 1]!.width - LANE_LAYOUT[0]!.x;
-      this.padsMesh = new THREE.Mesh(new THREE.PlaneGeometry(padsW, 60), mat);
-      const padCenterX = LANE_LAYOUT[0]!.x + padsW / 2;
-      this.padsMesh.position.set(
-        padCenterX - CANVAS_W / 2,
-        -(JUDGE_LINE_Y - CANVAS_H / 2),
-        0.5
-      );
-      this.playfield.add(this.padsMesh);
+
+    if (skin.pads && this.padMeshes.length === 0) {
+      // Slice 7_pads.png into 10 per-lane sprites. Each atlas cell is 96×96.
+      // We re-use a single source texture by cloning it + retargeting UV repeat
+      // / offset — cheaper than 10 separate texture uploads.
+      const atlasW = skin.pads.image?.width ?? 384;
+      const atlasH = skin.pads.image?.height ?? 288;
+      for (const rect of PAD_ATLAS) {
+        const spec = LANE_LAYOUT.find((l) => l.lane === rect.lane);
+        if (!spec) continue;
+        const tex = skin.pads.clone();
+        tex.needsUpdate = true;
+        tex.repeat.set(PAD_SIZE / atlasW, PAD_SIZE / atlasH);
+        // UV origin in Three is bottom-left; atlas origin in C# is top-left.
+        tex.offset.set(
+          rect.sx / atlasW,
+          1 - (rect.sy + PAD_SIZE) / atlasH
+        );
+        const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+        const mesh = new THREE.Mesh(new THREE.PlaneGeometry(PAD_SIZE, PAD_SIZE), mat);
+        // Centre pad over the lane, straddle the judge line.
+        const centerX = spec.x + spec.width / 2;
+        mesh.position.set(
+          centerX - CANVAS_W / 2,
+          -(JUDGE_LINE_Y - CANVAS_H / 2),
+          0.5 // in front of dim + HUD background
+        );
+        this.playfield.add(mesh);
+        this.padMeshes.push(mesh);
+      }
     }
   }
 

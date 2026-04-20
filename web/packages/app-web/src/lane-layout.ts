@@ -10,18 +10,21 @@ export interface LaneSpec {
   voice: DrumVoice;
 }
 
-/** Fixed left-to-right lane layout for MVP. Coordinates are in the 1280×720 canvas. */
+// Lane x coordinates ported from CActPerfDrumsPad.cs:22-91 (DTXMania Type A).
+// Each pad is 96x96 in the 7_pads.png atlas; we reserve 60px lane width for
+// the falling-chip band, leaving atlas padding around it.
+const LANE_W = 60;
 export const LANE_LAYOUT: readonly LaneSpec[] = [
-  { lane: Lane.LC,  label: 'LC',  x:  180, width: 70, color: '#e74c3c', voice: 'crash' },
-  { lane: Lane.HH,  label: 'HH',  x:  255, width: 70, color: '#f1c40f', voice: 'hihat' },
-  { lane: Lane.LP,  label: 'LP',  x:  330, width: 60, color: '#9b59b6', voice: 'kick' },
-  { lane: Lane.SD,  label: 'SD',  x:  395, width: 90, color: '#ecf0f1', voice: 'snare' },
-  { lane: Lane.HT,  label: 'HT',  x:  490, width: 80, color: '#3498db', voice: 'tom-hi' },
-  { lane: Lane.BD,  label: 'BD',  x:  575, width: 90, color: '#2ecc71', voice: 'kick' },
-  { lane: Lane.LT,  label: 'LT',  x:  670, width: 80, color: '#1abc9c', voice: 'tom-lo' },
-  { lane: Lane.FT,  label: 'FT',  x:  755, width: 85, color: '#e67e22', voice: 'tom-floor' },
-  { lane: Lane.CY,  label: 'CY',  x:  845, width: 90, color: '#ff6b9d', voice: 'crash' },
-  { lane: Lane.RD,  label: 'RD',  x:  940, width: 80, color: '#7ed6df', voice: 'ride' },
+  { lane: Lane.LC, label: 'LC', x: 263, width: LANE_W, color: '#e74c3c', voice: 'crash' },
+  { lane: Lane.HH, label: 'HH', x: 336, width: LANE_W, color: '#f1c40f', voice: 'hihat' },
+  { lane: Lane.LP, label: 'LP', x: 396, width: LANE_W, color: '#9b59b6', voice: 'kick' },
+  { lane: Lane.SD, label: 'SD', x: 446, width: LANE_W, color: '#ecf0f1', voice: 'snare' },
+  { lane: Lane.HT, label: 'HT', x: 510, width: LANE_W, color: '#3498db', voice: 'tom-hi' },
+  { lane: Lane.BD, label: 'BD', x: 565, width: LANE_W, color: '#2ecc71', voice: 'kick' },
+  { lane: Lane.LT, label: 'LT', x: 622, width: LANE_W, color: '#1abc9c', voice: 'tom-lo' },
+  { lane: Lane.FT, label: 'FT', x: 672, width: LANE_W, color: '#e67e22', voice: 'tom-floor' },
+  { lane: Lane.CY, label: 'CY', x: 735, width: LANE_W, color: '#ff6b9d', voice: 'crash' },
+  { lane: Lane.RD, label: 'RD', x: 791, width: LANE_W, color: '#7ed6df', voice: 'ride' },
 ] as const;
 
 const BY_LANE = new Map<LaneValue, LaneSpec>(LANE_LAYOUT.map((s) => [s.lane, s]));
