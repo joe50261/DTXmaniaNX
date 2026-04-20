@@ -1,0 +1,37 @@
+; A minimal but representative DTX chart used for end-to-end tests.
+; 4 measures at 120 BPM (2000ms each), total 8000ms.
+;
+; Measure 0: BD on beats 1+3, SD on 2+4 (classic backbeat, quarter notes)
+; Measure 1: BD on every 8th (8 chips)
+; Measure 2: BPM jumps to 240 at the top of the measure (half duration)
+; Measure 3: return to 120, final crash
+
+#TITLE Simple Rock
+#ARTIST Test
+#GENRE Rock
+#COMMENT For unit tests
+#BPM 120
+#DLEVEL 300
+
+#WAV01 kick.wav
+#WAV02 snare.wav
+#WAV03 hihat.wav
+#WAV04 crash.wav
+
+#BPM02 240
+
+; Measure 0 - 4-on-the-floor-ish with snare on 2 and 4
+#00013:01000100 01000100
+#00012:00000200 00000200
+#00011:03030303 03030303
+
+; Measure 1 - 8 bass drums
+#00113:01010101 01010101
+
+; Measure 2 - BPM change to 240 at tick 0
+#00208:02000000
+#00213:01010101
+
+; Measure 3 - BPM change back to 120, crash on beat 1
+#00303:78000000
+#00316:04000000

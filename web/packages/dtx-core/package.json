@@ -1,0 +1,26 @@
+{
+  "name": "@dtxmania/dtx-core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./model": "./src/model/index.ts",
+    "./parser": "./src/parser/index.ts",
+    "./timing": "./src/timing/index.ts",
+    "./scoring": "./src/scoring/index.ts",
+    "./scanner": "./src/scanner/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0"
+  }
+}
