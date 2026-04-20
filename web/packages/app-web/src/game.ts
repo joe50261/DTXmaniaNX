@@ -54,6 +54,12 @@ export class Game {
   private song: Song | null = null;
   private playables: PlayableChip[] = [];
   private sampleByWavId = new Map<number, AudioBuffer>();
+  /**
+   * Last real-sample buffer that played on each lane. Used by stray (off-note)
+   * keystrokes to sound like a real drum hit on that lane instead of falling
+   * back to the synth. Populated in the auto-scheduler as chips fire.
+   */
+  private lastBufferByLane = new Map<LaneValue, { buffer: AudioBuffer; wavId: number }>();
   private nextScheduleIdx = 0;
   private tracker = new ScoreTracker(0);
   private status: 'idle' | 'playing' | 'finished' = 'idle';
@@ -83,6 +89,7 @@ export class Game {
     this.onRestart = opts.onRestart ?? null;
     this.stopBgm();
     this.sampleByWavId.clear();
+    this.lastBufferByLane.clear();
     await this.engine.resume();
 
     this.song = computeTiming(parseDtx(dtxText));
@@ -211,6 +218,9 @@ export class Game {
       const v = def ? (def.volume / 100) * volume : volume;
       const pan = def ? def.pan / 100 : 0;
       this.engine.scheduleBuffer(p.buffer, songTimeMs, { volume: v, pan });
+      if (p.chip.wavId !== undefined) {
+        this.lastBufferByLane.set(p.laneValue, { buffer: p.buffer, wavId: p.chip.wavId });
+      }
       return;
     }
     const spec = laneSpec(p.laneValue);
@@ -289,9 +299,11 @@ export class Game {
     }
 
     if (bestIdx < 0) {
-      // Stray hit: synth feedback at current time, no score change.
-      const spec = LANE_LAYOUT.find((s) => s.lane === event.lane);
-      if (spec) this.engine.drums.play(spec.voice, this.engine.ctx.currentTime, { volume: 0.55 });
+      // Stray hit: play the most recent real sample that fired on this lane
+      // so off-note keystrokes still sound like a drum, not a synth. Only
+      // fall back to synth if the lane has never fired a real-sample chip
+      // yet (e.g. first beats, or the whole lane is .xa-backed).
+      this.playStrayHit(event.lane, songTime);
       this.hitFlashes.push({ lane: event.lane, spawnedMs: songTime });
       return;
     }
@@ -308,13 +320,24 @@ export class Game {
     };
     this.hitFlashes.push({ lane: event.lane, spawnedMs: songTime });
 
-    // Matched-chip hit: if the chip was already auto-scheduled we don't
-    // stack a second playback (that created a noticeable echo). Only play
-    // a synth accent for crisp keystroke feedback when there's no sample.
-    if (!p.buffer) {
-      const spec = LANE_LAYOUT.find((s) => s.lane === event.lane);
-      if (spec) this.engine.drums.play(spec.voice, this.engine.ctx.currentTime, { volume: 0.7 });
+    // Matched-chip hit: always play on keystroke so audio tracks the user's
+    // press time, not just the auto-scheduled chip time. The chip-time
+    // playback still happens (~30ms earlier at PERFECT), but overlapping
+    // with the keystroke playback feels more responsive than silent feedback.
+    this.playChipSample(p, songTime, 0.7);
+  }
+
+  private playStrayHit(lane: LaneValue, songTime: number): void {
+    const last = this.lastBufferByLane.get(lane);
+    if (last) {
+      const def = this.song?.wavTable.get(last.wavId);
+      const v = def ? (def.volume / 100) * 0.55 : 0.55;
+      const pan = def ? def.pan / 100 : 0;
+      this.engine.scheduleBuffer(last.buffer, songTime, { volume: v, pan });
+      return;
     }
+    const spec = LANE_LAYOUT.find((s) => s.lane === lane);
+    if (spec) this.engine.drums.play(spec.voice, this.engine.ctx.currentTime, { volume: 0.55 });
   }
 }
 
