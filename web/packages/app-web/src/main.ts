@@ -319,16 +319,23 @@ function refreshXrButton(): void {
   // so players can jump into VR and pick a song from the in-headset menu
   // without having to start one on the desktop first.
   const eligible = Boolean(library || activeGame);
-  if (!navigator.xr || !eligible) {
+  if (!navigator.xr) {
+    console.info('[xr] navigator.xr absent — Enter VR stays hidden');
+    xrBtn.style.display = 'none';
+    return;
+  }
+  if (!eligible) {
     xrBtn.style.display = 'none';
     return;
   }
   navigator.xr
     .isSessionSupported('immersive-vr')
     .then((supported) => {
-      xrBtn.style.display = supported && (library || activeGame) ? 'inline-block' : 'none';
+      console.info('[xr] isSessionSupported(immersive-vr) =', supported);
+      xrBtn.style.display = supported ? 'inline-block' : 'none';
     })
-    .catch(() => {
+    .catch((e) => {
+      console.warn('[xr] isSessionSupported threw', e);
       xrBtn.style.display = 'none';
     });
 }
@@ -337,12 +344,15 @@ xrBtn.addEventListener('click', () => {
   // Must stay on the synchronous path to requestSession() so Quest Browser
   // keeps the user-activation token. Any awaited work (skin, chart, menu)
   // is scheduled AFTER enterXR has kicked off.
+  console.info('[xr] Enter VR clicked');
   if (!activeGame) {
+    console.warn('[xr] activeGame not ready');
     setStatus('Game not initialised — reload the page and try again.');
     return;
   }
   const game = activeGame;
   const enterPromise = game.enterXR(() => {
+    console.info('[xr] session ended');
     setStatus('Exited VR.');
     overlay.style.display = 'grid';
     refreshXrButton();
@@ -351,10 +361,12 @@ xrBtn.addEventListener('click', () => {
   setStatus('Entering VR…');
   enterPromise
     .then(() => {
+      console.info('[xr] session started');
       setStatus('In VR — use controllers to play.');
       if (library && !game.hasChart) showVrMenuForActive();
     })
     .catch((e) => {
+      console.error('[xr] enterXR failed', e);
       overlay.style.display = 'grid';
       setStatus(`VR failed: ${e instanceof Error ? e.message : String(e)}`);
     });
