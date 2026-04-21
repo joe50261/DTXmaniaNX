@@ -379,6 +379,18 @@ export class SongWheel {
     if (offset === 0) row.classList.add('wheel-focus');
     else row.classList.add(`wheel-off-${Math.abs(offset)}`);
 
+    // Box folders can carry a #FONTCOLOR from their box.def. Tint the
+    // focused row's left border so the author's chosen colour shows up
+    // without fighting the focus highlight. Only on focus so the wheel
+    // doesn't look like a crayon explosion.
+    if (offset === 0 && entry.kind === 'node' && entry.node.type === 'box') {
+      const color = entry.node.fontColor;
+      if (color) {
+        row.style.borderLeft = `4px solid ${color}`;
+        row.style.paddingLeft = '8px';
+      }
+    }
+
     const title = document.createElement('div');
     title.className = 'wheel-title';
     title.textContent = rowTitle(entry);

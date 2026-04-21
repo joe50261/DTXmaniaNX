@@ -588,6 +588,12 @@ export class VrMenu {
       ctx.strokeStyle = 'rgba(80, 120, 255, 0.55)';
       ctx.lineWidth = 1;
       ctx.strokeRect(WHEEL_X + 0.5, y + 0.5, WHEEL_W - 1, h - 1);
+      // Box folders with a #FONTCOLOR from box.def get a coloured left
+      // accent bar so the author's chosen palette shows up on focus.
+      if (entry.kind === 'node' && entry.node.type === 'box' && entry.node.fontColor) {
+        ctx.fillStyle = entry.node.fontColor;
+        ctx.fillRect(WHEEL_X, y, 4, h);
+      }
     }
 
     // Row is also a clickable activate target for laser rays.
