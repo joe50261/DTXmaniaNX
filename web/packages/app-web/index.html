@@ -39,7 +39,11 @@
         place-items: center;
         background: rgba(0, 0, 0, 0.86);
         z-index: 10;
-        overflow: auto;
+        /* Must stay non-scrollable: Quest Browser routes thumbstick Y
+         * to DOM scroll events while the 2D page is alive, which would
+         * fight our XR gamepad polling. Wheel + side column are sized
+         * to fit inside the panel max-height so we don't need scroll. */
+        overflow: hidden;
       }
       #overlay .panel {
         min-width: 520px;
