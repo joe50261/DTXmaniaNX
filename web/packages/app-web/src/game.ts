@@ -16,7 +16,7 @@ import {
   type SongEntry,
 } from '@dtxmania/dtx-core';
 import { AudioEngine, SampleBank } from '@dtxmania/audio-engine';
-import { KeyboardInput, type LaneHitEvent, type LaneValue } from '@dtxmania/input';
+import { KeyboardInput, Lane, type LaneHitEvent, type LaneValue } from '@dtxmania/input';
 import {
   Renderer,
   CANVAS_W,
@@ -87,6 +87,11 @@ export class Game {
   /** performance.now() of the most recent hit per lane; drives pad bounce + flush overlay. */
   private lastPadHitMs = new Map<LaneValue, number>();
   private onRestart: (() => void) | null = null;
+  /** If true, BD + LBD chips are fired automatically when their time comes
+   * (DTXmania-equivalent of `bAutoPlay.BD = bAutoPlay.LBD = true`). Auto-
+   * fired chips don't advance combo and are excluded from score / rank
+   * denominators via ScoreTracker.recordAuto. */
+  private autoKick = false;
   private bgmSources: AudioBufferSourceNode[] = [];
   private readonly xrControllers: XrControllers;
   private readonly vrMenu: VrMenu;
@@ -161,11 +166,18 @@ export class Game {
     this.xrControllers.setPadsTexture(skin.pads);
   }
 
+  /** Enable / disable auto-kick mid-session. Takes effect on the next tick;
+   * chips already past their playback time are not retroactively auto-fired. */
+  setAutoKick(enabled: boolean): void {
+    this.autoKick = enabled;
+  }
+
   async loadAndStart(
     dtxText: string,
-    opts: { onRestart?: () => void; fs?: GameFsContext } = {}
+    opts: { onRestart?: () => void; fs?: GameFsContext; autoKick?: boolean } = {}
   ): Promise<void> {
     this.onRestart = opts.onRestart ?? null;
+    if (opts.autoKick !== undefined) this.autoKick = opts.autoKick;
     this.stopBgm();
     this.sampleByWavId.clear();
     this.lastBufferByLane.clear();
@@ -325,6 +337,9 @@ export class Game {
     // Drum chips don't auto-play; audio only fires on the player's keystroke
     // (handleLaneHit). BGM is still auto-scheduled via scheduleBgm so the
     // music continues. Missed chips are silent — standard rhythm-game feel.
+    // Exception: auto-kick fires BD + LBD chips on schedule — see
+    // autoFireBassChips below.
+    this.autoFireBassChips(songTime);
 
     // Miss detection: any unhit chip whose judgment window has fully passed.
     for (const p of this.playables) {
@@ -347,23 +362,30 @@ export class Game {
     if (songTime > this.song.durationMs + 500 && this.status === 'playing') {
       this.status = 'finished';
       this.finishedAtMs = performance.now();
+      console.info('[result] entered finished state, inXR=', this.renderer.inXR);
     }
 
-    // In VR there's no keyboard, so the player can't press Esc to return
-    // to the menu like on desktop. Auto-fire onRestart ~5 s after FINISHED
-    // shows so the VR song-picker appears on its own. The latch keeps it
-    // to one call per chart. 5 s gives the player enough time to read the
-    // rank + count breakdown; an early pad hit skips the wait (handled in
-    // handleLaneHit).
+    // In VR there's no keyboard, so the player can't press Esc to return to
+    // the menu like on desktop. Auto-fire onRestart ~5 s after FINISHED shows
+    // so the VR song-picker appears on its own.
+    //
+    // We can't use setTimeout here: Quest Browser throttles / suspends 2D
+    // page timers while an immersive session is active (hidden-page policy),
+    // so a 5 s setTimeout can fire minutes late or never. The XR animation
+    // loop (driving tick()) is pinned to XRSession.requestAnimationFrame and
+    // keeps running, so we drive the dwell off performance.now() deltas and
+    // check it every frame. Latch to single-shot.
     if (
       this.status === 'finished' &&
       !this.finishedAutoHandled &&
       this.renderer.inXR &&
-      this.onRestart
+      this.onRestart &&
+      this.finishedAtMs !== null &&
+      performance.now() - this.finishedAtMs > 5000
     ) {
       this.finishedAutoHandled = true;
-      const cb = this.onRestart;
-      setTimeout(() => cb(), 5000);
+      console.info('[result] VR auto-return fired');
+      this.onRestart();
     }
 
     this.hitFlashes = this.hitFlashes.filter((f) => songTime - f.spawnedMs < 400);
@@ -402,16 +424,50 @@ export class Game {
     this.xrControllers.submitPadHits(this.lastPadHitMs);
   }
 
+  /**
+   * Fire any BD / LBD chip whose playback time has arrived and hasn't been
+   * hit yet. Mirrors DTXmania's auto-play loop in
+   * CStagePerfDrumsScreen.cs:3394-3429 (UsePerfectGhost branch), but scoped
+   * to just the two bass-drum lanes. Auto-fire plays the sample, bounces
+   * the pad, and adds a hit flash — visually identical to a player hit —
+   * but calls ScoreTracker.recordAuto (not record(PERFECT)) so combo and
+   * the rank denominator are unaffected.
+   */
+  private autoFireBassChips(songTime: number): void {
+    if (!this.autoKick) return;
+    for (let i = 0; i < this.playables.length; i++) {
+      const p = this.playables[i]!;
+      if (p.hit || p.missed) continue;
+      if (p.laneValue !== Lane.BD && p.laneValue !== Lane.LBD) continue;
+      if (songTime < p.chip.playbackTimeMs) continue;
+      p.hit = true;
+      this.tracker.recordAuto();
+      this.playChipSample(p, songTime, 1);
+      this.lastPadHitMs.set(p.laneValue, performance.now());
+      this.hitFlashes.push({ lane: p.laneValue, spawnedMs: songTime });
+    }
+  }
+
   private handleLaneHit(event: LaneHitEvent): void {
     // Result-screen early-exit: any pad hit after a short dwell returns to
     // the song picker (primarily for VR, where there is no keyboard). The
     // 400 ms dwell keeps the last in-song strike from double-firing as a
     // skip the moment the song flips to 'finished'.
     if (this.status === 'finished') {
+      const dwell = this.finishedAtMs === null
+        ? -1
+        : performance.now() - this.finishedAtMs;
+      console.info('[result] pad hit during result', {
+        lane: event.lane,
+        advanceHandled: this.finishedAdvanceHandled,
+        hasOnRestart: !!this.onRestart,
+        dwellMs: dwell,
+      });
       if (this.finishedAdvanceHandled || !this.onRestart) return;
       if (this.finishedAtMs === null) return;
-      if (performance.now() - this.finishedAtMs < 400) return;
+      if (dwell < 400) return;
       this.finishedAdvanceHandled = true;
+      console.info('[result] pad-hit skip → onRestart');
       this.onRestart();
       return;
     }
