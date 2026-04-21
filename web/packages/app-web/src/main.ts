@@ -27,6 +27,8 @@ const statusPanelEl = requireEl<HTMLDivElement>('status-panel');
 const breadcrumbEl = requireEl<HTMLDivElement>('breadcrumb');
 const preimageEl = requireEl<HTMLImageElement>('preimage-panel');
 const scanErrorsEl = requireEl<HTMLDivElement>('scan-errors');
+const sortBtn = requireEl<HTMLButtonElement>('sort-btn');
+const searchBox = requireEl<HTMLInputElement>('search-box');
 
 const songWheel = new SongWheel(wheelEl, statusPanelEl, breadcrumbEl, {
   onStart: (chart) => run(() => startChart(chart)),
@@ -35,6 +37,59 @@ const songWheel = new SongWheel(wheelEl, statusPanelEl, breadcrumbEl, {
 });
 songWheel.attachKeyboard();
 songWheel.onFocusChanged(() => onFocusChanged());
+
+sortBtn.addEventListener('click', () => {
+  const mode = songWheel.cycleSortMode();
+  sortBtn.textContent = `Sort: ${mode}`;
+});
+
+// `/` opens the search box; typing filters live; Esc clears + closes
+// (the plain wheel Esc-back handler sees nothing because search-box
+// consumes the event first). Search-mode also suppresses the wheel's
+// own keyboard listener so arrow keys navigate the input cursor.
+searchBox.addEventListener('input', () => {
+  songWheel.setSearchQuery(searchBox.value);
+});
+searchBox.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeSearch();
+  } else if (e.key === 'Enter') {
+    // Enter during search commits the currently-focused result and
+    // closes the box. Keep the filter applied so the player sees
+    // the state their selection came from; cleared on next open.
+    e.preventDefault();
+    searchBox.blur();
+  }
+});
+searchBox.addEventListener('blur', () => {
+  // Give wheel keys back once search loses focus.
+  songWheel.attachKeyboard();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key !== '/') return;
+  const target = e.target as HTMLElement | null;
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+  if (overlay.style.display === 'none') return;
+  e.preventDefault();
+  openSearch();
+});
+
+function openSearch(): void {
+  searchBox.classList.add('visible');
+  searchBox.value = songWheel.getSearchQuery();
+  songWheel.detachKeyboard();
+  searchBox.focus();
+  searchBox.select();
+}
+
+function closeSearch(): void {
+  searchBox.value = '';
+  songWheel.setSearchQuery('');
+  searchBox.classList.remove('visible');
+  searchBox.blur();
+  songWheel.attachKeyboard();
+}
 
 // Preload skin PNGs once at boot. Games created later reuse these textures.
 const skinPromise: Promise<SkinTextures> = loadSkin(import.meta.env.BASE_URL);
