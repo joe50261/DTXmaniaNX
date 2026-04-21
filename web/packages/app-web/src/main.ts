@@ -24,10 +24,11 @@ const autoKickBtn = requireEl<HTMLButtonElement>('toggle-autokick');
 const xrBtn = requireEl<HTMLButtonElement>('enter-xr');
 const wheelEl = requireEl<HTMLDivElement>('song-wheel');
 const statusPanelEl = requireEl<HTMLDivElement>('status-panel');
+const breadcrumbEl = requireEl<HTMLDivElement>('breadcrumb');
 const preimageEl = requireEl<HTMLImageElement>('preimage-panel');
 const scanErrorsEl = requireEl<HTMLDivElement>('scan-errors');
 
-const songWheel = new SongWheel(wheelEl, statusPanelEl, {
+const songWheel = new SongWheel(wheelEl, statusPanelEl, breadcrumbEl, {
   onStart: (chart) => run(() => startChart(chart)),
   formatLevel,
   isActive: () => overlay.style.display !== 'none',
@@ -142,7 +143,7 @@ forgetBtn.addEventListener('click', () =>
   run(async () => {
     await clearRootHandle();
     library = null;
-    songWheel.setSongs([]);
+    songWheel.setRoot(null);
     forgetBtn.style.display = 'none';
     pickBtn.textContent = 'Pick folder';
     onPick = pickAndScan;
@@ -262,7 +263,7 @@ async function scanIntoLibrary(handle: FileSystemDirectoryHandle): Promise<void>
   pickBtn.textContent = 'Change folder';
   forgetBtn.style.display = 'inline-block';
   setStatus(`Found ${index.songs.length} song(s) in "${handle.name}".`);
-  songWheel.setSongs(index.songs);
+  songWheel.setRoot(index.root);
   renderScanErrors(index.errors);
   refreshXrButton();
 }
