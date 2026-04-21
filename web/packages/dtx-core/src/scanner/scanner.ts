@@ -1,4 +1,5 @@
 import { parseDtx } from '../parser/parser.js';
+import type { ChartRecord } from '../scoring/record.js';
 import { parseBoxDef, type BoxDefMeta } from './boxdef.js';
 import { extname, joinPath, type DirEntry, type FileSystemBackend } from './fs-backend.js';
 import { parseSetDef, type SetDefBlock } from './setdef.js';
@@ -19,6 +20,10 @@ export interface ChartEntry {
   drumLevel?: number;
   /** #BPM from the .dtx header. Populated alongside drumLevel. */
   bpm?: number;
+  /** Best-of play record. Runtime-attached by the app layer after
+   * scan / cache hydration; **not** serialised into the scan cache
+   * (records live in a separate IDB store keyed by chartPath). */
+  record?: ChartRecord;
 }
 
 export interface SongEntry {

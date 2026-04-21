@@ -644,6 +644,16 @@ export class VrMenu {
         ctx.fillStyle = '#cbd5e1';
         ctx.fillText(`L.${(chart.drumLevel / 100).toFixed(2)}`, btnX + btnW / 2, btnY + 27);
       }
+      // Clear-lamp dot in the top-right corner, mirrors the desktop
+      // wheel. Only drawn when the chart has a record — no dot = never
+      // played.
+      const lampColor = vrLampForRecord(chart);
+      if (lampColor) {
+        ctx.fillStyle = lampColor;
+        ctx.beginPath();
+        ctx.arc(btnX + btnW - 6, btnY + 6, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
       this.hits.push({
         x: btnX,
         y: btnY,
@@ -713,6 +723,7 @@ export class VrMenu {
     y += 12;
     ctx.textAlign = 'left';
     const lines: Array<[string, string | undefined]> = [
+      ['Best', vrFormatBestLine(selected)],
       ['Artist', song.artist],
       ['Genre', song.genre],
       ['BPM', song.bpm ? Math.round(song.bpm).toString() : undefined],
@@ -761,6 +772,22 @@ function findBoxByPath(box: BoxNode, path: string): BoxNode | null {
     if (found) return found;
   }
   return null;
+}
+
+function vrLampForRecord(chart: ChartEntry): string | null {
+  const r = chart.record;
+  if (!r) return null;
+  if (r.excellent) return '#fde047';
+  if (r.fullCombo) return '#7dd3fc';
+  return '#94a3b8';
+}
+
+function vrFormatBestLine(chart: ChartEntry): string | undefined {
+  const r = chart.record;
+  if (!r) return undefined;
+  const score = r.bestScore.toString().padStart(7, '0');
+  const medal = r.excellent ? ' · EX' : r.fullCombo ? ' · FC' : '';
+  return `${score} (${r.bestRank})${medal}`;
 }
 
 function rowTitle(entry: DisplayEntry): string {

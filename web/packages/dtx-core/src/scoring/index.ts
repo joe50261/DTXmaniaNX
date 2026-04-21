@@ -8,3 +8,5 @@ export {
   isExcellent,
 } from './score.js';
 export type { ScoreSnapshot, Rank } from './score.js';
+export { mergeChartRecord } from './record.js';
+export type { ChartRecord } from './record.js';
