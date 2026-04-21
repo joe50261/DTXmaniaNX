@@ -347,23 +347,30 @@ export class Game {
     if (songTime > this.song.durationMs + 500 && this.status === 'playing') {
       this.status = 'finished';
       this.finishedAtMs = performance.now();
+      console.info('[result] entered finished state, inXR=', this.renderer.inXR);
     }
 
-    // In VR there's no keyboard, so the player can't press Esc to return
-    // to the menu like on desktop. Auto-fire onRestart ~5 s after FINISHED
-    // shows so the VR song-picker appears on its own. The latch keeps it
-    // to one call per chart. 5 s gives the player enough time to read the
-    // rank + count breakdown; an early pad hit skips the wait (handled in
-    // handleLaneHit).
+    // In VR there's no keyboard, so the player can't press Esc to return to
+    // the menu like on desktop. Auto-fire onRestart ~5 s after FINISHED shows
+    // so the VR song-picker appears on its own.
+    //
+    // We can't use setTimeout here: Quest Browser throttles / suspends 2D
+    // page timers while an immersive session is active (hidden-page policy),
+    // so a 5 s setTimeout can fire minutes late or never. The XR animation
+    // loop (driving tick()) is pinned to XRSession.requestAnimationFrame and
+    // keeps running, so we drive the dwell off performance.now() deltas and
+    // check it every frame. Latch to single-shot.
     if (
       this.status === 'finished' &&
       !this.finishedAutoHandled &&
       this.renderer.inXR &&
-      this.onRestart
+      this.onRestart &&
+      this.finishedAtMs !== null &&
+      performance.now() - this.finishedAtMs > 5000
     ) {
       this.finishedAutoHandled = true;
-      const cb = this.onRestart;
-      setTimeout(() => cb(), 5000);
+      console.info('[result] VR auto-return fired');
+      this.onRestart();
     }
 
     this.hitFlashes = this.hitFlashes.filter((f) => songTime - f.spawnedMs < 400);
@@ -408,10 +415,20 @@ export class Game {
     // 400 ms dwell keeps the last in-song strike from double-firing as a
     // skip the moment the song flips to 'finished'.
     if (this.status === 'finished') {
+      const dwell = this.finishedAtMs === null
+        ? -1
+        : performance.now() - this.finishedAtMs;
+      console.info('[result] pad hit during result', {
+        lane: event.lane,
+        advanceHandled: this.finishedAdvanceHandled,
+        hasOnRestart: !!this.onRestart,
+        dwellMs: dwell,
+      });
       if (this.finishedAdvanceHandled || !this.onRestart) return;
       if (this.finishedAtMs === null) return;
-      if (performance.now() - this.finishedAtMs < 400) return;
+      if (dwell < 400) return;
       this.finishedAdvanceHandled = true;
+      console.info('[result] pad-hit skip → onRestart');
       this.onRestart();
       return;
     }
