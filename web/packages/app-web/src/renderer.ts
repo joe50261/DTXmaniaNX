@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Chip } from '@dtxmania/dtx-core';
 import { LANE_LAYOUT, channelToLane, type LaneSpec } from './lane-layout.js';
 import { PAD_ATLAS, PAD_SIZE, padRect } from './pad-atlas.js';
+import { CHIP_ATLAS_Y, CHIP_ATLAS_H, chipRect } from './chip-atlas.js';
 import type { LaneValue } from '@dtxmania/input';
 
 export const CANVAS_W = 1280;
@@ -78,6 +79,8 @@ export class Renderer {
   private dimMesh: THREE.Mesh | null = null;
   /** One sprite per lane, sliced from 7_pads.png. */
   private padMeshes: THREE.Mesh[] = [];
+  /** HTMLImageElement of the chips atlas used by 2D drawImage per frame. */
+  private chipsImage: HTMLImageElement | null = null;
 
   /** XR session (null when in desktop ortho mode). */
   private xrSession: XRSession | null = null;
@@ -156,6 +159,14 @@ export class Renderer {
       this.dimMesh = new THREE.Mesh(new THREE.PlaneGeometry(CANVAS_W, CANVAS_H), dimMat);
       this.dimMesh.position.z = -0.5;
       this.playfield.add(this.dimMesh);
+    }
+
+    if (skin.chipsDrums && !this.chipsImage) {
+      // Three.TextureLoader under the hood hands us an HTMLImageElement;
+      // re-use it for the 2D drawImage path in paintHud so we don't need
+      // a second fetch for the same file.
+      const img = skin.chipsDrums.image;
+      if (img instanceof HTMLImageElement) this.chipsImage = img;
     }
 
     if (skin.pads && this.padMeshes.length === 0) {
@@ -294,12 +305,36 @@ export class Renderer {
       const y = JUDGE_LINE_Y - (chip.playbackTimeMs - now) * PX_PER_MS;
       if (y < -20 || y > CANVAS_H + 20) continue;
       const alpha = y > JUDGE_LINE_Y + 50 ? 0.2 : 1;
-      this.fillChip(lane, y, alpha, chip);
+      this.fillChip(lane, y, alpha);
     }
   }
 
-  private fillChip(lane: LaneSpec, y: number, alpha: number, chip: Chip): void {
+  private fillChip(lane: LaneSpec, y: number, alpha: number): void {
     const ctx = this.ctx;
+    const rect = chipRect(lane.lane);
+    if (this.chipsImage && rect && this.chipsImage.complete) {
+      // DTXMania chip sprites are 64px tall; we shrink to CHIP_H so the
+      // visual density matches our 0.45 px/ms scroll rate.
+      const destH = CHIP_H * 3; // slight thickness > the colour-block version
+      const destW = rect.sw;
+      const dx = lane.x + lane.width / 2 - destW / 2;
+      const dy = y - destH / 2;
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(
+        this.chipsImage,
+        rect.sx,
+        CHIP_ATLAS_Y,
+        rect.sw,
+        CHIP_ATLAS_H,
+        dx,
+        dy,
+        destW,
+        destH
+      );
+      ctx.globalAlpha = 1;
+      return;
+    }
+    // Fallback: flat coloured rect (skin missing or image not loaded yet).
     ctx.globalAlpha = alpha;
     ctx.fillStyle = lane.color;
     const pad = 4;
@@ -309,7 +344,6 @@ export class Renderer {
     ctx.lineWidth = 1;
     ctx.strokeRect(lane.x + pad + 0.5, y - CHIP_H / 2 + 0.5, lane.width - pad * 2 - 1, CHIP_H - 1);
     ctx.globalAlpha = 1;
-    void chip;
   }
 
   private drawHitFlashes(state: RenderState): void {
