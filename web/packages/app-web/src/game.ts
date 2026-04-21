@@ -67,6 +67,8 @@ export class Game {
   private status: 'idle' | 'playing' | 'finished' = 'idle';
   private judgmentFlash: JudgmentFlash | null = null;
   private hitFlashes: HitFlash[] = [];
+  /** Life / skill gauge, 0..1. Filled by hits, drained by misses. Starts at 0.5 so the player has headroom. */
+  private gauge = 0.5;
   private onRestart: (() => void) | null = null;
   private bgmSources: AudioBufferSourceNode[] = [];
   private readonly xrControllers: XrControllers;
@@ -104,6 +106,7 @@ export class Game {
     this.stopBgm();
     this.sampleByWavId.clear();
     this.lastBufferByLane.clear();
+    this.gauge = 0.5;
     await this.engine.resume();
 
     this.song = computeTiming(parseDtx(dtxText));
@@ -262,8 +265,10 @@ export class Game {
       if (songTime - p.chip.playbackTimeMs > HIT_RANGES_MS.POOR) {
         p.missed = true;
         this.tracker.record(Judgment.MISS);
+        this.applyGaugeDelta(Judgment.MISS);
         this.judgmentFlash = {
           text: 'MISS',
+          judgment: Judgment.MISS,
           color: '#ef4444',
           lane: p.laneValue,
           spawnedMs: songTime,
@@ -289,6 +294,7 @@ export class Game {
       status: this.status,
       titleLine: `${this.song.title} / BPM ${this.song.baseBpm} / Notes ${this.playables.length}`,
       songLengthMs: this.song.durationMs,
+      gauge: this.gauge,
     };
     this.renderer.render(state);
   }
@@ -326,8 +332,10 @@ export class Game {
     p.hit = true;
     const judgment = classifyDeltaMs(bestDelta);
     this.tracker.record(judgment);
+    this.applyGaugeDelta(judgment);
     this.judgmentFlash = {
       text: judgment,
+      judgment,
       color: judgmentColor(judgment),
       lane: event.lane,
       spawnedMs: songTime,
@@ -352,6 +360,17 @@ export class Game {
     }
     const spec = LANE_LAYOUT.find((s) => s.lane === lane);
     if (spec) this.engine.drums.play(spec.voice, this.engine.ctx.currentTime, { volume: 0.55 });
+  }
+
+  /** Adjust the life gauge based on the latest judgment. Clamped to [0, 1]. */
+  private applyGaugeDelta(judgment: ReturnType<typeof classifyDeltaMs>): void {
+    const delta =
+      judgment === Judgment.PERFECT ?  0.025 :
+      judgment === Judgment.GREAT   ?  0.015 :
+      judgment === Judgment.GOOD    ?  0.005 :
+      judgment === Judgment.POOR    ? -0.020 :
+      /* MISS */                      -0.050;
+    this.gauge = Math.max(0, Math.min(1, this.gauge + delta));
   }
 }
 

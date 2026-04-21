@@ -3,6 +3,8 @@ import type { Chip } from '@dtxmania/dtx-core';
 import { LANE_LAYOUT, channelToLane, type LaneSpec } from './lane-layout.js';
 import { PAD_ATLAS, PAD_SIZE, padRect } from './pad-atlas.js';
 import { CHIP_ATLAS_Y, CHIP_ATLAS_H, chipRect } from './chip-atlas.js';
+import { JUDGE_ROWS, JUDGE_SPRITE_W, JUDGE_SPRITE_H } from './judge-atlas.js';
+import type { JudgmentKind } from '@dtxmania/dtx-core';
 import type { LaneValue } from '@dtxmania/input';
 
 export const CANVAS_W = 1280;
@@ -13,6 +15,8 @@ export const CHIP_H = 14;
 
 export interface JudgmentFlash {
   text: string;
+  /** Raw judgment kind, used to look up the sprite in JUDGE_ROWS. */
+  judgment?: JudgmentKind;
   color: string;
   lane: LaneValue;
   spawnedMs: number;
@@ -34,6 +38,8 @@ export interface RenderState {
   status: 'idle' | 'playing' | 'finished';
   titleLine: string;
   songLengthMs: number;
+  /** 0..1 life / skill gauge. Painted as the DTXMania 7_Gauge sprite. */
+  gauge: number;
 }
 
 /** Optional textures injected by the skin loader. Renderer tolerates absent textures. */
@@ -41,6 +47,9 @@ export interface SkinTextures {
   background?: THREE.Texture;
   pads?: THREE.Texture;
   chipsDrums?: THREE.Texture;
+  judgeStrings?: THREE.Texture;
+  gaugeFrame?: THREE.Texture;
+  gaugeBar?: THREE.Texture;
 }
 
 /**
@@ -81,6 +90,12 @@ export class Renderer {
   private padMeshes: THREE.Mesh[] = [];
   /** HTMLImageElement of the chips atlas used by 2D drawImage per frame. */
   private chipsImage: HTMLImageElement | null = null;
+  /** ScreenPlay judge strings 1.png — one row per judgment. */
+  private judgeImage: HTMLImageElement | null = null;
+  /** 7_Gauge.png frame overlay. */
+  private gaugeFrameImage: HTMLImageElement | null = null;
+  /** 7_gauge_bar.png — scaled horizontally by gauge value. */
+  private gaugeBarImage: HTMLImageElement | null = null;
 
   /** XR session (null when in desktop ortho mode). */
   private xrSession: XRSession | null = null;
@@ -167,6 +182,18 @@ export class Renderer {
       // a second fetch for the same file.
       const img = skin.chipsDrums.image;
       if (img instanceof HTMLImageElement) this.chipsImage = img;
+    }
+    if (skin.judgeStrings && !this.judgeImage) {
+      const img = skin.judgeStrings.image;
+      if (img instanceof HTMLImageElement) this.judgeImage = img;
+    }
+    if (skin.gaugeFrame && !this.gaugeFrameImage) {
+      const img = skin.gaugeFrame.image;
+      if (img instanceof HTMLImageElement) this.gaugeFrameImage = img;
+    }
+    if (skin.gaugeBar && !this.gaugeBarImage) {
+      const img = skin.gaugeBar.image;
+      if (img instanceof HTMLImageElement) this.gaugeBarImage = img;
     }
 
     if (skin.pads && this.padMeshes.length === 0) {
@@ -404,6 +431,8 @@ export class Renderer {
     ctx.textAlign = 'right';
     ctx.fillText(`MAX COMBO ${state.maxCombo}`, CANVAS_W - 20, CANVAS_H - 20);
 
+    this.drawGauge(state.gauge);
+
     if (state.status === 'finished') {
       ctx.fillStyle = 'rgba(0,0,0,0.6)';
       ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
@@ -427,13 +456,95 @@ export class Renderer {
     const lane = LANE_LAYOUT.find((l) => l.lane === state.judgmentFlash!.lane);
     if (!lane) return;
     const alpha = 1 - age / life;
+    const floatUp = (age / life) * 20;
+    const y = JUDGE_LINE_Y + 36 - floatUp;
+
+    const judgment = state.judgmentFlash.judgment;
+    const row = judgment !== undefined ? JUDGE_ROWS[judgment] : undefined;
+    if (this.judgeImage && this.judgeImage.complete && row) {
+      // Sprite path: draw the PERFECT / GREAT / etc. image + optional tint
+      // overlay. Sprite is 128×42 in the atlas; we render ~110 px wide.
+      const destW = 110;
+      const destH = destW * (JUDGE_SPRITE_H / JUDGE_SPRITE_W);
+      const dx = lane.x + lane.width / 2 - destW / 2;
+      const dy = y - destH;
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(
+        this.judgeImage,
+        0, row.sy, JUDGE_SPRITE_W, JUDGE_SPRITE_H,
+        dx, dy, destW, destH
+      );
+      if (row.tint) {
+        // Cheap tint: "multiply"-ish using source-atop.
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-atop';
+        ctx.fillStyle = row.tint;
+        ctx.globalAlpha = alpha * 0.6;
+        ctx.fillRect(dx, dy, destW, destH);
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
+      return;
+    }
+
+    // Fallback text if the skin didn't load.
     ctx.globalAlpha = alpha;
     ctx.fillStyle = state.judgmentFlash.color;
     ctx.font = 'bold 20px ui-monospace, monospace';
     ctx.textAlign = 'center';
-    const y = JUDGE_LINE_Y + 36 - (age / life) * 20;
     ctx.fillText(state.judgmentFlash.text, lane.x + lane.width / 2, y);
     ctx.globalAlpha = 1;
+  }
+
+  private drawGauge(value: number): void {
+    const ctx = this.ctx;
+    const frame = this.gaugeFrameImage;
+    const bar = this.gaugeBarImage;
+    const clamped = Math.max(0, Math.min(1, value));
+    // Place the gauge at the HUD's lower-left, under the progress bar. The
+    // original DTXMania position (X=314, Y=37) is tuned for 1280×720.
+    const gx = 20;
+    const gy = CANVAS_H - 60;
+
+    if (frame && frame.complete) {
+      const fw = frame.naturalWidth;
+      const fh = frame.naturalHeight;
+      // DTXMania stacks two variants vertically (y=0..47 and 47..94). We want
+      // the top half only, scaled to ~380 px wide.
+      const destW = 380;
+      const rowH = fh / 2;
+      const destH = destW * (rowH / fw);
+      // Bar first so the frame overlays it.
+      if (bar && bar.complete) {
+        const bw = bar.naturalWidth;
+        const bh = bar.naturalHeight;
+        const barDestW = destW - 36; // matches DTXMania's 63 px trim, scaled
+        const barDestH = destH - 10;
+        const barDX = gx + 18;
+        const barDY = gy + 5;
+        ctx.drawImage(
+          bar,
+          0, 0, bw, bh,
+          barDX, barDY, barDestW * clamped, barDestH
+        );
+      } else {
+        // Fallback: solid fill bar.
+        ctx.fillStyle = clamped > 0.3 ? '#4ade80' : '#f97316';
+        ctx.fillRect(gx + 18, gy + 5, (destW - 36) * clamped, destH - 10);
+      }
+      ctx.drawImage(frame, 0, 0, fw, rowH, gx, gy, destW, destH);
+    } else {
+      // Fallback: bare colour bar.
+      const w = 300, h = 14;
+      ctx.fillStyle = '#1f2937';
+      ctx.fillRect(gx, gy, w, h);
+      ctx.fillStyle = clamped > 0.3 ? '#4ade80' : '#f97316';
+      ctx.fillRect(gx, gy, w * clamped, h);
+      ctx.fillStyle = '#9ca3af';
+      ctx.font = '11px ui-monospace, monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(`GAUGE ${Math.round(clamped * 100)}%`, gx, gy - 4);
+    }
   }
 
   dispose(): void {
