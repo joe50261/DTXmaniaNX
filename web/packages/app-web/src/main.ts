@@ -3,18 +3,29 @@ import { installOnScreenLog } from './on-screen-log.js';
 installOnScreenLog();
 
 import {
+  deserializeIndex,
   dirname,
+  flattenSongs,
   joinPath,
+  serializeIndex,
   SongScanner,
   type BoxNode,
   type ChartEntry,
   type SongEntry,
+  type SongIndex,
 } from '@dtxmania/dtx-core';
 import { Game, type GameFsContext } from './game.js';
 import { SongWheel } from './song-wheel.js';
 import { PreviewPlayer } from '@dtxmania/audio-engine';
 import { HandleFileSystemBackend } from './fs/handle-backend.js';
-import { clearRootHandle, loadRootHandle, saveRootHandle } from './fs/handle-store.js';
+import {
+  clearRootHandle,
+  clearScanCache,
+  loadRootHandle,
+  loadScanCache,
+  saveRootHandle,
+  saveScanCache,
+} from './fs/handle-store.js';
 import { loadSkin } from './skin.js';
 import type { SkinTextures } from './renderer.js';
 import { loadAudioOffsetMs, runCalibration, saveAudioOffsetMs } from './calibrate.js';
@@ -26,6 +37,7 @@ const statusEl = requireEl<HTMLDivElement>('status');
 const pickBtn = requireEl<HTMLButtonElement>('pick-folder');
 const demoBtn = requireEl<HTMLButtonElement>('start-demo');
 const forgetBtn = requireEl<HTMLButtonElement>('forget-folder');
+const rescanBtn = requireEl<HTMLButtonElement>('rescan-folder');
 const calibrateBtn = requireEl<HTMLButtonElement>('calibrate');
 const autoKickBtn = requireEl<HTMLButtonElement>('toggle-autokick');
 const xrBtn = requireEl<HTMLButtonElement>('enter-xr');
@@ -205,13 +217,23 @@ demoBtn.addEventListener('click', () => run(playDemo));
 forgetBtn.addEventListener('click', () =>
   run(async () => {
     await clearRootHandle();
+    await clearScanCache().catch(() => {});
     library = null;
     songWheel.setRoot(null);
     forgetBtn.style.display = 'none';
+    rescanBtn.style.display = 'none';
     pickBtn.textContent = 'Pick folder';
     onPick = pickAndScan;
     setStatus('Pick your Songs folder to begin.');
     refreshXrButton();
+  })
+);
+
+rescanBtn.addEventListener('click', () =>
+  run(async () => {
+    if (!library) return;
+    await clearScanCache().catch(() => {});
+    await scanIntoLibrary(library.handle, { forceRescan: true });
   })
 );
 
@@ -314,18 +336,67 @@ async function pickAndScan(): Promise<void> {
     throw e;
   }
   await saveRootHandle(handle).catch((e) => console.warn('failed to persist handle', e));
-  await scanIntoLibrary(handle);
+  // A freshly picked folder always deserves a fresh scan — the cache
+  // belongs to whatever directory we had before.
+  await clearScanCache().catch(() => {});
+  await scanIntoLibrary(handle, { forceRescan: true });
 }
 
-async function scanIntoLibrary(handle: FileSystemDirectoryHandle): Promise<void> {
-  setStatus(`Scanning "${handle.name}"…`);
+async function scanIntoLibrary(
+  handle: FileSystemDirectoryHandle,
+  opts: { forceRescan?: boolean } = {}
+): Promise<void> {
   const backend = new HandleFileSystemBackend(handle);
+
+  // Cache path: SongScanner.scan() on Quest 3 is slow enough (~50s/30
+  // songs observed in playtest) to warrant boot-time persistence. We
+  // save the whole SerializedIndex after each successful scan; on
+  // subsequent boots we try the cache first and only fall through to a
+  // fresh walk when the cache is missing, corrupt, or the user hit
+  // "Rescan". Validity isn't mtime-checked — expecting the user to
+  // press Rescan after adding songs keeps the cache simple and the
+  // boot instantaneous.
+  if (!opts.forceRescan) {
+    try {
+      const cached = await loadScanCache();
+      if (cached) {
+        const live = deserializeIndex(cached);
+        applyLibrary(handle, backend, live);
+        const ageMin = Math.max(0, Math.round((Date.now() - cached.scannedAtMs) / 60000));
+        setStatus(
+          `Loaded ${live.songs.length} song(s) from cache (scan was ${ageMin} min ago). ` +
+            `Hit Rescan if you changed the folder.`
+        );
+        return;
+      }
+    } catch (e) {
+      console.info('[scan-cache] invalid or incompatible, falling through to full scan', e);
+      await clearScanCache().catch(() => {});
+    }
+  }
+
+  setStatus(`Scanning "${handle.name}"…`);
   const scanner = new SongScanner(backend);
   const index = await scanner.scan('');
-  library = { handle, backend, root: index.root, songs: index.songs };
+  applyLibrary(handle, backend, index);
+  setStatus(`Scanned ${index.songs.length} song(s) in "${handle.name}".`);
+  await saveScanCache(serializeIndex(index)).catch((e) =>
+    console.warn('[scan-cache] failed to persist', e)
+  );
+}
+
+/** Shared "the library is now X" commit step used by both cache-hit and
+ * fresh-scan paths. Keeps the two paths from diverging on what they
+ * wire up. */
+function applyLibrary(
+  handle: FileSystemDirectoryHandle,
+  backend: HandleFileSystemBackend,
+  index: SongIndex
+): void {
+  library = { handle, backend, root: index.root, songs: flattenSongs(index.root) };
   pickBtn.textContent = 'Change folder';
   forgetBtn.style.display = 'inline-block';
-  setStatus(`Found ${index.songs.length} song(s) in "${handle.name}".`);
+  rescanBtn.style.display = 'inline-block';
   songWheel.setRoot(index.root);
   renderScanErrors(index.errors);
   refreshXrButton();

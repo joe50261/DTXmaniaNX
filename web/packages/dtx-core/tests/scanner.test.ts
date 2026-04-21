@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { SongScanner, flattenSongs } from '../src/scanner/scanner.js';
+import {
+  SongScanner,
+  flattenSongs,
+  serializeIndex,
+  deserializeIndex,
+  INDEX_CACHE_VERSION,
+} from '../src/scanner/scanner.js';
 import { MemoryFs } from './helpers/memory-fs.js';
 
 function makeFs(files: Record<string, string>): MemoryFs {
@@ -324,5 +330,58 @@ describe('SongScanner', () => {
     expect(index.songs[0]?.preview).toBe('pv.wav');
     expect(index.songs[0]?.preimage).toBe('cover.png');
     expect(index.songs[0]?.comment).toBe('A short blurb');
+  });
+});
+
+describe('serialize / deserialize scan cache', () => {
+  it('round-trips a scanned tree, rebuilding parent refs', async () => {
+    const fs = makeFs({
+      'Songs/Rock/a1.dtx': '#TITLE A1\n#ARTIST Band',
+      'Songs/Rock/a2.dtx': '#TITLE A2',
+      'Songs/Pop/set.def': [
+        '#TITLE Pop Pack Song',
+        '#L1FILE easy.dtx',
+        '#L2FILE hard.dtx',
+      ].join('\n'),
+      'Songs/Pop/easy.dtx': '#TITLE ignored',
+      'Songs/Pop/hard.dtx': '#TITLE ignored',
+      'Songs/Pop/filler.dtx': '#TITLE keeps Pop multi-entry',
+    });
+    const live = await new SongScanner(fs, { parseMeta: true }).scan('Songs');
+    const serialized = serializeIndex(live);
+    expect(serialized.version).toBe(INDEX_CACHE_VERSION);
+    // Value should survive a JSON round-trip (structured clone superset)
+    const blob = JSON.parse(JSON.stringify(serialized));
+    const restored = deserializeIndex(blob);
+
+    // Songs list identical (order + content).
+    expect(restored.songs).toEqual(live.songs);
+
+    // Every SongNode's parent must be the box that contains it (not a
+    // stale reference from serialization). Walk recursively.
+    const visit = (node: import('../src/scanner/scanner.js').LibraryNode): void => {
+      if (node.type === 'song') return;
+      for (const child of node.children) {
+        if (child.type === 'song') {
+          expect(child.parent).toBe(node);
+        } else {
+          expect(child.parent).toBe(node);
+          visit(child);
+        }
+      }
+    };
+    visit(restored.root);
+    expect(restored.root.parent).toBe(null);
+  });
+
+  it('throws on mismatched cache version so stale shapes get rejected', () => {
+    const stale = {
+      version: INDEX_CACHE_VERSION + 99,
+      rootPath: 'Songs',
+      root: { kind: 'box' as const, name: '/', path: 'Songs', children: [] },
+      errors: [],
+      scannedAtMs: Date.now(),
+    };
+    expect(() => deserializeIndex(stale)).toThrow(/version/);
   });
 });
