@@ -130,6 +130,18 @@ export class Game {
       // this, the next enterXR would scale + position the playfield but
       // leave it invisible — user sees an empty VR scene.
       this.renderer.setPlayfieldVisible(true);
+      // If the player exited VR while the result screen was up, clear the
+      // finished state. Otherwise status stays 'finished', the return
+      // latch is already tripped from the prior session's onRestart, and
+      // re-entering VR shows stale RESULTS with no way out. Nulling song
+      // makes hasChart false → main.ts's enter-VR handler auto-opens the
+      // song menu on the next entry, same as a fresh boot.
+      if (this.status === 'finished') {
+        this.status = 'idle';
+        this.song = null;
+        this.finishedAtMs = null;
+        this.finishedReturnHandled = false;
+      }
       onEnded();
     });
     this.xrControllers.start();
