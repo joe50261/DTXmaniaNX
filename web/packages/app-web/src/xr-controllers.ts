@@ -75,6 +75,14 @@ export class XrControllers {
   private prevFrameMs: number | null = null;
   private readonly lastHitMs = new Map<LaneValue, number>();
 
+  /**
+   * XRInputSource bound to controller index i, captured on `connected` event.
+   * Needed because `session.inputSources` iteration order is not guaranteed
+   * to match the Three.js controller index — pulsing the wrong entry made
+   * the left-hand strike rumble the right controller.
+   */
+  private readonly inputSources: (XRInputSource | null)[] = [null, null];
+
   private padsTexture: THREE.Texture | null = null;
 
   constructor(private readonly webgl: THREE.WebGLRenderer, private readonly scene: THREE.Scene) {}
@@ -95,12 +103,24 @@ export class XrControllers {
       }
     }
 
-    // Controllers: sticks extending forward from each grip.
+    // Controllers: sticks extending forward from each grip. Also capture the
+    // XRInputSource on `connected` so haptics pulse the matching hand.
     for (let i = 0; i < 2; i++) {
+      const controller = this.webgl.xr.getController(i);
       const grip = this.webgl.xr.getControllerGrip(i);
+      const idx = i;
+      controller.addEventListener('connected', (event) => {
+        const data = (event as unknown as { data?: XRInputSource }).data;
+        if (data) this.inputSources[idx] = data;
+      });
+      controller.addEventListener('disconnected', () => {
+        this.inputSources[idx] = null;
+      });
       grip.add(this.buildStick());
       this.scene.add(grip);
+      this.scene.add(controller);
       this.addedToScene.push(grip);
+      this.addedToScene.push(controller);
     }
   }
 
@@ -282,22 +302,16 @@ export class XrControllers {
     return this.tipWorld.clone();
   }
 
-  private pulseHaptic(session: XRSession, controllerIdx: number): void {
-    let i = 0;
-    for (const src of session.inputSources) {
-      if (!src.gamepad) continue;
-      if (i === controllerIdx) {
-        const actuators = (src.gamepad as Gamepad & { hapticActuators?: GamepadHapticActuator[] })
-          .hapticActuators;
-        const act = actuators?.[0];
-        if (act && 'pulse' in act) {
-          (act as GamepadHapticActuator & { pulse(intensity: number, durationMs: number): Promise<boolean> })
-            .pulse(0.6, 40)
-            .catch(() => {});
-        }
-        return;
-      }
-      i++;
+  private pulseHaptic(_session: XRSession, controllerIdx: number): void {
+    const src = this.inputSources[controllerIdx];
+    if (!src?.gamepad) return;
+    const actuators = (src.gamepad as Gamepad & { hapticActuators?: GamepadHapticActuator[] })
+      .hapticActuators;
+    const act = actuators?.[0];
+    if (act && 'pulse' in act) {
+      (act as GamepadHapticActuator & { pulse(intensity: number, durationMs: number): Promise<boolean> })
+        .pulse(0.6, 40)
+        .catch(() => {});
     }
   }
 
@@ -308,6 +322,8 @@ export class XrControllers {
     this.prevTip[1] = null;
     this.prevFrameMs = null;
     this.lastHitMs.clear();
+    this.inputSources[0] = null;
+    this.inputSources[1] = null;
     this.listener = null;
   }
 }
