@@ -3,6 +3,10 @@ import {
   computeTiming,
   ScoreTracker,
   classifyDeltaMs,
+  computeAchievementRate,
+  computeRank,
+  isFullCombo,
+  isExcellent,
   Judgment,
   HIT_RANGES_MS,
   joinPath,
@@ -68,8 +72,14 @@ export class Game {
   private lastBufferByLane = new Map<LaneValue, { buffer: AudioBuffer; wavId: number }>();
   private tracker = new ScoreTracker(0);
   private status: 'idle' | 'playing' | 'finished' = 'idle';
+  /** performance.now() of the 'playing' → 'finished' transition. Drives the
+   * result-screen fade-in and the auto-return dwell. */
+  private finishedAtMs: number | null = null;
   /** Once-per-chart latch so the VR auto-return timer doesn't re-fire. */
   private finishedAutoHandled = false;
+  /** Separate latch for the any-pad-hit early skip on the result screen so
+   * the final in-song hit doesn't double-fire as a skip. */
+  private finishedAdvanceHandled = false;
   private judgmentFlash: JudgmentFlash | null = null;
   private hitFlashes: HitFlash[] = [];
   /** Life / skill gauge, 0..1. Filled by hits, drained by misses. Starts at 0.5 so the player has headroom. */
@@ -200,7 +210,9 @@ export class Game {
     this.tracker = new ScoreTracker(this.playables.length);
 
     this.status = 'playing';
+    this.finishedAtMs = null;
     this.finishedAutoHandled = false;
+    this.finishedAdvanceHandled = false;
     this.engine.startSongClock(COUNTDOWN_MS);
 
     this.scheduleBgm(this.song);
@@ -334,12 +346,15 @@ export class Game {
     // Game-over check: song finished + small tail for last miss detection.
     if (songTime > this.song.durationMs + 500 && this.status === 'playing') {
       this.status = 'finished';
+      this.finishedAtMs = performance.now();
     }
 
     // In VR there's no keyboard, so the player can't press Esc to return
-    // to the menu like on desktop. Auto-fire onRestart ~2 s after FINISHED
+    // to the menu like on desktop. Auto-fire onRestart ~5 s after FINISHED
     // shows so the VR song-picker appears on its own. The latch keeps it
-    // to one call per chart.
+    // to one call per chart. 5 s gives the player enough time to read the
+    // rank + count breakdown; an early pad hit skips the wait (handled in
+    // handleLaneHit).
     if (
       this.status === 'finished' &&
       !this.finishedAutoHandled &&
@@ -348,17 +363,24 @@ export class Game {
     ) {
       this.finishedAutoHandled = true;
       const cb = this.onRestart;
-      setTimeout(() => cb(), 2000);
+      setTimeout(() => cb(), 5000);
     }
 
     this.hitFlashes = this.hitFlashes.filter((f) => songTime - f.spawnedMs < 400);
 
+    // Single snapshot — cheap, but avoids fan-out when we add more derived
+    // metrics. Derived rank / rate fields are only meaningful on the result
+    // screen; 'E' / 0 are inert placeholders while playing.
+    const snap = this.tracker.snapshot();
+    const rate = this.status === 'finished' ? computeAchievementRate(snap) : 0;
+    const rank = this.status === 'finished' ? computeRank(rate, snap.totalNotes) : 'E';
+
     const state: RenderState = {
       songTimeMs: songTime,
       chips: this.song.chips,
-      combo: this.tracker.snapshot().combo,
-      score: this.tracker.snapshot().score,
-      maxCombo: this.tracker.snapshot().maxCombo,
+      combo: snap.combo,
+      score: snap.score,
+      maxCombo: snap.maxCombo,
       judgmentFlash: this.judgmentFlash,
       hitFlashes: this.hitFlashes,
       status: this.status,
@@ -366,6 +388,14 @@ export class Game {
       songLengthMs: this.song.durationMs,
       gauge: this.gauge,
       lastPadHitMs: this.lastPadHitMs,
+      counts: snap.counts,
+      totalNotes: snap.totalNotes,
+      achievementRate: rate,
+      rank,
+      fullCombo: isFullCombo(snap),
+      excellent: isExcellent(snap),
+      finishedAtMs: this.finishedAtMs,
+      inXR: this.renderer.inXR,
     };
     this.renderer.render(state);
     this.renderer.submitPadHits(this.lastPadHitMs);
@@ -373,6 +403,18 @@ export class Game {
   }
 
   private handleLaneHit(event: LaneHitEvent): void {
+    // Result-screen early-exit: any pad hit after a short dwell returns to
+    // the song picker (primarily for VR, where there is no keyboard). The
+    // 400 ms dwell keeps the last in-song strike from double-firing as a
+    // skip the moment the song flips to 'finished'.
+    if (this.status === 'finished') {
+      if (this.finishedAdvanceHandled || !this.onRestart) return;
+      if (this.finishedAtMs === null) return;
+      if (performance.now() - this.finishedAtMs < 400) return;
+      this.finishedAdvanceHandled = true;
+      this.onRestart();
+      return;
+    }
     if (this.status !== 'playing' || !this.song) return;
     const songTime = this.engine.songTimeMs();
     // Player's calibrated offset: positive = the player's press lands after

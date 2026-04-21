@@ -4,7 +4,7 @@ import { LANE_LAYOUT, channelToLane, type LaneSpec } from './lane-layout.js';
 import { PAD_ATLAS, PAD_SIZE, padRect } from './pad-atlas.js';
 import { CHIP_ATLAS_Y, CHIP_ATLAS_H, chipRect } from './chip-atlas.js';
 import { JUDGE_ROWS, JUDGE_SPRITE_W, JUDGE_SPRITE_H } from './judge-atlas.js';
-import type { JudgmentKind } from '@dtxmania/dtx-core';
+import type { JudgmentKind, Rank } from '@dtxmania/dtx-core';
 import type { LaneValue } from '@dtxmania/input';
 
 export const CANVAS_W = 1280;
@@ -12,6 +12,10 @@ export const CANVAS_H = 720;
 export const JUDGE_LINE_Y = 600;
 export const PX_PER_MS = 0.45;
 export const CHIP_H = 14;
+
+function truncate(s: string, max: number): string {
+  return s.length <= max ? s : s.slice(0, max - 1) + '…';
+}
 
 export interface JudgmentFlash {
   text: string;
@@ -46,6 +50,22 @@ export interface RenderState {
    * updates this on any hit (matched or stray) that actually makes sound.
    */
   lastPadHitMs: Map<LaneValue, number>;
+  /** Per-judgment hit counts (stable once status === 'finished'). */
+  counts: Record<JudgmentKind, number>;
+  /** Total playable chips in the chart. */
+  totalNotes: number;
+  /** DTXMania achievement rate (0..100). Meaningful on the result screen. */
+  achievementRate: number;
+  /** Letter grade. Only meaningful on the result screen; 'E' otherwise. */
+  rank: Rank;
+  /** POOR=0 && MISS=0. Shown as a badge on the result screen. */
+  fullCombo: boolean;
+  /** Every note PERFECT. Supersedes fullCombo on the result banner. */
+  excellent: boolean;
+  /** performance.now() of the playing → finished transition. null while playing. */
+  finishedAtMs: number | null;
+  /** True when the session runs inside a WebXR headset. Changes the result-screen footer hint. */
+  inXR: boolean;
 }
 
 /** Optional textures injected by the skin loader. Renderer tolerates absent textures. */
@@ -497,53 +517,151 @@ export class Renderer {
   private drawHUD(state: RenderState): void {
     const ctx = this.ctx;
 
-    ctx.fillStyle = '#aaa';
-    ctx.font = '14px ui-monospace, monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText(state.titleLine, 20, 30);
+    // In-play HUD elements — suppressed on the result screen so they don't
+    // bleed through the overlay (live combo text in particular would read
+    // wrong once the song's over).
+    if (state.status !== 'finished') {
+      ctx.fillStyle = '#aaa';
+      ctx.font = '14px ui-monospace, monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(state.titleLine, 20, 30);
 
-    const progress = state.songLengthMs > 0
-      ? Math.max(0, Math.min(1, state.songTimeMs / state.songLengthMs))
-      : 0;
-    ctx.fillStyle = '#1f2937';
-    ctx.fillRect(20, 50, 200, 6);
-    ctx.fillStyle = '#60a5fa';
-    ctx.fillRect(20, 50, 200 * progress, 6);
+      const progress = state.songLengthMs > 0
+        ? Math.max(0, Math.min(1, state.songTimeMs / state.songLengthMs))
+        : 0;
+      ctx.fillStyle = '#1f2937';
+      ctx.fillRect(20, 50, 200, 6);
+      ctx.fillStyle = '#60a5fa';
+      ctx.fillRect(20, 50, 200 * progress, 6);
 
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 48px ui-monospace, monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText(state.score.toString().padStart(7, '0'), CANVAS_W - 40, 80);
-
-    ctx.fillStyle = state.combo >= 10 ? '#fbbf24' : '#9ca3af';
-    ctx.font = 'bold 64px ui-monospace, monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(state.combo > 0 ? `${state.combo}` : '', CANVAS_W / 2, JUDGE_LINE_Y - 90);
-    if (state.combo > 0) {
-      ctx.fillStyle = '#6b7280';
-      ctx.font = 'bold 20px ui-monospace, monospace';
-      ctx.fillText('COMBO', CANVAS_W / 2, JUDGE_LINE_Y - 60);
-    }
-
-    ctx.fillStyle = '#4b5563';
-    ctx.font = '14px ui-monospace, monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText(`MAX COMBO ${state.maxCombo}`, CANVAS_W - 20, CANVAS_H - 20);
-
-    this.drawGauge(state.gauge);
-
-    if (state.status === 'finished') {
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
       ctx.fillStyle = '#fff';
+      ctx.font = 'bold 48px ui-monospace, monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(state.score.toString().padStart(7, '0'), CANVAS_W - 40, 80);
+
+      ctx.fillStyle = state.combo >= 10 ? '#fbbf24' : '#9ca3af';
       ctx.font = 'bold 64px ui-monospace, monospace';
       ctx.textAlign = 'center';
-      ctx.fillText('FINISHED', CANVAS_W / 2, CANVAS_H / 2 - 20);
-      ctx.font = '22px ui-monospace, monospace';
-      ctx.fillStyle = '#cbd5e1';
-      ctx.fillText(`Score ${state.score}  •  Max Combo ${state.maxCombo}`, CANVAS_W / 2, CANVAS_H / 2 + 20);
-      ctx.fillText('Press Esc to restart', CANVAS_W / 2, CANVAS_H / 2 + 60);
+      ctx.fillText(state.combo > 0 ? `${state.combo}` : '', CANVAS_W / 2, JUDGE_LINE_Y - 90);
+      if (state.combo > 0) {
+        ctx.fillStyle = '#6b7280';
+        ctx.font = 'bold 20px ui-monospace, monospace';
+        ctx.fillText('COMBO', CANVAS_W / 2, JUDGE_LINE_Y - 60);
+      }
+
+      ctx.fillStyle = '#4b5563';
+      ctx.font = '14px ui-monospace, monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(`MAX COMBO ${state.maxCombo}`, CANVAS_W - 20, CANVAS_H - 20);
+
+      this.drawGauge(state.gauge);
     }
+
+    if (state.status === 'finished') {
+      this.drawResult(state);
+    }
+  }
+
+  private drawResult(state: RenderState): void {
+    const ctx = this.ctx;
+    const now = performance.now();
+    const age = state.finishedAtMs !== null ? now - state.finishedAtMs : 0;
+    const alpha = Math.max(0, Math.min(1, age / 400));
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    // Dim curtain over the in-play scene.
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    // Header.
+    ctx.fillStyle = '#e5e7eb';
+    ctx.font = 'bold 56px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('RESULTS', CANVAS_W / 2, 80);
+
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '20px ui-monospace, monospace';
+    ctx.fillText(truncate(state.titleLine, 70), CANVAS_W / 2, 110);
+
+    // Giant rank letter.
+    const rankColors: Record<Rank, string> = {
+      SS: '#fde047',
+      S: '#fbbf24',
+      A: '#4ade80',
+      B: '#60a5fa',
+      C: '#a78bfa',
+      D: '#f472b6',
+      E: '#94a3b8',
+    };
+    ctx.fillStyle = rankColors[state.rank];
+    ctx.font = 'bold 260px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(state.rank, CANVAS_W / 2, 370);
+
+    // Achievement %.
+    ctx.fillStyle = '#e5e7eb';
+    ctx.font = 'bold 36px ui-monospace, monospace';
+    const rateText = state.totalNotes === 0
+      ? '---'
+      : `${state.achievementRate.toFixed(2)}%`;
+    ctx.fillText(rateText, CANVAS_W / 2, 420);
+
+    // Left column: judgment counts.
+    const leftX = 260;
+    const numberX = 520;
+    const judgeRows: Array<{ label: string; key: JudgmentKind; color: string }> = [
+      { label: 'PERFECT', key: 'PERFECT', color: '#7dd3fc' },
+      { label: 'GREAT', key: 'GREAT', color: '#4ade80' },
+      { label: 'GOOD', key: 'GOOD', color: '#fbbf24' },
+      { label: 'POOR', key: 'POOR', color: '#f472b6' },
+      { label: 'MISS', key: 'MISS', color: '#ef4444' },
+    ];
+    ctx.font = '22px ui-monospace, monospace';
+    let rowY = 480;
+    for (const row of judgeRows) {
+      ctx.fillStyle = row.color;
+      ctx.textAlign = 'left';
+      ctx.fillText(row.label, leftX, rowY);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#e5e7eb';
+      ctx.fillText(String(state.counts[row.key]), numberX, rowY);
+      rowY += 36;
+    }
+
+    // Right column: score + max combo + optional badge.
+    const rightX = 720;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#e5e7eb';
+    ctx.font = 'bold 40px ui-monospace, monospace';
+    ctx.fillText(`SCORE ${state.score.toString().padStart(7, '0')}`, rightX, 500);
+
+    ctx.font = '24px ui-monospace, monospace';
+    ctx.fillStyle = '#9ca3af';
+    ctx.fillText(`MAX COMBO ${state.maxCombo}`, rightX, 540);
+
+    if (state.excellent) {
+      ctx.fillStyle = '#fde047';
+      ctx.font = 'bold 28px ui-monospace, monospace';
+      ctx.fillText('EXCELLENT', rightX, 600);
+    } else if (state.fullCombo) {
+      ctx.fillStyle = '#fbbf24';
+      ctx.font = 'bold 28px ui-monospace, monospace';
+      ctx.fillText('FULL COMBO', rightX, 600);
+    }
+
+    // Footer hint (delay so it doesn't flash in during fade-in).
+    if (age > 400) {
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '16px ui-monospace, monospace';
+      ctx.textAlign = 'center';
+      const hint = state.inXR
+        ? 'Hit any pad to return (auto-return in 5s)'
+        : 'Press Esc to return';
+      ctx.fillText(hint, CANVAS_W / 2, 690);
+    }
+
+    ctx.restore();
   }
 
   private drawJudgmentFlash(state: RenderState): void {
