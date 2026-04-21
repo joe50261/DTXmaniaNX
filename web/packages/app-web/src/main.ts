@@ -229,20 +229,30 @@ async function playDemo(): Promise<void> {
 }
 
 async function launchGame(dtxText: string, fs?: GameFsContext): Promise<void> {
-  if (activeGame) {
-    activeGame.stop();
-    activeGame = null;
-  }
   const skin = await skinPromise;
-  const game = new Game(canvas, skin);
-  activeGame = game;
+  // If we're already in VR, reuse the existing Game so the XR session and
+  // drum-kit stay live when swapping charts via the in-VR menu.
+  const reuse = activeGame && activeGame.inXR;
+  const game = reuse ? activeGame! : new Game(canvas, skin);
+  if (!reuse) {
+    if (activeGame) {
+      activeGame.stop();
+    }
+    activeGame = game;
+  }
   const startOpts: Parameters<Game['loadAndStart']>[1] = {
     onRestart: () => {
-      game.stop();
-      activeGame = null;
-      overlay.style.display = 'grid';
-      setStatus('Pick another chart or change folder.');
-      refreshXrButton();
+      if (game.inXR) {
+        // In VR: re-show the menu panel so the player can pick again without
+        // taking off the headset.
+        showVrMenuForActive(fs);
+      } else {
+        game.stop();
+        activeGame = null;
+        overlay.style.display = 'grid';
+        setStatus('Pick another chart or change folder.');
+        refreshXrButton();
+      }
     },
   };
   if (fs) {
@@ -255,15 +265,41 @@ async function launchGame(dtxText: string, fs?: GameFsContext): Promise<void> {
     };
   }
   try {
+    game.hideVrMenu();
     await game.loadAndStart(dtxText, startOpts);
     overlay.style.display = 'none';
     refreshXrButton();
   } catch (e) {
     setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
-    game.stop();
-    activeGame = null;
+    if (!reuse) {
+      game.stop();
+      activeGame = null;
+    }
     throw e;
   }
+}
+
+function showVrMenuForActive(fs?: GameFsContext): void {
+  if (!activeGame || !library) return;
+  activeGame.showVrMenu(
+    library.songs,
+    (pick) => {
+      run(async () => {
+        const text = await library!.backend.readText(pick.chart.chartPath);
+        await launchGame(text, {
+          backend: library!.backend,
+          folder: dirname(pick.chart.chartPath),
+        });
+      });
+      // Silence unused warning; fs is carried through the new launchGame call.
+      void fs;
+    },
+    () => {
+      // Exit button → end the XR session; enterXR's onEnded handler cleans up.
+      const session = (activeGame as Game).display.webgl.xr.getSession();
+      session?.end().catch(() => {});
+    }
+  );
 }
 
 function refreshXrButton(): void {
