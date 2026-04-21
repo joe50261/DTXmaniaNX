@@ -91,13 +91,40 @@
         font-size: 12px;
         line-height: 1.5;
       }
+      #breadcrumb {
+        margin-top: 16px;
+        padding: 6px 10px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        font-size: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        align-items: center;
+        min-height: 1.4em;
+      }
+      .breadcrumb-seg {
+        padding: 2px 6px;
+        border-radius: 3px;
+      }
+      .breadcrumb-seg.nav {
+        cursor: pointer;
+        opacity: 0.55;
+      }
+      .breadcrumb-seg.nav:hover {
+        background: rgba(80, 120, 255, 0.15);
+        opacity: 1;
+      }
+      .breadcrumb-seg.current {
+        font-weight: bold;
+      }
+      .breadcrumb-sep {
+        opacity: 0.35;
+      }
       #song-select {
         display: grid;
         grid-template-columns: 1fr 200px;
         gap: 14px;
-        margin-top: 16px;
-        border-top: 1px solid rgba(255, 255, 255, 0.08);
-        padding-top: 14px;
+        margin-top: 6px;
       }
       #song-wheel {
         min-height: 44vh;
@@ -304,6 +331,7 @@
           <button id="calibrate" class="ghost">Calibrate latency</button>
           <button id="toggle-autokick" class="ghost">Auto-kick: OFF</button>
         </div>
+        <div id="breadcrumb"></div>
         <div id="song-select">
           <div id="song-wheel"></div>
           <div id="side-column">
@@ -311,7 +339,7 @@
             <div id="status-panel"></div>
           </div>
         </div>
-        <div id="wheel-help">↑ ↓ browse · ← → difficulty · Enter play</div>
+        <div id="wheel-help">↑ ↓ browse · ← → difficulty · Enter play/enter · Esc back</div>
         <div class="errors" id="scan-errors"></div>
         <div class="hint">
           Keys: S/D = Snare, Space = Bass, H = HiHat, J = Left Cymbal, F = Crash,
