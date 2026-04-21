@@ -37,10 +37,44 @@ export interface SongEntry {
   artist?: string;
   genre?: string;
   bpm?: number;
+  /** `#PREVIEW` WAV path relative to folderPath. Used for song-select audio. */
+  preview?: string;
+  /** `#PREIMAGE` cover-art path relative to folderPath. */
+  preimage?: string;
+  /** `#COMMENT` free-form text, often a song blurb shown in the info panel. */
+  comment?: string;
 }
+
+/** DTXmania-style song-select tree. The top-level `root` is a virtual box
+ * wrapping the scanned root path; every directory containing songs (or
+ * holding nested song directories) becomes a BoxNode. Back / Random
+ * navigation entries are synthetic and added by the UI layer at render
+ * time rather than baked into the tree here. */
+export interface BoxNode {
+  type: 'box';
+  /** Display name (last path segment for subfolders; "/" for root). */
+  name: string;
+  /** Absolute path (relative to the backend root). */
+  path: string;
+  parent: BoxNode | null;
+  children: LibraryNode[];
+}
+
+export interface SongNode {
+  type: 'song';
+  entry: SongEntry;
+  parent: BoxNode;
+}
+
+export type LibraryNode = BoxNode | SongNode;
 
 export interface SongIndex {
   rootPath: string;
+  /** Tree root. All boxes / songs reachable from here; DTXmania-style drill. */
+  root: BoxNode;
+  /** Flat list of every SongEntry, for callers that don't care about folder
+   * structure (e.g. the legacy song-list UI pre-wheel rewrite). Populated as
+   * a pre-order DFS of `root`. */
   songs: SongEntry[];
   errors: ScanError[];
 }
@@ -80,15 +114,22 @@ export class SongScanner {
   }
 
   async scan(rootPath: string): Promise<SongIndex> {
-    const songs: SongEntry[] = [];
     const errors: ScanError[] = [];
-    await this.walk(rootPath, 0, songs, errors);
+    const root: BoxNode = {
+      type: 'box',
+      name: '/',
+      path: rootPath,
+      parent: null,
+      children: [],
+    };
+    await this.walk(root, 0, errors);
+    const songs = flattenSongs(root);
     if (this.parseMeta) {
       for (const song of songs) {
         await this.fillSongMeta(song, errors);
       }
     }
-    return { rootPath, songs, errors };
+    return { rootPath, root, songs, errors };
   }
 
   private async fillSongMeta(song: SongEntry, errors: ScanError[]): Promise<void> {
@@ -101,6 +142,11 @@ export class SongScanner {
         if (song.artist === undefined && parsed.artist) song.artist = parsed.artist;
         if (song.genre === undefined && parsed.genre) song.genre = parsed.genre;
         if (song.bpm === undefined) song.bpm = parsed.baseBpm;
+        // Preview/preimage/comment are per-song (same across difficulties),
+        // so the first chart that declares them wins.
+        if (song.preview === undefined && parsed.preview) song.preview = parsed.preview;
+        if (song.preimage === undefined && parsed.preimage) song.preimage = parsed.preimage;
+        if (song.comment === undefined && parsed.comment) song.comment = parsed.comment;
       } catch (e) {
         errors.push({ path: chart.chartPath, message: errorMessage(e) });
       }
@@ -108,18 +154,17 @@ export class SongScanner {
   }
 
   private async walk(
-    path: string,
+    box: BoxNode,
     depth: number,
-    songs: SongEntry[],
     errors: ScanError[]
   ): Promise<void> {
     if (depth > this.maxDepth) return;
 
     let entries: DirEntry[];
     try {
-      entries = await this.fs.listDir(path);
+      entries = await this.fs.listDir(box.path);
     } catch (e) {
-      errors.push({ path, message: errorMessage(e) });
+      errors.push({ path: box.path, message: errorMessage(e) });
       return;
     }
 
@@ -127,13 +172,17 @@ export class SongScanner {
       (e) => e.isFile && e.name.toLowerCase() === 'set.def'
     );
 
+    const pushSong = (entry: SongEntry): void => {
+      box.children.push({ type: 'song', entry, parent: box });
+    };
+
     if (setDefEntry) {
       let pushedFromSetDef = 0;
       try {
         const text = await this.fs.readText(setDefEntry.path, 'shift-jis');
         const blocks = parseSetDef(text);
         for (const block of blocks) {
-          const song = blockToSong(block, path);
+          const song = blockToSong(block, box.path);
           // Only add the song if at least one referenced chart actually exists.
           const survivingCharts: ChartEntry[] = [];
           for (const chart of song.charts) {
@@ -143,7 +192,7 @@ export class SongScanner {
           }
           if (survivingCharts.length > 0) {
             song.charts = survivingCharts;
-            songs.push(song);
+            pushSong(song);
             pushedFromSetDef++;
           }
         }
@@ -158,7 +207,7 @@ export class SongScanner {
         for (const entry of entries) {
           if (!entry.isFile) continue;
           if (extname(entry.name) !== '.dtx') continue;
-          songs.push(singleDtxToSong(entry, path));
+          pushSong(singleDtxToSong(entry, box.path));
         }
       }
     } else {
@@ -166,17 +215,49 @@ export class SongScanner {
       for (const entry of entries) {
         if (!entry.isFile) continue;
         if (extname(entry.name) !== '.dtx') continue;
-        songs.push(singleDtxToSong(entry, path));
+        pushSong(singleDtxToSong(entry, box.path));
       }
     }
 
-    // Recurse into subdirectories.
+    // Recurse into subdirectories. Each becomes a child BoxNode; we only
+    // keep it attached if it ends up with any descendants, otherwise empty
+    // folders would clutter the wheel with dead entries.
     for (const entry of entries) {
       if (!entry.isDirectory) continue;
       if (this.skipDirs.has(entry.name.toLowerCase())) continue;
-      await this.walk(entry.path, depth + 1, songs, errors);
+      const subBox: BoxNode = {
+        type: 'box',
+        name: entry.name,
+        path: entry.path,
+        parent: box,
+        children: [],
+      };
+      await this.walk(subBox, depth + 1, errors);
+      if (subBox.children.length > 0) {
+        box.children.push(subBox);
+      }
     }
   }
+}
+
+/** Pre-order DFS collecting every SongEntry under the given root. Preserves
+ * filesystem-walk order so callers that previously relied on the flat list
+ * see no behavioural change. */
+export function flattenSongs(root: BoxNode): SongEntry[] {
+  const out: SongEntry[] = [];
+  const stack: LibraryNode[] = [root];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (node.type === 'song') {
+      out.push(node.entry);
+    } else {
+      // Iterate children in reverse so pre-order LTR matches original walk.
+      for (let i = node.children.length - 1; i >= 0; i--) {
+        stack.push(node.children[i]!);
+      }
+    }
+  }
+  return out;
 }
 
 function blockToSong(block: SetDefBlock, folderPath: string): SongEntry {
