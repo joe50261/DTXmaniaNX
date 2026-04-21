@@ -75,11 +75,12 @@ export class Game {
   /** performance.now() of the 'playing' → 'finished' transition. Drives the
    * result-screen fade-in and the auto-return dwell. */
   private finishedAtMs: number | null = null;
-  /** Once-per-chart latch so the VR auto-return timer doesn't re-fire. */
-  private finishedAutoHandled = false;
-  /** Separate latch for the any-pad-hit early skip on the result screen so
-   * the final in-song hit doesn't double-fire as a skip. */
-  private finishedAdvanceHandled = false;
+  /** Once-per-chart latch shared by both result-screen return paths (VR
+   * auto-return after 5 s AND pad-hit-skip). Unified so that whichever
+   * path fires first prevents the other from firing too and double-calling
+   * onRestart (which would re-show the VR menu on top of itself and
+   * re-wire XR controller event listeners). */
+  private finishedReturnHandled = false;
   private judgmentFlash: JudgmentFlash | null = null;
   private hitFlashes: HitFlash[] = [];
   /** Life / skill gauge, 0..1. Filled by hits, drained by misses. Starts at 0.5 so the player has headroom. */
@@ -139,11 +140,17 @@ export class Game {
     onExit: () => void
   ): void {
     this.menuIsShown = true;
+    // Hide playfield while the menu is up. Without this the result HUD +
+    // scrolling pads (renderOrder 2/4, depthTest:off) keep painting over
+    // the menu panel (renderOrder 0) and the player can't see what they
+    // picked — and thinks auto-return / pad-hit-skip "didn't fire".
+    this.renderer.setPlayfieldVisible(false);
     this.vrMenu.show(songs, onPick, onExit);
   }
 
   hideVrMenu(): void {
     this.menuIsShown = false;
+    this.renderer.setPlayfieldVisible(true);
     this.vrMenu.hide();
   }
 
@@ -178,6 +185,9 @@ export class Game {
   ): Promise<void> {
     this.onRestart = opts.onRestart ?? null;
     if (opts.autoKick !== undefined) this.autoKick = opts.autoKick;
+    // Belt-and-braces: whatever state hideVrMenu may or may not have run in,
+    // a fresh chart always wants the playfield visible.
+    this.renderer.setPlayfieldVisible(true);
     this.stopBgm();
     this.sampleByWavId.clear();
     this.lastBufferByLane.clear();
@@ -223,8 +233,7 @@ export class Game {
 
     this.status = 'playing';
     this.finishedAtMs = null;
-    this.finishedAutoHandled = false;
-    this.finishedAdvanceHandled = false;
+    this.finishedReturnHandled = false;
     this.engine.startSongClock(COUNTDOWN_MS);
 
     this.scheduleBgm(this.song);
@@ -377,13 +386,13 @@ export class Game {
     // check it every frame. Latch to single-shot.
     if (
       this.status === 'finished' &&
-      !this.finishedAutoHandled &&
+      !this.finishedReturnHandled &&
       this.renderer.inXR &&
       this.onRestart &&
       this.finishedAtMs !== null &&
       performance.now() - this.finishedAtMs > 5000
     ) {
-      this.finishedAutoHandled = true;
+      this.finishedReturnHandled = true;
       console.info('[result] VR auto-return fired');
       this.onRestart();
     }
@@ -459,14 +468,14 @@ export class Game {
         : performance.now() - this.finishedAtMs;
       console.info('[result] pad hit during result', {
         lane: event.lane,
-        advanceHandled: this.finishedAdvanceHandled,
+        returnHandled: this.finishedReturnHandled,
         hasOnRestart: !!this.onRestart,
         dwellMs: dwell,
       });
-      if (this.finishedAdvanceHandled || !this.onRestart) return;
+      if (this.finishedReturnHandled || !this.onRestart) return;
       if (this.finishedAtMs === null) return;
       if (dwell < 400) return;
-      this.finishedAdvanceHandled = true;
+      this.finishedReturnHandled = true;
       console.info('[result] pad-hit skip → onRestart');
       this.onRestart();
       return;
