@@ -1,4 +1,5 @@
 import { parseDtx } from '../parser/parser.js';
+import { parseBoxDef, type BoxDefMeta } from './boxdef.js';
 import { extname, joinPath, type DirEntry, type FileSystemBackend } from './fs-backend.js';
 import { parseSetDef, type SetDefBlock } from './setdef.js';
 
@@ -52,12 +53,28 @@ export interface SongEntry {
  * time rather than baked into the tree here. */
 export interface BoxNode {
   type: 'box';
-  /** Display name (last path segment for subfolders; "/" for root). */
+  /** Display name (box.def #TITLE if present, else the `dtxfiles.`
+   * suffix if present, else the raw folder-name segment; "/" for root). */
   name: string;
-  /** Absolute path (relative to the backend root). */
+  /** Absolute path (relative to the backend root). Stable across
+   * re-scans; used as the cache key for breadcrumb restoration. */
   path: string;
   parent: BoxNode | null;
   children: LibraryNode[];
+  /** `#FONTCOLOR` from box.def, hex string like "#0099FF". UI tints
+   * the focused row with this. */
+  fontColor?: string;
+  /** `#COMMENT` from box.def. Not currently rendered anywhere but
+   * preserved across cache round-trips so future UI can use it. */
+  comment?: string;
+  /** `#PREIMAGE` path relative to this box's folder. Cover art for
+   * the box itself (vs. a song's cover). */
+  preimage?: string;
+  /** True if this box was explicitly declared via `dtxfiles.` folder
+   * prefix or a `box.def` file. Shields the box from the single-child
+   * hoist rule — the author wanted this folder visible even if it
+   * only contains one song. */
+  explicit?: boolean;
 }
 
 export interface SongNode {
@@ -270,6 +287,7 @@ export class SongScanner {
     for (const entry of entries) {
       if (!entry.isDirectory) continue;
       if (this.skipDirs.has(entry.name.toLowerCase())) continue;
+
       const subBox: BoxNode = {
         type: 'box',
         name: entry.name,
@@ -277,15 +295,80 @@ export class SongScanner {
         parent: box,
         children: [],
       };
+
+      // Before descending, resolve the DTXmania "is this folder an
+      // explicit box?" rules. Order: (1) look at its children for a
+      // box.def file — if present parse + apply metadata + mark
+      // explicit. (2) Independently, the `dtxfiles.` folder-name prefix
+      // also counts as an explicit marker and provides a default title.
+      // Both can apply simultaneously; box.def wins on title conflicts.
+      await this.applyExplicitBoxMarkers(subBox, errors);
+
       await this.walk(subBox, depth + 1, errors);
       if (subBox.children.length === 0) continue;
-      if (subBox.children.length === 1) {
+      if (subBox.children.length === 1 && !subBox.explicit) {
+        // Implicit single-child folders collapse into the parent so
+        // set.def packs don't create a "box → one song" dead layer.
+        // Explicit-marked boxes always survive — the author chose to
+        // surface them.
         const only = subBox.children[0]!;
         only.parent = box;
         box.children.push(only);
       } else {
         box.children.push(subBox);
       }
+    }
+  }
+
+  /**
+   * Probe a candidate sub-box for DTXmania's explicit-box markers and
+   * apply the resulting metadata in-place. No-op if neither marker is
+   * present; in that case the box still gets walked but is subject to
+   * the single-child hoist.
+   */
+  private async applyExplicitBoxMarkers(
+    subBox: BoxNode,
+    errors: ScanError[]
+  ): Promise<void> {
+    // 1. Check for box.def inside the directory.
+    let boxDefMeta: BoxDefMeta | null = null;
+    try {
+      const inside = await this.fs.listDir(subBox.path);
+      const boxDefEntry = inside.find(
+        (e) => e.isFile && e.name.toLowerCase() === 'box.def'
+      );
+      if (boxDefEntry) {
+        try {
+          const text = await this.fs.readText(boxDefEntry.path, 'shift-jis');
+          boxDefMeta = parseBoxDef(text);
+          subBox.explicit = true;
+        } catch (e) {
+          errors.push({ path: boxDefEntry.path, message: errorMessage(e) });
+        }
+      }
+    } catch {
+      // listDir failure will be rediscovered by walk() and reported
+      // there; nothing to do here.
+    }
+
+    // 2. `dtxfiles.` prefix — case-insensitive, independent of box.def.
+    const prefix = 'dtxfiles.';
+    const lower = subBox.name.toLowerCase();
+    const hasDtxfilesPrefix = lower.startsWith(prefix);
+    if (hasDtxfilesPrefix) {
+      subBox.explicit = true;
+      // Default title: strip the prefix. box.def #TITLE still wins
+      // below if it supplied its own.
+      subBox.name = subBox.name.slice(prefix.length) || subBox.name;
+    }
+
+    // Apply box.def metadata last so authored values override any
+    // defaults we set from the `dtxfiles.` prefix.
+    if (boxDefMeta) {
+      if (boxDefMeta.title) subBox.name = boxDefMeta.title;
+      if (boxDefMeta.fontColor) subBox.fontColor = boxDefMeta.fontColor;
+      if (boxDefMeta.comment) subBox.comment = boxDefMeta.comment;
+      if (boxDefMeta.preimage) subBox.preimage = boxDefMeta.preimage;
     }
   }
 }
@@ -355,7 +438,7 @@ function errorMessage(e: unknown): string {
  * wrong-looking rows. Consumers should throw-away caches whose version !==
  * INDEX_CACHE_VERSION instead of trying to migrate.
  */
-export const INDEX_CACHE_VERSION = 1;
+export const INDEX_CACHE_VERSION = 2;
 
 /** JSON-friendly mirror of the BoxNode / SongNode tree. Strips parent
  * refs (they're reconstructed on load) so the shape is structured-
@@ -375,6 +458,12 @@ interface SerializedBox {
   name: string;
   path: string;
   children: Array<SerializedBox | SerializedSong>;
+  // Optional metadata from box.def / `dtxfiles.` prefix. Persisted so
+  // the UI tint + breadcrumb survive cache hydration.
+  fontColor?: string;
+  comment?: string;
+  preimage?: string;
+  explicit?: boolean;
 }
 
 interface SerializedSong {
@@ -401,7 +490,17 @@ function serializeBox(box: BoxNode): SerializedBox {
       children.push(serializeBox(child));
     }
   }
-  return { kind: 'box', name: box.name, path: box.path, children };
+  const out: SerializedBox = {
+    kind: 'box',
+    name: box.name,
+    path: box.path,
+    children,
+  };
+  if (box.fontColor !== undefined) out.fontColor = box.fontColor;
+  if (box.comment !== undefined) out.comment = box.comment;
+  if (box.preimage !== undefined) out.preimage = box.preimage;
+  if (box.explicit) out.explicit = true;
+  return out;
 }
 
 /**
@@ -433,6 +532,10 @@ function deserializeBox(s: SerializedBox, parent: BoxNode | null): BoxNode {
     parent,
     children: [],
   };
+  if (s.fontColor !== undefined) box.fontColor = s.fontColor;
+  if (s.comment !== undefined) box.comment = s.comment;
+  if (s.preimage !== undefined) box.preimage = s.preimage;
+  if (s.explicit) box.explicit = true;
   for (const child of s.children) {
     if (child.kind === 'song') {
       box.children.push({ type: 'song', entry: child.entry, parent: box });

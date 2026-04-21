@@ -385,3 +385,88 @@ describe('serialize / deserialize scan cache', () => {
     expect(() => deserializeIndex(stale)).toThrow(/version/);
   });
 });
+
+describe('explicit box markers (dtxfiles. + box.def)', () => {
+  it('`dtxfiles.` prefix auto-boxes the folder and strips the prefix from the title', async () => {
+    const fs = makeFs({
+      'Songs/dtxfiles.Rock/a.dtx': '#TITLE A',
+      'Songs/dtxfiles.Rock/b.dtx': '#TITLE B',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    const boxes = index.root.children.filter((c) => c.type === 'box');
+    expect(boxes).toHaveLength(1);
+    const box = boxes[0]!;
+    if (box.type !== 'box') throw new Error('expected box');
+    expect(box.name).toBe('Rock');
+    expect(box.explicit).toBe(true);
+  });
+
+  it('box.def #TITLE / #FONTCOLOR / #PREIMAGE override defaults and mark the box explicit', async () => {
+    const fs = makeFs({
+      'Songs/Jazz/box.def': [
+        '#TITLE Modern Jazz',
+        '#FONTCOLOR #0099FF',
+        '#PREIMAGE cover.png',
+        '#COMMENT Smooth',
+      ].join('\n'),
+      'Songs/Jazz/a.dtx': '#TITLE A',
+      'Songs/Jazz/b.dtx': '#TITLE B',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    const box = index.root.children[0];
+    expect(box?.type).toBe('box');
+    if (!box || box.type !== 'box') throw new Error('expected box');
+    expect(box.name).toBe('Modern Jazz');
+    expect(box.fontColor).toBe('#0099FF');
+    expect(box.preimage).toBe('cover.png');
+    expect(box.comment).toBe('Smooth');
+    expect(box.explicit).toBe(true);
+  });
+
+  it('explicit boxes survive the single-child hoist rule even with only one song', async () => {
+    const fs = makeFs({
+      'Songs/dtxfiles.Pack/only.dtx': '#TITLE Single',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    // A plain folder with one song would have been hoisted away; the
+    // explicit dtxfiles. marker protects this one so it keeps the box.
+    expect(index.root.children).toHaveLength(1);
+    const box = index.root.children[0];
+    expect(box?.type).toBe('box');
+    if (!box || box.type !== 'box') throw new Error('expected box');
+    expect(box.name).toBe('Pack');
+    expect(box.children).toHaveLength(1);
+    expect(box.children[0]?.type).toBe('song');
+  });
+
+  it('box.def title wins over the dtxfiles. prefix when both are present', async () => {
+    const fs = makeFs({
+      'Songs/dtxfiles.OldName/box.def': '#TITLE Pretty Name',
+      'Songs/dtxfiles.OldName/a.dtx': '#TITLE A',
+      'Songs/dtxfiles.OldName/b.dtx': '#TITLE B',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    const box = index.root.children[0];
+    if (!box || box.type !== 'box') throw new Error('expected box');
+    expect(box.name).toBe('Pretty Name');
+    expect(box.explicit).toBe(true);
+  });
+
+  it('serialisation round-trips the new box metadata', async () => {
+    const fs = makeFs({
+      // MemoryFs decodes as Shift-JIS by default, so restrict the test
+      // fixture to ASCII — the production Shift-JIS path is already
+      // covered by the other scanner tests.
+      'Songs/dtxfiles.Pop/box.def': '#TITLE Pop Songs\n#FONTCOLOR #FFAA00',
+      'Songs/dtxfiles.Pop/a.dtx': '#TITLE A',
+      'Songs/dtxfiles.Pop/b.dtx': '#TITLE B',
+    });
+    const live = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    const restored = deserializeIndex(JSON.parse(JSON.stringify(serializeIndex(live))));
+    const box = restored.root.children[0];
+    if (!box || box.type !== 'box') throw new Error('expected box');
+    expect(box.name).toBe('Pop Songs');
+    expect(box.fontColor).toBe('#FFAA00');
+    expect(box.explicit).toBe(true);
+  });
+});
