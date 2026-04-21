@@ -1,15 +1,18 @@
 // Minimal IndexedDB keyval store for persisting a FileSystemDirectoryHandle
-// + the scan cache. Hand-rolled to avoid a new npm dep. Both handle and
-// SerializedIndex are structured-cloneable, so they survive IDB round-trip.
+// + the scan cache + per-chart records. Hand-rolled to avoid a new npm dep.
+// All stored values (handle, SerializedIndex, ChartRecord) are structured-
+// cloneable, so they survive IDB round-trip with no manual serialisation.
 
-import type { SerializedIndex } from '@dtxmania/dtx-core';
+import type { ChartRecord, SerializedIndex } from '@dtxmania/dtx-core';
 
 const DB_NAME = 'dtxmania';
-/** v2 adds the 'scan-cache' object store. Older DBs are migrated in-place
- * by onupgradeneeded — existing 'handles' store is left untouched. */
-const DB_VERSION = 2;
+/** Bumped as new stores appear. The upgrade handler adds missing stores
+ * without touching old ones, so existing users keep their handle +
+ * scan-cache when we introduce chart-records in v3. */
+const DB_VERSION = 3;
 const STORE_HANDLES = 'handles';
 const STORE_SCAN_CACHE = 'scan-cache';
+const STORE_CHART_RECORDS = 'chart-records';
 const KEY_ROOT = 'songs-root';
 /** Single-slot cache for now (we only support one library at a time). If
  * we ever allow multi-library, this becomes a composite key. */
@@ -22,6 +25,12 @@ function open(): Promise<IDBDatabase> {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE_HANDLES)) db.createObjectStore(STORE_HANDLES);
       if (!db.objectStoreNames.contains(STORE_SCAN_CACHE)) db.createObjectStore(STORE_SCAN_CACHE);
+      if (!db.objectStoreNames.contains(STORE_CHART_RECORDS)) {
+        // Key is supplied explicitly (chartPath) — no keyPath / autoIncrement,
+        // so the store just holds {key → ChartRecord}. Matches how the other
+        // two stores work.
+        db.createObjectStore(STORE_CHART_RECORDS);
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -85,4 +94,47 @@ export function clearScanCache(): Promise<undefined> {
 
 function isDirectoryHandle(v: unknown): v is FileSystemDirectoryHandle {
   return typeof v === 'object' && v !== null && (v as { kind?: string }).kind === 'directory';
+}
+
+/**
+ * Persist (or overwrite) a ChartRecord keyed by its chartPath. Called
+ * by the game layer once per song-finish after merging the snapshot
+ * into the previous record.
+ */
+export function saveChartRecord(rec: ChartRecord): Promise<IDBValidKey> {
+  return tx(STORE_CHART_RECORDS, 'readwrite', (s) => s.put(rec, rec.chartPath));
+}
+
+/**
+ * Read all records in one go so the caller can attach them to the scanned
+ * ChartEntry list with a plain Map lookup afterwards. N records per
+ * library is tiny (<10k even for huge collections), so loading them all
+ * is cheaper than per-chart async IDB reads during wheel paint.
+ */
+export async function loadAllChartRecords(): Promise<Map<string, ChartRecord>> {
+  const db = await open();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_CHART_RECORDS, 'readonly');
+    const store = transaction.objectStore(STORE_CHART_RECORDS);
+    const req = store.openCursor();
+    const out = new Map<string, ChartRecord>();
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (!cursor) return; // transaction.oncomplete resolves
+      const rec = cursor.value as ChartRecord;
+      if (rec && typeof rec === 'object' && typeof rec.chartPath === 'string') {
+        out.set(rec.chartPath, rec);
+      }
+      cursor.continue();
+    };
+    transaction.oncomplete = () => resolve(out);
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+
+/** Wipe every ChartRecord. Called from "Forget folder" so switching
+ * libraries doesn't carry stale medals. */
+export function clearChartRecords(): Promise<undefined> {
+  return tx<undefined>(STORE_CHART_RECORDS, 'readwrite', (s) => s.clear());
 }

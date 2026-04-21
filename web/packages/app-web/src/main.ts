@@ -7,10 +7,14 @@ import {
   dirname,
   flattenSongs,
   joinPath,
+  mergeChartRecord,
   serializeIndex,
   SongScanner,
   type BoxNode,
   type ChartEntry,
+  type ChartRecord,
+  type LibraryNode,
+  type ScoreSnapshot,
   type SongEntry,
   type SongIndex,
 } from '@dtxmania/dtx-core';
@@ -19,10 +23,13 @@ import { SongWheel } from './song-wheel.js';
 import { PreviewPlayer } from '@dtxmania/audio-engine';
 import { HandleFileSystemBackend } from './fs/handle-backend.js';
 import {
+  clearChartRecords,
   clearRootHandle,
   clearScanCache,
+  loadAllChartRecords,
   loadRootHandle,
   loadScanCache,
+  saveChartRecord,
   saveRootHandle,
   saveScanCache,
 } from './fs/handle-store.js';
@@ -218,6 +225,9 @@ forgetBtn.addEventListener('click', () =>
   run(async () => {
     await clearRootHandle();
     await clearScanCache().catch(() => {});
+    // Medals belong to the library the player is switching away from;
+    // dropping the folder means dropping its score history too.
+    await clearChartRecords().catch(() => {});
     library = null;
     songWheel.setRoot(null);
     forgetBtn.style.display = 'none';
@@ -361,6 +371,7 @@ async function scanIntoLibrary(
       const cached = await loadScanCache();
       if (cached) {
         const live = deserializeIndex(cached);
+        await attachRecordsToIndex(live);
         applyLibrary(handle, backend, live);
         const ageMin = Math.max(0, Math.round((Date.now() - cached.scannedAtMs) / 60000));
         setStatus(
@@ -396,6 +407,7 @@ async function scanIntoLibrary(
     },
   });
   const index = await scanner.scan('');
+  await attachRecordsToIndex(index);
   applyLibrary(handle, backend, index);
   setStatus(`Scanned ${index.songs.length} song(s) in "${handle.name}".`);
   await saveScanCache(serializeIndex(index)).catch((e) =>
@@ -420,6 +432,35 @@ function applyLibrary(
   refreshXrButton();
 }
 
+/**
+ * Walk every ChartEntry in the tree and attach its persisted best-of
+ * record if one exists. Called from both scan paths (cache hit + fresh
+ * scan) before applyLibrary hands the tree to the UI, so the wheel and
+ * status panel can render clear-lamps from the first frame instead of
+ * popping in later.
+ */
+async function attachRecordsToIndex(index: SongIndex): Promise<void> {
+  let records: Map<string, ChartRecord>;
+  try {
+    records = await loadAllChartRecords();
+  } catch (e) {
+    console.warn('[records] load failed — rendering without medals', e);
+    return;
+  }
+  if (records.size === 0) return;
+  const visit = (node: LibraryNode): void => {
+    if (node.type === 'song') {
+      for (const chart of node.entry.charts) {
+        const rec = records.get(chart.chartPath);
+        if (rec) chart.record = rec;
+      }
+    } else {
+      for (const c of node.children) visit(c);
+    }
+  };
+  visit(index.root);
+}
+
 // DTXMania stores #DLEVEL as 0..1000 (three digits shown as e.g. "5.62").
 function formatLevel(dlevel: number): string {
   return (dlevel / 100).toFixed(2);
@@ -438,20 +479,49 @@ function renderScanErrors(errors: { path: string; message: string }[]): void {
   }
 }
 
+/**
+ * Merge a just-finished snapshot into the chart's persisted record,
+ * write it to IDB, and refresh the in-memory ChartEntry so the next
+ * render of the wheel / status panel sees the updated medal without a
+ * full rescan. Fire-and-forget — a failed IDB write gets logged but
+ * doesn't block the result screen.
+ */
+function persistChartResult(
+  chart: ChartEntry,
+  chartPath: string,
+  snap: ScoreSnapshot
+): void {
+  const prev = chart.record ?? null;
+  const merged = mergeChartRecord(chartPath, prev, snap);
+  chart.record = merged;
+  saveChartRecord(merged).catch((e) =>
+    console.warn('[records] failed to persist', chartPath, e)
+  );
+}
+
 async function startChart(chart: ChartEntry): Promise<void> {
   if (!library) throw new Error('no library loaded');
   const text = await library.backend.readText(chart.chartPath);
-  await launchGame(text, { backend: library.backend, folder: dirname(chart.chartPath) });
+  await launchGame(
+    text,
+    { backend: library.backend, folder: dirname(chart.chartPath) },
+    chart
+  );
 }
 
 async function playDemo(): Promise<void> {
   const res = await fetch(`${import.meta.env.BASE_URL}demo.dtx`);
   if (!res.ok) throw new Error(`failed to load demo.dtx: ${res.status}`);
-  // Demo ships without accompanying WAVs, so no fs context.
+  // Demo ships without accompanying WAVs or a scanner chart — skip
+  // records entirely for the bundled chart.
   await launchGame(await res.text());
 }
 
-async function launchGame(dtxText: string, fs?: GameFsContext): Promise<void> {
+async function launchGame(
+  dtxText: string,
+  fs?: GameFsContext,
+  chart?: ChartEntry
+): Promise<void> {
   // activeGame is created eagerly at module init. We always reuse it —
   // Game.loadAndStart resets state (audio, samples, pad buffers, gauge)
   // so a fresh chart picks up cleanly, and reusing avoids destroying /
@@ -473,6 +543,16 @@ async function launchGame(dtxText: string, fs?: GameFsContext): Promise<void> {
         refreshXrButton();
       }
     },
+    // Finish-event plumbing: only scanner-backed charts persist records.
+    // The bundled demo has no stable ID so we skip it.
+    ...(chart
+      ? {
+          chartPath: chart.chartPath,
+          onChartFinished: (chartPath: string, snap: ScoreSnapshot) => {
+            persistChartResult(chart, chartPath, snap);
+          },
+        }
+      : {}),
     autoKick: isAutoKickEnabled(),
   };
   if (fs) {
@@ -510,10 +590,11 @@ function showVrMenuForActive(fs?: GameFsContext): void {
     (pick) => {
       run(async () => {
         const text = await lib.backend.readText(pick.chart.chartPath);
-        await launchGame(text, {
-          backend: lib.backend,
-          folder: dirname(pick.chart.chartPath),
-        });
+        await launchGame(
+          text,
+          { backend: lib.backend, folder: dirname(pick.chart.chartPath) },
+          pick.chart
+        );
       });
       // Silence unused warning; fs is carried through the new launchGame call.
       void fs;

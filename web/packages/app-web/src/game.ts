@@ -12,6 +12,7 @@ import {
   joinPath,
   type Chip,
   type FileSystemBackend,
+  type ScoreSnapshot,
   type Song,
   type SongEntry,
 } from '@dtxmania/dtx-core';
@@ -94,6 +95,12 @@ export class Game {
   /** performance.now() of the most recent hit per lane; drives pad bounce + flush overlay. */
   private lastPadHitMs = new Map<LaneValue, number>();
   private onRestart: (() => void) | null = null;
+  /** Fires exactly once per chart when the song transitions to
+   * 'finished'. Host uses it to persist per-chart best-score records.
+   * Cleared in loadAndStart and called in the tick() status-flip
+   * branch; no guard for null because the callback is optional. */
+  private onChartFinished: ((chartPath: string, snap: ScoreSnapshot) => void) | null = null;
+  private currentChartPath: string | null = null;
   /** If true, BD + LBD chips are fired automatically when their time comes
    * (DTXmania-equivalent of `bAutoPlay.BD = bAutoPlay.LBD = true`). Auto-
    * fired chips don't advance combo and are excluded from score / rank
@@ -217,9 +224,21 @@ export class Game {
 
   async loadAndStart(
     dtxText: string,
-    opts: { onRestart?: () => void; fs?: GameFsContext; autoKick?: boolean } = {}
+    opts: {
+      onRestart?: () => void;
+      fs?: GameFsContext;
+      autoKick?: boolean;
+      /** Stable ID for this chart — used as the IDB key for best-of
+       * records. Host supplies the scanner's `chart.chartPath`. */
+      chartPath?: string;
+      /** Fires once when the chart's status flips to 'finished'. Host
+       * persists the snapshot via mergeChartRecord → saveChartRecord. */
+      onChartFinished?: (chartPath: string, snap: ScoreSnapshot) => void;
+    } = {}
   ): Promise<void> {
     this.onRestart = opts.onRestart ?? null;
+    this.onChartFinished = opts.onChartFinished ?? null;
+    this.currentChartPath = opts.chartPath ?? null;
     if (opts.autoKick !== undefined) this.autoKick = opts.autoKick;
     // Belt-and-braces: whatever state hideVrMenu may or may not have run in,
     // a fresh chart always wants the playfield visible.
@@ -456,6 +475,17 @@ export class Game {
       this.status = 'finished';
       this.finishedAtMs = performance.now();
       console.info('[result] entered finished state, inXR=', this.renderer.inXR);
+      // Emit the finish event exactly once per chart so the host can
+      // persist the best-of record. Only fires on natural completion,
+      // not on leaveSong() bail-outs — incomplete plays shouldn't
+      // overwrite a real attempt's medal.
+      if (this.onChartFinished && this.currentChartPath) {
+        try {
+          this.onChartFinished(this.currentChartPath, this.tracker.snapshot());
+        } catch (e) {
+          console.warn('[result] onChartFinished threw', e);
+        }
+      }
     }
 
     // In VR there's no keyboard, so the player can't press Esc to return to

@@ -421,6 +421,16 @@ export class SongWheel {
           lv.textContent = this.callbacks.formatLevel(chart.drumLevel);
           btn.appendChild(lv);
         }
+        // Clear-lamp dot in the top-right corner if this chart has a
+        // best-of record. Colour tiers match standard rhythm-game
+        // convention: gold=excellent, cyan=full combo, grey=played.
+        const lampColor = lampForRecord(chart);
+        if (lampColor) {
+          const lamp = document.createElement('span');
+          lamp.className = 'chart-lamp';
+          lamp.style.background = lampColor;
+          btn.appendChild(lamp);
+        }
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           this.preferredSlot = chart.slot;
@@ -485,7 +495,9 @@ export class SongWheel {
 
     const metaBlock = document.createElement('div');
     metaBlock.className = 'status-meta';
+    const bestLine = formatBestRecordLine(selected);
     const metaLines: Array<[string, string | undefined]> = [
+      ['Best', bestLine],
       ['Artist', song.artist],
       ['Genre', song.genre],
       ['BPM', song.bpm ? Math.round(song.bpm).toString() : undefined],
@@ -507,6 +519,26 @@ export class SongWheel {
     }
     this.statusPanelEl.appendChild(metaBlock);
   }
+}
+
+/** Map a chart's ChartRecord (if any) to a lamp colour. Returns null for
+ * never-played charts so the caller can skip painting altogether. */
+function lampForRecord(chart: ChartEntry): string | null {
+  const r = chart.record;
+  if (!r) return null;
+  if (r.excellent) return '#fde047';   // gold
+  if (r.fullCombo) return '#7dd3fc';   // cyan
+  return '#64748b';                    // plain "played" slate
+}
+
+/** Compact summary line for the status panel. Undefined when the
+ * chart's never been played — the metaLines loop then skips the row. */
+function formatBestRecordLine(chart: ChartEntry): string | undefined {
+  const r = chart.record;
+  if (!r) return undefined;
+  const score = r.bestScore.toString().padStart(7, '0');
+  const medal = r.excellent ? ' · EX' : r.fullCombo ? ' · FC' : '';
+  return `${score} (${r.bestRank})${medal}`;
 }
 
 /** Walk the tree looking for a BoxNode whose `path` matches. Lets
