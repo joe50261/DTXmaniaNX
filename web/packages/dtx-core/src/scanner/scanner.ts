@@ -100,10 +100,18 @@ export interface ScanOptions {
    * Called during the meta-parse phase once per song with
    * `(songsDone, songsTotal)`. Fires from 0/N up through N/N. Gives the UI
    * something to show while a Quest 3 cold scan churns through header
-   * reads (the walk + listDir phase is usually sub-second; metadata is
-   * where the time goes).
+   * reads.
    */
   onMetaProgress?: (done: number, total: number) => void;
+  /**
+   * Called during the directory-walk phase once per `listDir` call with
+   * `(dirsScanned, songsFoundSoFar)`. Total isn't known while walking
+   * (that's what we're walking to find out), so this is just two running
+   * counters. On Quest 3 a large library's walk alone can take tens of
+   * seconds and `onMetaProgress` can't fire yet — this keeps the UI from
+   * looking stuck on the opening frame.
+   */
+  onWalkProgress?: (dirsScanned: number, songsFound: number) => void;
 }
 
 const DEFAULT_SKIP_DIRS = new Set(['system', '$recycle.bin', 'node_modules', '.git']);
@@ -113,6 +121,11 @@ export class SongScanner {
   private readonly maxDepth: number;
   private readonly parseMeta: boolean;
   private readonly onMetaProgress: ((done: number, total: number) => void) | undefined;
+  private readonly onWalkProgress:
+    | ((dirsScanned: number, songsFound: number) => void)
+    | undefined;
+  private dirsScanned = 0;
+  private songsFound = 0;
 
   constructor(private readonly fs: FileSystemBackend, options: ScanOptions = {}) {
     this.skipDirs = new Set(
@@ -121,6 +134,7 @@ export class SongScanner {
     this.maxDepth = options.maxDepth ?? 12;
     this.parseMeta = options.parseMeta ?? true;
     this.onMetaProgress = options.onMetaProgress;
+    this.onWalkProgress = options.onWalkProgress;
   }
 
   async scan(rootPath: string): Promise<SongIndex> {
@@ -132,6 +146,11 @@ export class SongScanner {
       parent: null,
       children: [],
     };
+    // Reset walk counters so re-using one SongScanner for a second scan
+    // doesn't accumulate numbers across calls.
+    this.dirsScanned = 0;
+    this.songsFound = 0;
+    this.onWalkProgress?.(0, 0);
     await this.walk(root, 0, errors);
     const songs = flattenSongs(root);
     if (this.parseMeta) {
@@ -180,6 +199,8 @@ export class SongScanner {
       errors.push({ path: box.path, message: errorMessage(e) });
       return;
     }
+    this.dirsScanned++;
+    this.onWalkProgress?.(this.dirsScanned, this.songsFound);
 
     const setDefEntry = entries.find(
       (e) => e.isFile && e.name.toLowerCase() === 'set.def'
@@ -187,6 +208,7 @@ export class SongScanner {
 
     const pushSong = (entry: SongEntry): void => {
       box.children.push({ type: 'song', entry, parent: box });
+      this.songsFound++;
     };
 
     if (setDefEntry) {

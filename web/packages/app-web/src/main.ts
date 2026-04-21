@@ -377,11 +377,21 @@ async function scanIntoLibrary(
 
   setStatus(`Scanning "${handle.name}"…`);
   const scanner = new SongScanner(backend, {
+    // Walk phase: no known total yet, so just show running counters.
+    // On Quest 3 this phase alone can take tens of seconds; updating the
+    // status every few directories keeps the UI from looking frozen.
+    onWalkProgress: (dirs, songs) => {
+      if (dirs === 0 || dirs % 5 === 0) {
+        setStatus(
+          `Scanning "${handle.name}"… (${dirs} folder(s), ${songs} song(s) so far)`
+        );
+      }
+    },
     onMetaProgress: (done, total) => {
       // Keep the update throttled enough that DOM reflow doesn't steal
       // frames from the scan itself on a slow headset browser.
       if (done === 0 || done === total || done % 3 === 0) {
-        setStatus(`Scanning "${handle.name}"… ${done}/${total}`);
+        setStatus(`Scanning "${handle.name}"… reading headers ${done}/${total}`);
       }
     },
   });
