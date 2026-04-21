@@ -166,14 +166,6 @@
         color: #d1d5db;
         pointer-events: none;
       }
-    </style>
-  </head>
-  <body>
-    <div id="app">
-      <canvas id="game" width="1280" height="720"></canvas>
-      <button id="enter-xr" style="display:none">Enter VR</button>
-    </div>
-    <style>
       #enter-xr {
         position: fixed;
         top: 16px;
@@ -188,6 +180,11 @@
         cursor: pointer;
       }
     </style>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game" width="1280" height="720"></canvas>
+    </div>
     <div id="overlay">
       <div class="panel">
         <div class="title">DTXmania Web</div>
@@ -208,6 +205,7 @@
         </div>
       </div>
     </div>
+    <button id="enter-xr" style="display:none">Enter VR</button>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>
