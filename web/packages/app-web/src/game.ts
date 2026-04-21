@@ -82,6 +82,11 @@ export class Game {
    * onRestart (which would re-show the VR menu on top of itself and
    * re-wire XR controller event listeners). */
   private finishedReturnHandled = false;
+  /** Edge state for the in-song "squeeze to quit" poller. Indexed by
+   * controller. Kept in Game (not XrControllers) because the button's
+   * meaning depends on Game's status — during play it aborts, during
+   * the VR menu it's a back press handled by VrMenu itself. */
+  private cancelSqueezed: boolean[] = [false, false];
   private judgmentFlash: JudgmentFlash | null = null;
   private hitFlashes: HitFlash[] = [];
   /** Life / skill gauge, 0..1. Filled by hits, drained by misses. Starts at 0.5 so the player has headroom. */
@@ -106,8 +111,13 @@ export class Game {
     this.input.attach();
     this.input.onLaneHit((e) => this.handleLaneHit(e));
     this.input.onMenu((e) => {
-      if (e.action === 'cancel' && this.status === 'finished') {
-        this.onRestart?.();
+      if (e.action !== 'cancel') return;
+      // Esc works in two situations now: from RESULTS (same as before,
+      // returns to picker) and mid-song (bail out of the current chart
+      // without waiting for it to finish). leaveSong handles both by
+      // stopping audio + firing onRestart.
+      if (this.status === 'finished' || this.status === 'playing') {
+        this.leaveSong();
       }
     });
     this.xrControllers = new XrControllers(this.renderer.webgl, this.renderer.scene);
@@ -289,6 +299,25 @@ export class Game {
   }
 
   /**
+   * Abandon the current chart. Called from two places:
+   *   - Desktop Esc (mid-song or on RESULTS)
+   *   - VR squeeze during play
+   * Stops BGM, clears chart state so hasChart flips to false (mirrors
+   * what the VR-exit session-end path does), then calls onRestart so
+   * main.ts can surface the appropriate picker. Safe to call from
+   * either 'playing' or 'finished' status.
+   */
+  private leaveSong(): void {
+    if (this.status === 'idle' || !this.onRestart) return;
+    this.stopBgm();
+    this.status = 'idle';
+    this.song = null;
+    this.finishedAtMs = null;
+    this.finishedReturnHandled = false;
+    this.onRestart();
+  }
+
+  /**
    * Preload every WAV/OGG/MP3 referenced by a BGM or drum chip. Samples the
    * browser can't decode (e.g. DTXMania's .xa files) are silently skipped and
    * the corresponding chip will fall through to the synth voice.
@@ -366,6 +395,30 @@ export class Game {
   private tick(): void {
     this.xrControllers.tick();
     this.vrMenu.tick();
+    // VR mid-song quit: any squeeze-press while the chart is playing
+    // dumps us back to the picker. Edge-detected per controller so a
+    // hold doesn't re-fire, and deliberately only active during
+    // 'playing' — the VrMenu handles its own squeeze for back-nav, and
+    // on the RESULTS screen Esc / pad-hit / 5 s auto-return already
+    // cover the exit.
+    if (this.status === 'playing' && this.renderer.inXR) {
+      const sources = this.xrControllers.currentInputSources;
+      for (let i = 0; i < 2; i++) {
+        const pressed = sources[i]?.gamepad?.buttons[1]?.pressed ?? false;
+        if (pressed && !this.cancelSqueezed[i]) {
+          this.cancelSqueezed[i] = true;
+          console.info('[game] VR squeeze → leaveSong');
+          this.leaveSong();
+          return;
+        }
+        if (!pressed) this.cancelSqueezed[i] = false;
+      }
+    } else {
+      // Reset edge state so a squeeze held across state changes doesn't
+      // fire when we come back to playing.
+      this.cancelSqueezed[0] = false;
+      this.cancelSqueezed[1] = false;
+    }
     if (!this.song) return;
     const songTime = this.engine.songTimeMs();
 

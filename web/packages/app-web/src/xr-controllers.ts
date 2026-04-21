@@ -64,14 +64,29 @@ const HIT_COOLDOWN_MS = 80;
 /** BD is hit from above — judgment square is the pad's (x, z) footprint expanded
  *  a bit so the large kick-face is easy to strike. */
 const BD_HIT_HALF_M = 0.25;
+/** Number of points sampled along each stick's shaft (grip → tip) for hit
+ * detection. The old single-tip check made it easy to overshoot — any
+ * swing that passed through a pad with the stick's shaft but the tip
+ * ending below+past the far edge would miss. Sampling the whole length
+ * means a hit registers as soon as ANY part of the stick crosses the
+ * pad plane inside its XZ rect with downward velocity, matching how a
+ * real drumstick works.
+ * 5 samples = grip, 25%, 50%, 75%, tip — cheap (10 crossings checked
+ * per frame per controller) and dense enough that short pad sizes
+ * don't fall between samples at typical swing speeds. */
+const STICK_SAMPLE_COUNT = 5;
 
 export class XrControllers {
   private listener: XrLaneListener | null = null;
   private readonly addedToScene: THREE.Object3D[] = [];
 
-  private readonly prevTip: (THREE.Vector3 | null)[] = [null, null];
-  private readonly tipForward = new THREE.Vector3(0, 0, -STICK_LENGTH_M);
-  private readonly tipWorld = new THREE.Vector3();
+  /** Grip-local offsets for the stick samples, computed once. */
+  private readonly stickOffsets: THREE.Vector3[] = [];
+  /** Previous-frame world positions per controller per sample. */
+  private readonly prevSamples: (THREE.Vector3 | null)[][] = [
+    new Array(STICK_SAMPLE_COUNT).fill(null),
+    new Array(STICK_SAMPLE_COUNT).fill(null),
+  ];
   private prevFrameMs: number | null = null;
   private readonly lastHitMs = new Map<LaneValue, number>();
 
@@ -90,7 +105,27 @@ export class XrControllers {
   /** Latest hit timestamps — read in tick() to animate the bounce. */
   private lastPadHitMs = new Map<LaneValue, number>();
 
-  constructor(private readonly webgl: THREE.WebGLRenderer, private readonly scene: THREE.Scene) {}
+  constructor(private readonly webgl: THREE.WebGLRenderer, private readonly scene: THREE.Scene) {
+    // Grip-local stick samples from grip (t=0) to tip (t=1). The shaft is
+    // oriented along -Z in grip space (see buildStick), so z decreases
+    // linearly. Each entry is the position relative to the grip origin
+    // that we later rotate+translate into world space every frame.
+    // Evenly spaced from grip (t=0) to tip (t=1). STICK_SAMPLE_COUNT > 1
+    // is enforced by construction (constant is 5).
+    for (let i = 0; i < STICK_SAMPLE_COUNT; i++) {
+      const t = i / (STICK_SAMPLE_COUNT - 1);
+      this.stickOffsets.push(new THREE.Vector3(0, 0, -STICK_LENGTH_M * t));
+    }
+  }
+
+  /** Expose input sources so other subsystems (e.g. the game layer's
+   * mid-song cancel-squeeze polling) can read button state without
+   * duplicating the `connected`/`disconnected` wiring. Returned array is
+   * indexed by controller (0 = left, 1 = right) but entries may be null
+   * if a controller hasn't connected yet. */
+  get currentInputSources(): ReadonlyArray<XRInputSource | null> {
+    return this.inputSources;
+  }
 
   onHit(cb: XrLaneListener): void {
     this.listener = cb;
@@ -258,60 +293,77 @@ export class XrControllers {
     const dtMs = this.prevFrameMs === null ? 0 : nowMs - this.prevFrameMs;
     this.prevFrameMs = nowMs;
     if (dtMs <= 0 || dtMs > 100) {
-      for (let i = 0; i < 2; i++) this.prevTip[i] = this.captureTip(i);
+      for (let i = 0; i < 2; i++) this.prevSamples[i] = this.captureSamples(i);
       return;
     }
     const dtSec = dtMs / 1000;
 
     for (let i = 0; i < 2; i++) {
-      const cur = this.captureTip(i);
-      const prev = this.prevTip[i];
-      this.prevTip[i] = cur;
-      if (!cur || !prev) continue;
+      const cur = this.captureSamples(i);
+      const prev = this.prevSamples[i]!;
+      this.prevSamples[i] = cur;
 
-      const vy = (cur.y - prev.y) / dtSec;
-      if (vy > -HIT_VELOCITY_THRESHOLD_MPS) continue;
+      // Whole-stick hit scan: each sample (grip → tip) tested for a
+      // downward crossing of each pad. Early-exits once one pad is hit
+      // so a single swing can only fire one lane per controller-frame.
+      // Cooldown is still per-lane so rapid double-strikes on the same
+      // pad across two controllers stay correct.
+      let fired = false;
+      for (let s = 0; s < STICK_SAMPLE_COUNT && !fired; s++) {
+        const c = cur[s];
+        const p = prev[s];
+        if (!c || !p) continue;
+        const vy = (c.y - p.y) / dtSec;
+        if (vy > -HIT_VELOCITY_THRESHOLD_MPS) continue;
 
-      for (const pad of PAD_LAYOUT) {
-        const padY = pad.position.y;
-        const crossed = prev.y > padY && cur.y <= padY;
-        if (!crossed) continue;
+        for (const pad of PAD_LAYOUT) {
+          const padY = pad.position.y;
+          const crossed = p.y > padY && c.y <= padY;
+          if (!crossed) continue;
 
-        const t = (prev.y - padY) / (prev.y - cur.y);
-        const hx = prev.x + (cur.x - prev.x) * t;
-        const hz = prev.z + (cur.z - prev.z) * t;
+          const t = (p.y - padY) / (p.y - c.y);
+          const hx = p.x + (c.x - p.x) * t;
+          const hz = p.z + (c.z - p.z) * t;
 
-        const half = pad.shape === 'face' ? BD_HIT_HALF_M : pad.size / 2;
-        if (Math.abs(hx - pad.position.x) > half) continue;
-        if (Math.abs(hz - pad.position.z) > half) continue;
+          const half = pad.shape === 'face' ? BD_HIT_HALF_M : pad.size / 2;
+          if (Math.abs(hx - pad.position.x) > half) continue;
+          if (Math.abs(hz - pad.position.z) > half) continue;
 
-        const lastMs = this.lastHitMs.get(pad.lane) ?? -Infinity;
-        if (nowMs - lastMs < HIT_COOLDOWN_MS) continue;
-        this.lastHitMs.set(pad.lane, nowMs);
+          const lastMs = this.lastHitMs.get(pad.lane) ?? -Infinity;
+          if (nowMs - lastMs < HIT_COOLDOWN_MS) continue;
+          this.lastHitMs.set(pad.lane, nowMs);
 
-        this.listener({
-          lane: pad.lane,
-          timestampMs: nowMs,
-          key: `xr-pad-${laneLabel(pad.lane)}`,
-        });
-        this.pulseHaptic(session, i);
-        break;
+          this.listener({
+            lane: pad.lane,
+            timestampMs: nowMs,
+            key: `xr-pad-${laneLabel(pad.lane)}`,
+          });
+          this.pulseHaptic(session, i);
+          fired = true;
+          break;
+        }
       }
     }
   }
 
-  private captureTip(index: number): THREE.Vector3 | null {
+  /** Compute world-space positions of every sample point along this
+   * controller's stick, or return an array of nulls if the pose hasn't
+   * populated yet (grip at identity). */
+  private captureSamples(index: number): (THREE.Vector3 | null)[] {
     const grip = this.webgl.xr.getControllerGrip(index);
-    if (
-      grip.position.lengthSq() === 0 &&
-      grip.quaternion.x === 0 &&
-      grip.quaternion.y === 0 &&
-      grip.quaternion.z === 0
-    ) {
-      return null;
+    const posed =
+      grip.position.lengthSq() !== 0 ||
+      grip.quaternion.x !== 0 ||
+      grip.quaternion.y !== 0 ||
+      grip.quaternion.z !== 0;
+    if (!posed) return new Array(STICK_SAMPLE_COUNT).fill(null);
+
+    const out: THREE.Vector3[] = [];
+    for (const off of this.stickOffsets) {
+      const p = off.clone().applyQuaternion(grip.quaternion).add(grip.position);
+      out.push(p);
     }
-    this.tipWorld.copy(this.tipForward).applyQuaternion(grip.quaternion).add(grip.position);
-    return this.tipWorld.clone();
+    return out;
   }
 
   private pulseHaptic(_session: XRSession, controllerIdx: number): void {
@@ -355,8 +407,7 @@ export class XrControllers {
     for (const o of this.addedToScene) this.scene.remove(o);
     this.addedToScene.length = 0;
     this.padMeshByLane.clear();
-    this.prevTip[0] = null;
-    this.prevTip[1] = null;
+    for (let i = 0; i < 2; i++) this.prevSamples[i] = new Array(STICK_SAMPLE_COUNT).fill(null);
     this.prevFrameMs = null;
     this.lastHitMs.clear();
     this.inputSources[0] = null;
