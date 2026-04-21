@@ -209,10 +209,16 @@ describe('SongScanner', () => {
   });
 
   it('exposes a folder tree: root BoxNode with nested Box + Song children', async () => {
+    // Each directory intentionally has ≥2 songs so the single-child
+    // hoisting rule doesn't kick in — the test is specifically about the
+    // tree shape, not about when boxes get elided.
     const fs = makeFs({
-      'Songs/Rock/a.dtx': '#TITLE A',
-      'Songs/Pop/Bubblegum/b.dtx': '#TITLE B',
-      'Songs/Pop/Ballads/c.dtx': '#TITLE C',
+      'Songs/Rock/a1.dtx': '#TITLE A1',
+      'Songs/Rock/a2.dtx': '#TITLE A2',
+      'Songs/Pop/Bubblegum/b1.dtx': '#TITLE B1',
+      'Songs/Pop/Bubblegum/b2.dtx': '#TITLE B2',
+      'Songs/Pop/Ballads/c1.dtx': '#TITLE C1',
+      'Songs/Pop/Ballads/c2.dtx': '#TITLE C2',
     });
     const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
     // Flat list still preserved for back-compat.
@@ -223,12 +229,12 @@ describe('SongScanner', () => {
     const pop = rootBoxes.find((b) => (b as { name: string }).name === 'Pop');
     expect(pop?.type).toBe('box');
     if (pop?.type !== 'box') throw new Error('pop must be a box');
-    // Pop has two sub-boxes (Bubblegum, Ballads), each with one song.
+    // Pop has two sub-boxes (Bubblegum, Ballads), each with two songs.
     expect(pop.children).toHaveLength(2);
     for (const sub of pop.children) {
       expect(sub.type).toBe('box');
       if (sub.type !== 'box') continue;
-      expect(sub.children).toHaveLength(1);
+      expect(sub.children).toHaveLength(2);
       expect(sub.children[0]!.type).toBe('song');
       expect(sub.parent).toBe(pop);
     }
@@ -241,7 +247,67 @@ describe('SongScanner', () => {
     });
     const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
     const boxes = index.root.children.filter((c) => c.type === 'box');
-    expect(boxes.map((b) => (b as { name: string }).name)).toEqual(['Rock']);
+    // Rock has exactly one song → the rule below hoists it, so Rock the
+    // box disappears and only its song remains under root.
+    expect(boxes).toHaveLength(0);
+    expect(index.root.children).toHaveLength(1);
+    expect(index.root.children[0]?.type).toBe('song');
+  });
+
+  it('hoists single-child folders so set.def packs do not get a redundant wrapper box', async () => {
+    const fs = makeFs({
+      'Songs/Pack/set.def': [
+        '#TITLE My Song',
+        '#L1FILE easy.dtx',
+        '#L2FILE hard.dtx',
+      ].join('\n'),
+      'Songs/Pack/easy.dtx': '#TITLE ignored',
+      'Songs/Pack/hard.dtx': '#TITLE ignored',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    // Expected: root → "My Song" directly. "Pack" disappears because it
+    // only contained one song entry (from the single set.def block).
+    expect(index.root.children).toHaveLength(1);
+    const only = index.root.children[0]!;
+    expect(only.type).toBe('song');
+    if (only.type !== 'song') throw new Error('expected song');
+    expect(only.entry.title).toBe('My Song');
+    expect(only.parent).toBe(index.root);
+  });
+
+  it('keeps multi-child folders as boxes (pack with two standalone songs)', async () => {
+    const fs = makeFs({
+      'Songs/Pack/a.dtx': '#TITLE A',
+      'Songs/Pack/b.dtx': '#TITLE B',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    // Pack has 2 songs → stays as a box so the player can see the grouping
+    // when mouse-browsing. Matches the user request to only flatten the
+    // single-song redundancy case.
+    expect(index.root.children).toHaveLength(1);
+    const pack = index.root.children[0]!;
+    expect(pack.type).toBe('box');
+    if (pack.type !== 'box') throw new Error('expected box');
+    expect(pack.name).toBe('Pack');
+    expect(pack.children).toHaveLength(2);
+  });
+
+  it('cascades: a plain folder wrapping another plain folder with one song collapses both', async () => {
+    const fs = makeFs({
+      'Songs/Outer/Inner/set.def': [
+        '#TITLE Deep Song',
+        '#L1FILE only.dtx',
+      ].join('\n'),
+      'Songs/Outer/Inner/only.dtx': '',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    // Inner has 1 song → hoisted into Outer; Outer then has 1 child (that
+    // song) → hoisted into root. Both wrappers disappear.
+    expect(index.root.children).toHaveLength(1);
+    expect(index.root.children[0]?.type).toBe('song');
+    expect(
+      (index.root.children[0] as { entry: { title: string } }).entry.title
+    ).toBe('Deep Song');
   });
 
   it('fills preview / preimage / comment metadata when parseMeta is on', async () => {

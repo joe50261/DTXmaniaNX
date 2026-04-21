@@ -219,9 +219,19 @@ export class SongScanner {
       }
     }
 
-    // Recurse into subdirectories. Each becomes a child BoxNode; we only
-    // keep it attached if it ends up with any descendants, otherwise empty
-    // folders would clutter the wheel with dead entries.
+    // Recurse into subdirectories. Each becomes a candidate BoxNode; we
+    // prune it in three ways so the wheel doesn't grow dead / redundant
+    // folders:
+    //   - 0 descendants → drop (empty dir)
+    //   - exactly 1 descendant → "hoist" that descendant into our
+    //     own children instead, eliminating a pointless single-entry
+    //     wrapper. Matches DTXmania's behaviour for set.def packs that
+    //     live inside a plain folder (the pack's one song would otherwise
+    //     appear as Songs → FolderName → OneSong, an obvious dead layer).
+    //     Cascades naturally: if the lifted descendant is itself a box
+    //     with exactly one child after recursion, its parent's pushing
+    //     step will hoist that too.
+    //   - ≥2 descendants → keep the box.
     for (const entry of entries) {
       if (!entry.isDirectory) continue;
       if (this.skipDirs.has(entry.name.toLowerCase())) continue;
@@ -233,7 +243,12 @@ export class SongScanner {
         children: [],
       };
       await this.walk(subBox, depth + 1, errors);
-      if (subBox.children.length > 0) {
+      if (subBox.children.length === 0) continue;
+      if (subBox.children.length === 1) {
+        const only = subBox.children[0]!;
+        only.parent = box;
+        box.children.push(only);
+      } else {
         box.children.push(subBox);
       }
     }
