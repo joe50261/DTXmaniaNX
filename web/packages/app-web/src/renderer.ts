@@ -40,12 +40,19 @@ export interface RenderState {
   songLengthMs: number;
   /** 0..1 life / skill gauge. Painted as the DTXMania 7_Gauge sprite. */
   gauge: number;
+  /**
+   * performance.now() (ms) of the most recent drum-pad strike per lane.
+   * Drives the pad bounce + flush overlay animation; pad scheduler in Game
+   * updates this on any hit (matched or stray) that actually makes sound.
+   */
+  lastPadHitMs: Map<LaneValue, number>;
 }
 
 /** Optional textures injected by the skin loader. Renderer tolerates absent textures. */
 export interface SkinTextures {
   background?: THREE.Texture;
   pads?: THREE.Texture;
+  padsFlush?: THREE.Texture;
   chipsDrums?: THREE.Texture;
   judgeStrings?: THREE.Texture;
   gaugeFrame?: THREE.Texture;
@@ -88,6 +95,18 @@ export class Renderer {
   private dimMesh: THREE.Mesh | null = null;
   /** One sprite per lane, sliced from 7_pads.png. */
   private padMeshes: THREE.Mesh[] = [];
+  /**
+   * One overlay per lane, sliced from ScreenPlayDrums pads flush.png, drawn
+   * in front of `padMeshes` when the corresponding lane was just struck.
+   * Opacity is animated in the render loop via `lastPadHitMs`.
+   */
+  private flushMeshes: (THREE.Mesh | null)[] = [];
+  /** Base y-position of each pad so we can bounce it down and back. */
+  private padBaseY: number[] = [];
+  /** Lane value associated with each padMeshes index (parallel array). */
+  private padLanes: LaneValue[] = [];
+  /** Most recent pad-hit timestamps submitted by Game, used for animation. */
+  private lastPadHitMs = new Map<LaneValue, number>();
   /** HTMLImageElement of the chips atlas used by 2D drawImage per frame. */
   private chipsImage: HTMLImageElement | null = null;
   /** ScreenPlay judge strings 1.png — one row per judgment. */
@@ -202,30 +221,53 @@ export class Renderer {
       // / offset — cheaper than 10 separate texture uploads.
       const atlasW = skin.pads.image?.width ?? 384;
       const atlasH = skin.pads.image?.height ?? 288;
+      const flushW = skin.padsFlush?.image?.width ?? atlasW;
+      const flushH = skin.padsFlush?.image?.height ?? atlasH;
       for (const rect of PAD_ATLAS) {
         const spec = LANE_LAYOUT.find((l) => l.lane === rect.lane);
         if (!spec) continue;
         const tex = skin.pads.clone();
         tex.needsUpdate = true;
         tex.repeat.set(PAD_SIZE / atlasW, PAD_SIZE / atlasH);
-        // UV origin in Three is bottom-left; atlas origin in C# is top-left.
-        tex.offset.set(
-          rect.sx / atlasW,
-          1 - (rect.sy + PAD_SIZE) / atlasH
-        );
+        tex.offset.set(rect.sx / atlasW, 1 - (rect.sy + PAD_SIZE) / atlasH);
         const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
         const mesh = new THREE.Mesh(new THREE.PlaneGeometry(PAD_SIZE, PAD_SIZE), mat);
-        // Centre pad over the lane, straddle the judge line.
         const centerX = spec.x + spec.width / 2;
-        mesh.position.set(
-          centerX - CANVAS_W / 2,
-          -(JUDGE_LINE_Y - CANVAS_H / 2),
-          0.5 // in front of dim + HUD background
-        );
+        const baseY = -(JUDGE_LINE_Y - CANVAS_H / 2);
+        mesh.position.set(centerX - CANVAS_W / 2, baseY, 0.5);
         this.playfield.add(mesh);
         this.padMeshes.push(mesh);
+        this.padBaseY.push(baseY);
+        this.padLanes.push(rect.lane);
+
+        // Parallel flush overlay — starts invisible. Atlas layout mirrors
+        // 7_pads.png, so same per-lane rect applies.
+        if (skin.padsFlush) {
+          const fTex = skin.padsFlush.clone();
+          fTex.needsUpdate = true;
+          fTex.repeat.set(PAD_SIZE / flushW, PAD_SIZE / flushH);
+          fTex.offset.set(rect.sx / flushW, 1 - (rect.sy + PAD_SIZE) / flushH);
+          const fMat = new THREE.MeshBasicMaterial({
+            map: fTex,
+            transparent: true,
+            opacity: 0,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+          });
+          const fMesh = new THREE.Mesh(new THREE.PlaneGeometry(PAD_SIZE, PAD_SIZE), fMat);
+          fMesh.position.set(centerX - CANVAS_W / 2, baseY, 0.6); // in front of pad
+          this.playfield.add(fMesh);
+          this.flushMeshes.push(fMesh);
+        } else {
+          this.flushMeshes.push(null);
+        }
       }
     }
+  }
+
+  /** Submit the Game's latest pad-hit timestamps. Called each tick. */
+  submitPadHits(map: Map<LaneValue, number>): void {
+    this.lastPadHitMs = map;
   }
 
   /** Submit new game state for the next frame's HUD paint. */
@@ -235,8 +277,47 @@ export class Renderer {
   }
 
   private renderFrame(): void {
+    this.animatePadHits();
     const cam = this.xrSession ? this.webgl.xr.getCamera() : this.orthoCamera;
     this.webgl.render(this.scene, cam);
+  }
+
+  /**
+   * Bounce the pad mesh down a few pixels and fade in the flush overlay
+   * when the matching lane was just struck. Both relax back to rest over
+   * ~200 ms so rapid successive hits still read as distinct bounces.
+   */
+  private animatePadHits(): void {
+    const now = performance.now();
+    const bounceDurMs = 120;
+    const flushDurMs = 200;
+    const bounceAmount = 12; // px in the virtual 1280×720 space
+    for (let i = 0; i < this.padMeshes.length; i++) {
+      const lane = this.padLanes[i]!;
+      const hitAt = this.lastPadHitMs.get(lane);
+      const mesh = this.padMeshes[i]!;
+      const baseY = this.padBaseY[i]!;
+      if (hitAt === undefined) {
+        mesh.position.y = baseY;
+      } else {
+        const age = now - hitAt;
+        const t = Math.max(0, Math.min(1, age / bounceDurMs));
+        // Ease: down fast, spring back.
+        const offset = t < 0.35 ? -bounceAmount * (t / 0.35) : -bounceAmount * (1 - (t - 0.35) / 0.65);
+        mesh.position.y = baseY + Math.max(-bounceAmount, Math.min(0, offset));
+      }
+      const flush = this.flushMeshes[i];
+      if (flush) {
+        const mat = flush.material as THREE.MeshBasicMaterial;
+        if (hitAt === undefined) {
+          mat.opacity = 0;
+        } else {
+          const age = now - hitAt;
+          const t = Math.max(0, Math.min(1, age / flushDurMs));
+          mat.opacity = (1 - t) * 0.9;
+        }
+      }
+    }
   }
 
   private handleResize(): void {

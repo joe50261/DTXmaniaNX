@@ -25,17 +25,20 @@ export async function loadSkin(baseUrl: string): Promise<SkinTextures> {
       );
     });
 
-  const [background, pads, chipsDrums, judgeStrings, gaugeFrame, gaugeBar] = await Promise.all([
-    load('7_background.jpg'),
-    load('7_pads.png'),
-    load('7_chips_drums.png'),
-    load('ScreenPlay judge strings 1.png'),
-    load('7_Gauge.png'),
-    load('7_gauge_bar.png'),
-  ]);
+  const [background, pads, padsFlush, chipsDrums, judgeStrings, gaugeFrame, gaugeBar] =
+    await Promise.all([
+      load('7_background.jpg'),
+      load('7_pads.png'),
+      load('ScreenPlayDrums pads flush.png'),
+      load('7_chips_drums.png'),
+      load('ScreenPlay judge strings 1.png'),
+      load('7_Gauge.png'),
+      load('7_gauge_bar.png'),
+    ]);
   const out: SkinTextures = {};
   if (background) out.background = background;
   if (pads) out.pads = pads;
+  if (padsFlush) out.padsFlush = padsFlush;
   if (chipsDrums) out.chipsDrums = chipsDrums;
   if (judgeStrings) out.judgeStrings = judgeStrings;
   if (gaugeFrame) out.gaugeFrame = gaugeFrame;

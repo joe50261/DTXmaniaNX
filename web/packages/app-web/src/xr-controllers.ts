@@ -85,6 +85,11 @@ export class XrControllers {
 
   private padsTexture: THREE.Texture | null = null;
 
+  /** Pad mesh + base Y per lane, so we can bounce them on hits. */
+  private padMeshByLane = new Map<LaneValue, { mesh: THREE.Mesh; baseY: number }>();
+  /** Latest hit timestamps — read in tick() to animate the bounce. */
+  private lastPadHitMs = new Map<LaneValue, number>();
+
   constructor(private readonly webgl: THREE.WebGLRenderer, private readonly scene: THREE.Scene) {}
 
   onHit(cb: XrLaneListener): void {
@@ -93,6 +98,11 @@ export class XrControllers {
 
   setPadsTexture(tex: THREE.Texture | undefined): void {
     this.padsTexture = tex ?? null;
+  }
+
+  /** Game pushes its per-frame pad-hit timestamp map in. */
+  submitPadHits(map: Map<LaneValue, number>): void {
+    this.lastPadHitMs = map;
   }
 
   start(): void {
@@ -152,6 +162,7 @@ export class XrControllers {
     }
     const mesh = new THREE.Mesh(geom, mat);
     mesh.position.copy(spec.position);
+    this.padMeshByLane.set(spec.lane, { mesh, baseY: spec.position.y });
     return mesh;
   }
 
@@ -238,6 +249,7 @@ export class XrControllers {
   }
 
   tick(): void {
+    this.animatePadBounce();
     if (!this.listener) return;
     const session = this.webgl.xr.getSession();
     if (!session) return;
@@ -315,9 +327,34 @@ export class XrControllers {
     }
   }
 
+  /** Dip each struck pad downward 1.5 cm then spring back over ~150 ms. */
+  private animatePadBounce(): void {
+    if (this.padMeshByLane.size === 0) return;
+    const now = performance.now();
+    const durMs = 150;
+    const dip = 0.015; // metres
+    for (const [lane, { mesh, baseY }] of this.padMeshByLane) {
+      const hitAt = this.lastPadHitMs.get(lane);
+      if (hitAt === undefined) {
+        mesh.position.y = baseY;
+        continue;
+      }
+      const age = now - hitAt;
+      if (age >= durMs) {
+        mesh.position.y = baseY;
+        continue;
+      }
+      const t = age / durMs;
+      // Fast down, slower return.
+      const offset = t < 0.3 ? -dip * (t / 0.3) : -dip * (1 - (t - 0.3) / 0.7);
+      mesh.position.y = baseY + Math.max(-dip, Math.min(0, offset));
+    }
+  }
+
   stop(): void {
     for (const o of this.addedToScene) this.scene.remove(o);
     this.addedToScene.length = 0;
+    this.padMeshByLane.clear();
     this.prevTip[0] = null;
     this.prevTip[1] = null;
     this.prevFrameMs = null;

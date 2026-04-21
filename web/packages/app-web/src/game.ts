@@ -69,6 +69,8 @@ export class Game {
   private hitFlashes: HitFlash[] = [];
   /** Life / skill gauge, 0..1. Filled by hits, drained by misses. Starts at 0.5 so the player has headroom. */
   private gauge = 0.5;
+  /** performance.now() of the most recent hit per lane; drives pad bounce + flush overlay. */
+  private lastPadHitMs = new Map<LaneValue, number>();
   private onRestart: (() => void) | null = null;
   private bgmSources: AudioBufferSourceNode[] = [];
   private readonly xrControllers: XrControllers;
@@ -106,6 +108,7 @@ export class Game {
     this.stopBgm();
     this.sampleByWavId.clear();
     this.lastBufferByLane.clear();
+    this.lastPadHitMs.clear();
     this.gauge = 0.5;
     await this.engine.resume();
 
@@ -295,8 +298,11 @@ export class Game {
       titleLine: `${this.song.title} / BPM ${this.song.baseBpm} / Notes ${this.playables.length}`,
       songLengthMs: this.song.durationMs,
       gauge: this.gauge,
+      lastPadHitMs: this.lastPadHitMs,
     };
     this.renderer.render(state);
+    this.renderer.submitPadHits(this.lastPadHitMs);
+    this.xrControllers.submitPadHits(this.lastPadHitMs);
   }
 
   private handleLaneHit(event: LaneHitEvent): void {
@@ -325,6 +331,7 @@ export class Game {
       // yet (e.g. first beats, or the whole lane is .xa-backed).
       this.playStrayHit(event.lane, songTime);
       this.hitFlashes.push({ lane: event.lane, spawnedMs: songTime });
+      this.lastPadHitMs.set(event.lane, performance.now());
       return;
     }
 
@@ -341,6 +348,7 @@ export class Game {
       spawnedMs: songTime,
     };
     this.hitFlashes.push({ lane: event.lane, spawnedMs: songTime });
+    this.lastPadHitMs.set(event.lane, performance.now());
 
     // Matched-chip hit: always play on keystroke so audio tracks the user's
     // press time, not just the auto-scheduled chip time. The chip-time
