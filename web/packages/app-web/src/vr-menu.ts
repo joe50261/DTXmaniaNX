@@ -104,13 +104,13 @@ export class VrMenu {
   private readonly wasPressed: boolean[] = [false, false];
   private readonly wasSqueezed: boolean[] = [false, false];
   private readonly inputSources: (XRInputSource | null)[] = [null, null];
-  /** Per-stick edge-detect state. Right stick drives focus + activate/back;
-   * left stick drives difficulty cycling. Both use the same ±0.55
-   * threshold with a 0.3 release dead-band so a held stick fires exactly
-   * once per push. */
-  private readonly rightStickX = { pushed: 0 };
-  private readonly rightStickY = { pushed: 0 };
-  private readonly leftStickX = { pushed: 0 };
+  /** Per-controller stick edge state. Both sticks do the same job
+   * (Y = focus, X = difficulty) so it doesn't matter which hand the
+   * player reaches with. Index matches inputSources[0|1]. */
+  private readonly stickState: Array<{ x: number; y: number }> = [
+    { x: 0, y: 0 },
+    { x: 0, y: 0 },
+  ];
 
   private hits: ButtonHit[] = [];
   private hoveredIdx = -1;
@@ -298,66 +298,42 @@ export class VrMenu {
       this.paint();
     }
 
-    // Right thumbstick drives focus + activate/back. Y is the same as
-    // before (↓ = focus down); X is the key remap from the original
-    // right-X-cycles-difficulty: Quest has no ESC, so we need a ubiquitous
-    // quick-back. Push-right → Enter (same effect as trigger), push-left
-    // → back (same effect as squeeze).
-    const rs = this.thumbstickOf('right');
-    if (rs) {
-      const [sx, sy] = rs;
-      if (sy <= -STICK_THRESHOLD && this.rightStickY.pushed !== -1) {
-        this.rightStickY.pushed = -1;
-        this.moveFocus(-1);
-      } else if (sy >= STICK_THRESHOLD && this.rightStickY.pushed !== 1) {
-        this.rightStickY.pushed = 1;
-        this.moveFocus(1);
-      } else if (Math.abs(sy) < STICK_RELEASE) {
-        this.rightStickY.pushed = 0;
-      }
-      if (sx <= -STICK_THRESHOLD && this.rightStickX.pushed !== -1) {
-        this.rightStickX.pushed = -1;
-        this.goBack();
-      } else if (sx >= STICK_THRESHOLD && this.rightStickX.pushed !== 1) {
-        this.rightStickX.pushed = 1;
-        this.activateFocused();
-      } else if (Math.abs(sx) < STICK_RELEASE) {
-        this.rightStickX.pushed = 0;
-      }
-    }
-
-    // Left thumbstick X cycles difficulty on the focused song. The
-    // original binding (right-X) conflicted with the new Enter/back
-    // mapping above; difficulty is a modifier-style action so it fits
-    // the off-hand stick.
-    const ls = this.thumbstickOf('left');
-    if (ls) {
-      const [sx] = ls;
-      if (sx <= -STICK_THRESHOLD && this.leftStickX.pushed !== -1) {
-        this.leftStickX.pushed = -1;
-        this.cycleDifficulty(-1);
-      } else if (sx >= STICK_THRESHOLD && this.leftStickX.pushed !== 1) {
-        this.leftStickX.pushed = 1;
-        this.cycleDifficulty(1);
-      } else if (Math.abs(sx) < STICK_RELEASE) {
-        this.leftStickX.pushed = 0;
-      }
-    }
-  }
-
-  private thumbstickOf(hand: 'left' | 'right'): [number, number] | null {
-    for (const src of this.inputSources) {
-      if (!src || src.handedness !== hand) continue;
+    // Both sticks drive Y=focus, X=difficulty. Symmetric because Quest
+    // folder depth is shallow and an X-axis enter/back mapping turned out
+    // to conflict with difficulty cycling (players bumping their stick
+    // sideways while aiming up/down would commit a chart). Back is still
+    // available via the squeeze button and the BACK entry in the wheel.
+    for (let i = 0; i < 2; i++) {
+      const src = this.inputSources[i];
+      if (!src) continue;
       const axes = src.gamepad?.axes;
       if (!axes) continue;
-      // Quest layout: axes[2] = X, axes[3] = Y. axes[0]/[1] are the legacy
-      // trackpad which Touch controllers don't have but the spec still
-      // reserves. Fall back if only 2 axes are reported.
-      const x = axes[2] ?? axes[0] ?? 0;
-      const y = axes[3] ?? axes[1] ?? 0;
-      return [x, y];
+      // Quest layout: axes[2]=X, axes[3]=Y. Fall back to [0]/[1] for
+      // controllers that expose only the legacy trackpad pair.
+      const sx = axes[2] ?? axes[0] ?? 0;
+      const sy = axes[3] ?? axes[1] ?? 0;
+      const st = this.stickState[i]!;
+
+      if (sy <= -STICK_THRESHOLD && st.y !== -1) {
+        st.y = -1;
+        this.moveFocus(-1);
+      } else if (sy >= STICK_THRESHOLD && st.y !== 1) {
+        st.y = 1;
+        this.moveFocus(1);
+      } else if (Math.abs(sy) < STICK_RELEASE) {
+        st.y = 0;
+      }
+
+      if (sx <= -STICK_THRESHOLD && st.x !== -1) {
+        st.x = -1;
+        this.cycleDifficulty(-1);
+      } else if (sx >= STICK_THRESHOLD && st.x !== 1) {
+        st.x = 1;
+        this.cycleDifficulty(1);
+      } else if (Math.abs(sx) < STICK_RELEASE) {
+        st.x = 0;
+      }
     }
-    return null;
   }
 
   private moveFocus(delta: number): void {
@@ -725,7 +701,7 @@ export class VrMenu {
     ctx.font = '13px ui-monospace, monospace';
     ctx.textAlign = 'left';
     ctx.fillText(
-      'Right stick: ↕ browse  · → enter  · ← back    ·    Left stick ↔: difficulty    ·    Trigger: play',
+      'Stick: ↕ browse  · ↔ difficulty    ·    Trigger: play / enter    ·    Squeeze: back',
       40,
       PANEL_H_PX - 40
     );
