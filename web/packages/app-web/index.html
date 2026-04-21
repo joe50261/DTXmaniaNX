@@ -91,6 +91,22 @@
         font-size: 12px;
         line-height: 1.5;
       }
+      #search-box {
+        display: none;
+        margin-top: 10px;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px 12px;
+        background: #0f172a;
+        color: #fff;
+        border: 1px solid rgba(80, 120, 255, 0.55);
+        border-radius: 6px;
+        font: 14px ui-monospace, monospace;
+        outline: none;
+      }
+      #search-box.visible {
+        display: block;
+      }
       #breadcrumb {
         margin-top: 16px;
         padding: 6px 10px;
@@ -330,7 +346,9 @@
           <button id="forget-folder" class="ghost" style="display:none">Forget folder</button>
           <button id="calibrate" class="ghost">Calibrate latency</button>
           <button id="toggle-autokick" class="ghost">Auto-kick: OFF</button>
+          <button id="sort-btn" class="ghost">Sort: title</button>
         </div>
+        <input id="search-box" type="text" placeholder="Search songs… (press / to open, Esc to close)" autocomplete="off" spellcheck="false" />
         <div id="breadcrumb"></div>
         <div id="song-select">
           <div id="song-wheel"></div>

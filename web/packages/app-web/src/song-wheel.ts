@@ -41,6 +41,9 @@ export interface SongWheelCallbacks {
  * Mouse still works: clicking an unfocused row moves focus to it;
  * clicking a chart button on the focused row starts that chart directly.
  */
+export type SortMode = 'title' | 'artist' | 'bpm' | 'level';
+const SORT_MODES: readonly SortMode[] = ['title', 'artist', 'bpm', 'level'];
+
 export class SongWheel {
   private root: BoxNode | null = null;
   private currentBox: BoxNode | null = null;
@@ -51,6 +54,9 @@ export class SongWheel {
   private preferredSlot = 4;
   private keyHandler: ((e: KeyboardEvent) => void) | null = null;
   private focusListener: ((idx: number) => void) | null = null;
+  private sortMode: SortMode = 'title';
+  /** Lower-cased substring; empty = no filter. */
+  private searchQuery = '';
 
   constructor(
     private readonly wheelEl: HTMLElement,
@@ -227,9 +233,50 @@ export class SongWheel {
     return songs[Math.floor(Math.random() * songs.length)] ?? null;
   }
 
+  /** Set the sort mode; order of children is recomputed and focus reset
+   * to the first real entry (skip BACK / RANDOM so a sort doesn't stick
+   * the player on a navigation row). */
+  setSortMode(mode: SortMode): void {
+    if (this.sortMode === mode) return;
+    this.sortMode = mode;
+    this.rebuildEntries();
+    this.focusIdx = this.indexOfFirstRealEntry();
+    this.render();
+    this.emitFocusChanged();
+  }
+
+  getSortMode(): SortMode {
+    return this.sortMode;
+  }
+
+  getSearchQuery(): string {
+    return this.searchQuery;
+  }
+
+  /** Advance sort mode title → artist → bpm → level → title. Returns
+   * the new mode so the caller can update a button label. */
+  cycleSortMode(): SortMode {
+    const next = SORT_MODES[(SORT_MODES.indexOf(this.sortMode) + 1) % SORT_MODES.length]!;
+    this.setSortMode(next);
+    return next;
+  }
+
+  /** Set the active search filter. Empty string clears. Children whose
+   * display title doesn't contain the query (case-insensitive) are hidden;
+   * BACK / RANDOM always stay reachable. */
+  setSearchQuery(query: string): void {
+    const normalised = query.trim().toLowerCase();
+    if (this.searchQuery === normalised) return;
+    this.searchQuery = normalised;
+    this.rebuildEntries();
+    this.focusIdx = this.indexOfFirstRealEntry();
+    this.render();
+    this.emitFocusChanged();
+  }
+
   /** Rebuild the flat display list for `currentBox`: synthetic Back at
-   * the top (if not root), Random, then all children in filesystem
-   * order. Called whenever currentBox changes. */
+   * the top (if not root), Random, then children filtered + sorted.
+   * Called whenever currentBox / sortMode / searchQuery changes. */
   private rebuildEntries(): void {
     const box = this.currentBox;
     this.entries = [];
@@ -238,9 +285,23 @@ export class SongWheel {
       this.entries.push({ kind: 'back', parent: box.parent });
     }
     this.entries.push({ kind: 'random', box });
-    for (const child of box.children) {
+
+    const q = this.searchQuery;
+    const children = box.children.filter((c) => {
+      if (!q) return true;
+      return displayTitle(c).toLowerCase().includes(q);
+    });
+    children.sort((a, b) => compareNodes(a, b, this.sortMode));
+    for (const child of children) {
       this.entries.push({ kind: 'node', node: child });
     }
+  }
+
+  /** Skip the synthetic Back/Random when resetting focus — the player
+   * almost always wants to land on a real song / box. */
+  private indexOfFirstRealEntry(): number {
+    const idx = this.entries.findIndex((e) => e.kind === 'node');
+    return idx >= 0 ? idx : 0;
   }
 
   private emitFocusChanged(): void {
@@ -433,6 +494,49 @@ function rowTitle(entry: DisplayEntry): string {
   const node = entry.node;
   if (node.type === 'box') return `📁  ${node.name}`;
   return node.entry.title;
+}
+
+function displayTitle(node: LibraryNode): string {
+  return node.type === 'box' ? node.name : node.entry.title;
+}
+
+/** Sort key for the preferred-slot chart's level, or 0 if no chart has
+ * a parsed level. Used for the `level` sort mode so that unknown levels
+ * fall to the top (matches DTXmania's "ungraded" ordering). */
+function levelKey(node: LibraryNode): number {
+  if (node.type === 'box') return 0;
+  const levels = node.entry.charts
+    .map((c) => c.drumLevel ?? 0)
+    .filter((l) => l > 0);
+  if (levels.length === 0) return 0;
+  return Math.max(...levels);
+}
+
+function compareNodes(a: LibraryNode, b: LibraryNode, mode: SortMode): number {
+  // Boxes always sort above songs within the same tier so the folder
+  // layout stays visually obvious after a sort. Mirrors DTXmania's habit
+  // of listing BOX nodes at the top of a wheel.
+  if (a.type !== b.type) return a.type === 'box' ? -1 : 1;
+  switch (mode) {
+    case 'title':
+      return displayTitle(a).localeCompare(displayTitle(b));
+    case 'artist': {
+      const aa = a.type === 'song' ? (a.entry.artist ?? '') : '';
+      const bb = b.type === 'song' ? (b.entry.artist ?? '') : '';
+      const primary = aa.localeCompare(bb);
+      return primary !== 0 ? primary : displayTitle(a).localeCompare(displayTitle(b));
+    }
+    case 'bpm': {
+      const aa = a.type === 'song' ? (a.entry.bpm ?? 0) : 0;
+      const bb = b.type === 'song' ? (b.entry.bpm ?? 0) : 0;
+      const primary = aa - bb;
+      return primary !== 0 ? primary : displayTitle(a).localeCompare(displayTitle(b));
+    }
+    case 'level': {
+      const primary = levelKey(a) - levelKey(b);
+      return primary !== 0 ? primary : displayTitle(a).localeCompare(displayTitle(b));
+    }
+  }
 }
 
 function formatSongMeta(song: SongEntry): string {
