@@ -22,7 +22,25 @@ const scanErrorsEl = requireEl<HTMLDivElement>('scan-errors');
 // Preload skin PNGs once at boot. Games created later reuse these textures.
 const skinPromise: Promise<SkinTextures> = loadSkin(import.meta.env.BASE_URL);
 
+/**
+ * Game is built eagerly (with empty skin) so the Enter-VR click handler
+ * can call game.enterXR() synchronously — Quest Browser consumes the
+ * user-activation token on any `await` before `navigator.xr.requestSession`,
+ * which silently fails the session request otherwise. Skin textures are
+ * applied as soon as the loader resolves; the renderer already tolerates
+ * an initial skin-less render.
+ */
 let activeGame: Game | null = null;
+try {
+  activeGame = new Game(canvas, {});
+  const boot = activeGame;
+  skinPromise
+    .then((skin) => boot.applySkin(skin))
+    .catch((e) => console.warn('skin load failed', e));
+} catch (e) {
+  // WebGL unavailable — page still usable for non-game actions if any.
+  console.warn('Game init failed', e);
+}
 
 interface Library {
   handle: FileSystemDirectoryHandle;
@@ -231,16 +249,14 @@ async function playDemo(): Promise<void> {
 }
 
 async function launchGame(dtxText: string, fs?: GameFsContext): Promise<void> {
-  const skin = await skinPromise;
-  // If we're already in VR, reuse the existing Game so the XR session and
-  // drum-kit stay live when swapping charts via the in-VR menu.
-  const reuse = activeGame && activeGame.inXR;
-  const game = reuse ? activeGame! : new Game(canvas, skin);
-  if (!reuse) {
-    if (activeGame) {
-      activeGame.stop();
-    }
-    activeGame = game;
+  // activeGame is created eagerly at module init. We always reuse it —
+  // Game.loadAndStart resets state (audio, samples, pad buffers, gauge)
+  // so a fresh chart picks up cleanly, and reusing avoids destroying /
+  // recreating the WebGLRenderer which would leak XR / canvas state.
+  const game = activeGame;
+  if (!game) {
+    setStatus('Game not initialised — reload the page.');
+    return;
   }
   const startOpts: Parameters<Game['loadAndStart']>[1] = {
     onRestart: () => {
@@ -249,8 +265,6 @@ async function launchGame(dtxText: string, fs?: GameFsContext): Promise<void> {
         // taking off the headset.
         showVrMenuForActive(fs);
       } else {
-        game.stop();
-        activeGame = null;
         overlay.style.display = 'grid';
         setStatus('Pick another chart or change folder.');
         refreshXrButton();
@@ -273,10 +287,6 @@ async function launchGame(dtxText: string, fs?: GameFsContext): Promise<void> {
     refreshXrButton();
   } catch (e) {
     setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
-    if (!reuse) {
-      game.stop();
-      activeGame = null;
-    }
     throw e;
   }
 }
@@ -323,32 +333,32 @@ function refreshXrButton(): void {
     });
 }
 
-/** Get an existing Game or create a fresh one (no chart loaded). */
-async function ensureGame(): Promise<Game> {
-  if (activeGame) return activeGame;
-  const skin = await skinPromise;
-  activeGame = new Game(canvas, skin);
-  return activeGame;
-}
-
-xrBtn.addEventListener('click', () =>
-  run(async () => {
-    const game = await ensureGame();
-    await game.enterXR(() => {
-      setStatus('Exited VR.');
+xrBtn.addEventListener('click', () => {
+  // Must stay on the synchronous path to requestSession() so Quest Browser
+  // keeps the user-activation token. Any awaited work (skin, chart, menu)
+  // is scheduled AFTER enterXR has kicked off.
+  if (!activeGame) {
+    setStatus('Game not initialised — reload the page and try again.');
+    return;
+  }
+  const game = activeGame;
+  const enterPromise = game.enterXR(() => {
+    setStatus('Exited VR.');
+    overlay.style.display = 'grid';
+    refreshXrButton();
+  });
+  overlay.style.display = 'none';
+  setStatus('Entering VR…');
+  enterPromise
+    .then(() => {
+      setStatus('In VR — use controllers to play.');
+      if (library && !game.hasChart) showVrMenuForActive();
+    })
+    .catch((e) => {
       overlay.style.display = 'grid';
-      refreshXrButton();
+      setStatus(`VR failed: ${e instanceof Error ? e.message : String(e)}`);
     });
-    overlay.style.display = 'none';
-    setStatus('In VR — use controllers to play.');
-    // If no chart is currently loaded, pop the VR menu so the player can
-    // pick their first song without leaving VR. If a chart is already
-    // playing, keep it running as-is.
-    if (library && !game.hasChart) {
-      showVrMenuForActive();
-    }
-  })
-);
+});
 
 function run(fn: () => Promise<void>): void {
   fn().catch((e) => {

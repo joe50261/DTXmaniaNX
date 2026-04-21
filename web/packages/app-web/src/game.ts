@@ -141,6 +141,16 @@ export class Game {
     return this.song !== null;
   }
 
+  /**
+   * Inject skin textures after construction. Lets main.ts build the Game
+   * eagerly (so Enter-VR stays on a synchronous gesture path) and apply
+   * the PNGs once the TextureLoader finishes, without rebuilding anything.
+   */
+  applySkin(skin: SkinTextures): void {
+    this.renderer.applySkin(skin);
+    this.xrControllers.setPadsTexture(skin.pads);
+  }
+
   async loadAndStart(
     dtxText: string,
     opts: { onRestart?: () => void; fs?: GameFsContext } = {}
