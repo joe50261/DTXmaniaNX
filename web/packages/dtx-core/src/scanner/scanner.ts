@@ -96,6 +96,14 @@ export interface ScanOptions {
    * may want to disable and parse lazily on selection.
    */
   parseMeta?: boolean;
+  /**
+   * Called during the meta-parse phase once per song with
+   * `(songsDone, songsTotal)`. Fires from 0/N up through N/N. Gives the UI
+   * something to show while a Quest 3 cold scan churns through header
+   * reads (the walk + listDir phase is usually sub-second; metadata is
+   * where the time goes).
+   */
+  onMetaProgress?: (done: number, total: number) => void;
 }
 
 const DEFAULT_SKIP_DIRS = new Set(['system', '$recycle.bin', 'node_modules', '.git']);
@@ -104,6 +112,7 @@ export class SongScanner {
   private readonly skipDirs: Set<string>;
   private readonly maxDepth: number;
   private readonly parseMeta: boolean;
+  private readonly onMetaProgress: ((done: number, total: number) => void) | undefined;
 
   constructor(private readonly fs: FileSystemBackend, options: ScanOptions = {}) {
     this.skipDirs = new Set(
@@ -111,6 +120,7 @@ export class SongScanner {
     );
     this.maxDepth = options.maxDepth ?? 12;
     this.parseMeta = options.parseMeta ?? true;
+    this.onMetaProgress = options.onMetaProgress;
   }
 
   async scan(rootPath: string): Promise<SongIndex> {
@@ -125,8 +135,11 @@ export class SongScanner {
     await this.walk(root, 0, errors);
     const songs = flattenSongs(root);
     if (this.parseMeta) {
-      for (const song of songs) {
-        await this.fillSongMeta(song, errors);
+      const total = songs.length;
+      this.onMetaProgress?.(0, total);
+      for (let i = 0; i < songs.length; i++) {
+        await this.fillSongMeta(songs[i]!, errors);
+        this.onMetaProgress?.(i + 1, total);
       }
     }
     return { rootPath, root, songs, errors };
