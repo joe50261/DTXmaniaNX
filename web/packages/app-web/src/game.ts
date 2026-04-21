@@ -395,26 +395,31 @@ export class Game {
   private tick(): void {
     this.xrControllers.tick();
     this.vrMenu.tick();
-    // VR mid-song quit: any squeeze-press while the chart is playing
-    // dumps us back to the picker. Edge-detected per controller so a
-    // hold doesn't re-fire, and deliberately only active during
-    // 'playing' — the VrMenu handles its own squeeze for back-nav, and
-    // on the RESULTS screen Esc / pad-hit / 5 s auto-return already
-    // cover the exit.
+    // VR mid-song quit: any of X/Y/A/B (face buttons on either Touch
+    // controller) presses while the chart is playing dumps us back to
+    // the picker. Squeeze was used previously but turned out easy to
+    // misfire while gripping the stick tightly — the face buttons need
+    // a deliberate thumb reach. Edge-detected per controller so a hold
+    // doesn't re-fire, and deliberately only active during 'playing' —
+    // VrMenu handles its own back input, and the RESULTS screen is
+    // already covered by Esc / pad-hit / 5 s auto-return.
     if (this.status === 'playing' && this.renderer.inXR) {
       const sources = this.xrControllers.currentInputSources;
       for (let i = 0; i < 2; i++) {
-        const pressed = sources[i]?.gamepad?.buttons[1]?.pressed ?? false;
+        const btns = sources[i]?.gamepad?.buttons;
+        // Index 4 = A (right) / X (left); index 5 = B / Y. Either counts.
+        const pressed =
+          (btns?.[4]?.pressed ?? false) || (btns?.[5]?.pressed ?? false);
         if (pressed && !this.cancelSqueezed[i]) {
           this.cancelSqueezed[i] = true;
-          console.info('[game] VR squeeze → leaveSong');
+          console.info('[game] VR face-button → leaveSong');
           this.leaveSong();
           return;
         }
         if (!pressed) this.cancelSqueezed[i] = false;
       }
     } else {
-      // Reset edge state so a squeeze held across state changes doesn't
+      // Reset edge state so a button held across state changes doesn't
       // fire when we come back to playing.
       this.cancelSqueezed[0] = false;
       this.cancelSqueezed[1] = false;

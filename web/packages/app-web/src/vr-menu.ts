@@ -120,6 +120,13 @@ export class VrMenu {
   private entries: DisplayEntry[] = [];
   private focusIdx = 0;
   private preferredSlot = 4;
+  /** Breadcrumb persisted across show/hide cycles so re-opening the
+   * menu (after a song / after exit-and-re-enter VR) lands the player
+   * back where they were. Stored as path string because the BoxNode
+   * reference would be stale after a Rescan or a fresh scan. */
+  private persistedBoxPath: string | null = null;
+  private persistedFocusIdx = 0;
+  private persistedPreferredSlot = 4;
   /** Decoded cover art for the focused song. Cleared when focus moves off
    * a song or onto a song without #PREIMAGE. */
   private coverBitmap: ImageBitmap | null = null;
@@ -167,10 +174,22 @@ export class VrMenu {
     deps: VrMenuDeps
   ): void {
     this.root = root;
-    this.currentBox = root;
-    this.focusIdx = 0;
-    this.preferredSlot = 4;
+    // Try to restore the box the player was last browsing. Path match
+    // works across scan refreshes (BoxNode identity changes but path
+    // stays stable for unchanged folders); falls back to root on miss.
+    const resumeBox =
+      this.persistedBoxPath !== null
+        ? findBoxByPath(root, this.persistedBoxPath)
+        : null;
+    this.currentBox = resumeBox ?? root;
+    this.preferredSlot = this.persistedPreferredSlot;
     this.rebuildEntries();
+    // Clamp the remembered focus index against the current entry list —
+    // the folder might have fewer songs after a re-scan, or the user
+    // might have hopped sort modes (desktop-only; harmless for VR).
+    this.focusIdx = resumeBox
+      ? Math.min(Math.max(0, this.persistedFocusIdx), Math.max(0, this.entries.length - 1))
+      : 0;
     this.onPick = onPick;
     this.onExit = onExit;
     this.deps = deps;
@@ -216,6 +235,13 @@ export class VrMenu {
   }
 
   hide(): void {
+    // Capture browse state for the next show(). Ignoring stores while
+    // hidden means repeated hide() calls don't clobber the real spot.
+    if (this.shown && this.currentBox) {
+      this.persistedBoxPath = this.currentBox.path;
+      this.persistedFocusIdx = this.focusIdx;
+      this.persistedPreferredSlot = this.preferredSlot;
+    }
     this.shown = false;
     this.mesh.visible = false;
     for (const l of this.lasers) l.visible = false;
@@ -716,6 +742,19 @@ export class VrMenu {
     ctx.fillText('Exit VR', EXIT_X + EXIT_W / 2, EXIT_Y + 32);
     this.hits.push({ x: EXIT_X, y: EXIT_Y, w: EXIT_W, h: EXIT_H, action: { kind: 'exit' } });
   }
+}
+
+/** Walk the tree looking for a BoxNode whose `path` matches. Used to
+ * restore browse state after the scanner produces fresh BoxNode
+ * references (e.g. after Rescan or IDB cache hydration). */
+function findBoxByPath(box: BoxNode, path: string): BoxNode | null {
+  if (box.path === path) return box;
+  for (const child of box.children) {
+    if (child.type !== 'box') continue;
+    const found = findBoxByPath(child, path);
+    if (found) return found;
+  }
+  return null;
 }
 
 function rowTitle(entry: DisplayEntry): string {
