@@ -136,6 +136,11 @@ export class Game {
     return this.renderer.inXR;
   }
 
+  /** True if loadAndStart has been called at least once. */
+  get hasChart(): boolean {
+    return this.song !== null;
+  }
+
   async loadAndStart(
     dtxText: string,
     opts: { onRestart?: () => void; fs?: GameFsContext } = {}

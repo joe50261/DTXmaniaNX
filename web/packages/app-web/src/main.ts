@@ -45,6 +45,7 @@ forgetBtn.addEventListener('click', () =>
     pickBtn.textContent = 'Pick folder';
     onPick = pickAndScan;
     setStatus('Pick your Songs folder to begin.');
+    refreshXrButton();
   })
 );
 
@@ -136,6 +137,7 @@ async function scanIntoLibrary(handle: FileSystemDirectoryHandle): Promise<void>
   setStatus(`Found ${index.songs.length} song(s) in "${handle.name}".`);
   renderSongList(index.songs);
   renderScanErrors(index.errors);
+  refreshXrButton();
 }
 
 function renderSongList(songs: SongEntry[]): void {
@@ -303,28 +305,48 @@ function showVrMenuForActive(fs?: GameFsContext): void {
 }
 
 function refreshXrButton(): void {
-  if (!navigator.xr || !activeGame) {
+  // Show Enter VR as soon as there's a library loaded OR a chart in progress,
+  // so players can jump into VR and pick a song from the in-headset menu
+  // without having to start one on the desktop first.
+  const eligible = Boolean(library || activeGame);
+  if (!navigator.xr || !eligible) {
     xrBtn.style.display = 'none';
     return;
   }
   navigator.xr
     .isSessionSupported('immersive-vr')
     .then((supported) => {
-      xrBtn.style.display = supported && activeGame ? 'inline-block' : 'none';
+      xrBtn.style.display = supported && (library || activeGame) ? 'inline-block' : 'none';
     })
     .catch(() => {
       xrBtn.style.display = 'none';
     });
 }
 
+/** Get an existing Game or create a fresh one (no chart loaded). */
+async function ensureGame(): Promise<Game> {
+  if (activeGame) return activeGame;
+  const skin = await skinPromise;
+  activeGame = new Game(canvas, skin);
+  return activeGame;
+}
+
 xrBtn.addEventListener('click', () =>
   run(async () => {
-    if (!activeGame) return;
-    await activeGame.enterXR(() => {
-      // Session ended — ensure overlay is back if the game was finished.
+    const game = await ensureGame();
+    await game.enterXR(() => {
       setStatus('Exited VR.');
+      overlay.style.display = 'grid';
+      refreshXrButton();
     });
+    overlay.style.display = 'none';
     setStatus('In VR — use controllers to play.');
+    // If no chart is currently loaded, pop the VR menu so the player can
+    // pick their first song without leaving VR. If a chart is already
+    // playing, keep it running as-is.
+    if (library && !game.hasChart) {
+      showVrMenuForActive();
+    }
   })
 );
 
