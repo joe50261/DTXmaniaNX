@@ -19,6 +19,10 @@ export interface ScoreSnapshot {
   combo: number;
   maxCombo: number;
   score: number;
+  /** Number of chips consumed by auto-play (e.g. auto-kick). Excluded from
+   * both the 1,000,000-scale score and the rank formula, matching DTXmania
+   * (CScoreIni.cs:1571 — `nAuto = nTotal - (P+Gr+Gd+Po+Mi)`). */
+  autoCount: number;
 }
 
 const WEIGHTS: Record<JudgmentKind, number> = {
@@ -40,6 +44,7 @@ export class ScoreTracker {
   private weightSum = 0;
   private combo = 0;
   private maxCombo = 0;
+  private autoCount = 0;
 
   constructor(private readonly totalNotes: number) {
     if (totalNotes < 0) throw new Error('totalNotes must be non-negative');
@@ -56,16 +61,29 @@ export class ScoreTracker {
     }
   }
 
+  /**
+   * Record an auto-played chip (e.g. a BD chip fired by auto-kick). Does
+   * not advance combo, add to any judgment count, or contribute weight — it
+   * just removes the chip from the score / rank denominator so the player
+   * isn't penalised for notes they didn't play. Mirrors DTXmania's
+   * EJudgement.Auto path (CStagePerfCommonScreen.cs:1509-1546).
+   */
+  recordAuto(): void {
+    this.autoCount += 1;
+  }
+
   snapshot(): ScoreSnapshot {
-    const score = this.totalNotes === 0
+    const effective = Math.max(0, this.totalNotes - this.autoCount);
+    const score = effective === 0
       ? 0
-      : Math.round((this.weightSum / this.totalNotes) * 1_000_000);
+      : Math.round((this.weightSum / effective) * 1_000_000);
     return {
       totalNotes: this.totalNotes,
       counts: { ...this.counts },
       combo: this.combo,
       maxCombo: this.maxCombo,
       score,
+      autoCount: this.autoCount,
     };
   }
 }
@@ -87,10 +105,13 @@ export type Rank = 'SS' | 'S' | 'A' | 'B' | 'C' | 'D' | 'E';
  * rate is independent of the 0..1,000,000 display score.
  */
 export function computeAchievementRate(snap: ScoreSnapshot): number {
-  if (snap.totalNotes === 0) return 0;
-  const p = (snap.counts.PERFECT / snap.totalNotes) * 100;
-  const g = (snap.counts.GREAT / snap.totalNotes) * 100;
-  const c = (snap.maxCombo / snap.totalNotes) * 100;
+  // Mirrors CScoreIni.cs:1571 — auto-played chips are subtracted from the
+  // denominator so auto-play doesn't dilute nor inflate the rate.
+  const effective = snap.totalNotes - snap.autoCount;
+  if (effective <= 0) return 0;
+  const p = (snap.counts.PERFECT / effective) * 100;
+  const g = (snap.counts.GREAT / effective) * 100;
+  const c = (snap.maxCombo / effective) * 100;
   return p * 0.85 + g * 0.35 + c * 0.15;
 }
 

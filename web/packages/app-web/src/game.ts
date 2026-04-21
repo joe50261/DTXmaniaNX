@@ -16,7 +16,7 @@ import {
   type SongEntry,
 } from '@dtxmania/dtx-core';
 import { AudioEngine, SampleBank } from '@dtxmania/audio-engine';
-import { KeyboardInput, type LaneHitEvent, type LaneValue } from '@dtxmania/input';
+import { KeyboardInput, Lane, type LaneHitEvent, type LaneValue } from '@dtxmania/input';
 import {
   Renderer,
   CANVAS_W,
@@ -87,6 +87,11 @@ export class Game {
   /** performance.now() of the most recent hit per lane; drives pad bounce + flush overlay. */
   private lastPadHitMs = new Map<LaneValue, number>();
   private onRestart: (() => void) | null = null;
+  /** If true, BD + LBD chips are fired automatically when their time comes
+   * (DTXmania-equivalent of `bAutoPlay.BD = bAutoPlay.LBD = true`). Auto-
+   * fired chips don't advance combo and are excluded from score / rank
+   * denominators via ScoreTracker.recordAuto. */
+  private autoKick = false;
   private bgmSources: AudioBufferSourceNode[] = [];
   private readonly xrControllers: XrControllers;
   private readonly vrMenu: VrMenu;
@@ -161,11 +166,18 @@ export class Game {
     this.xrControllers.setPadsTexture(skin.pads);
   }
 
+  /** Enable / disable auto-kick mid-session. Takes effect on the next tick;
+   * chips already past their playback time are not retroactively auto-fired. */
+  setAutoKick(enabled: boolean): void {
+    this.autoKick = enabled;
+  }
+
   async loadAndStart(
     dtxText: string,
-    opts: { onRestart?: () => void; fs?: GameFsContext } = {}
+    opts: { onRestart?: () => void; fs?: GameFsContext; autoKick?: boolean } = {}
   ): Promise<void> {
     this.onRestart = opts.onRestart ?? null;
+    if (opts.autoKick !== undefined) this.autoKick = opts.autoKick;
     this.stopBgm();
     this.sampleByWavId.clear();
     this.lastBufferByLane.clear();
@@ -325,6 +337,9 @@ export class Game {
     // Drum chips don't auto-play; audio only fires on the player's keystroke
     // (handleLaneHit). BGM is still auto-scheduled via scheduleBgm so the
     // music continues. Missed chips are silent — standard rhythm-game feel.
+    // Exception: auto-kick fires BD + LBD chips on schedule — see
+    // autoFireBassChips below.
+    this.autoFireBassChips(songTime);
 
     // Miss detection: any unhit chip whose judgment window has fully passed.
     for (const p of this.playables) {
@@ -407,6 +422,30 @@ export class Game {
     this.renderer.render(state);
     this.renderer.submitPadHits(this.lastPadHitMs);
     this.xrControllers.submitPadHits(this.lastPadHitMs);
+  }
+
+  /**
+   * Fire any BD / LBD chip whose playback time has arrived and hasn't been
+   * hit yet. Mirrors DTXmania's auto-play loop in
+   * CStagePerfDrumsScreen.cs:3394-3429 (UsePerfectGhost branch), but scoped
+   * to just the two bass-drum lanes. Auto-fire plays the sample, bounces
+   * the pad, and adds a hit flash — visually identical to a player hit —
+   * but calls ScoreTracker.recordAuto (not record(PERFECT)) so combo and
+   * the rank denominator are unaffected.
+   */
+  private autoFireBassChips(songTime: number): void {
+    if (!this.autoKick) return;
+    for (let i = 0; i < this.playables.length; i++) {
+      const p = this.playables[i]!;
+      if (p.hit || p.missed) continue;
+      if (p.laneValue !== Lane.BD && p.laneValue !== Lane.LBD) continue;
+      if (songTime < p.chip.playbackTimeMs) continue;
+      p.hit = true;
+      this.tracker.recordAuto();
+      this.playChipSample(p, songTime, 1);
+      this.lastPadHitMs.set(p.laneValue, performance.now());
+      this.hitFlashes.push({ lane: p.laneValue, spawnedMs: songTime });
+    }
   }
 
   private handleLaneHit(event: LaneHitEvent): void {

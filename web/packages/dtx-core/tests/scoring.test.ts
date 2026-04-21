@@ -23,6 +23,7 @@ function snap(partial: Partial<ScoreSnapshot> & { totalNotes: number }): ScoreSn
     combo: partial.combo ?? 0,
     maxCombo: partial.maxCombo ?? 0,
     score: partial.score ?? 0,
+    autoCount: partial.autoCount ?? 0,
   };
 }
 
@@ -163,5 +164,56 @@ describe('isFullCombo / isExcellent', () => {
       )
     ).toBe(false);
     expect(isExcellent(snap({ totalNotes: 0 }))).toBe(false);
+  });
+});
+
+describe('auto-play exclusion (recordAuto)', () => {
+  it('recordAuto increments autoCount and nothing else', () => {
+    const t = new ScoreTracker(10);
+    t.record(Judgment.PERFECT);
+    t.recordAuto();
+    t.recordAuto();
+    const s = t.snapshot();
+    expect(s.autoCount).toBe(2);
+    expect(s.counts[Judgment.PERFECT]).toBe(1);
+    expect(s.combo).toBe(1);
+  });
+
+  it('score denominator excludes auto: 5 PERFECT + 5 auto = 1_000_000', () => {
+    const t = new ScoreTracker(10);
+    for (let i = 0; i < 5; i++) t.record(Judgment.PERFECT);
+    for (let i = 0; i < 5; i++) t.recordAuto();
+    // effective = 10 - 5 = 5; weightSum = 5*1.0 = 5 → 5/5 = 1.0 → 1_000_000
+    expect(t.snapshot().score).toBe(1_000_000);
+  });
+
+  it('all-auto chart has score 0 (effective denominator 0)', () => {
+    const t = new ScoreTracker(3);
+    t.recordAuto();
+    t.recordAuto();
+    t.recordAuto();
+    expect(t.snapshot().score).toBe(0);
+  });
+
+  it('computeAchievementRate uses (totalNotes - autoCount)', () => {
+    // 5 PERFECT + 5 auto, no combo tracked → rate = 100*5/5*0.85 = 85
+    // (maxCombo term is 0 because tracker state has no combo in this snap)
+    const rate = computeAchievementRate(
+      snap({
+        totalNotes: 10,
+        counts: { PERFECT: 5 } as never,
+        autoCount: 5,
+        maxCombo: 0,
+      })
+    );
+    expect(rate).toBeCloseTo(85, 4);
+  });
+
+  it('totalNotes === autoCount collapses to E (rate 0, rank E)', () => {
+    const rate = computeAchievementRate(
+      snap({ totalNotes: 10, autoCount: 10 })
+    );
+    expect(rate).toBe(0);
+    expect(computeRank(rate, 10)).toBe('E');
   });
 });

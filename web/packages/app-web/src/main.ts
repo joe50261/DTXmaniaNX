@@ -18,6 +18,7 @@ const pickBtn = requireEl<HTMLButtonElement>('pick-folder');
 const demoBtn = requireEl<HTMLButtonElement>('start-demo');
 const forgetBtn = requireEl<HTMLButtonElement>('forget-folder');
 const calibrateBtn = requireEl<HTMLButtonElement>('calibrate');
+const autoKickBtn = requireEl<HTMLButtonElement>('toggle-autokick');
 const xrBtn = requireEl<HTMLButtonElement>('enter-xr');
 const songListEl = requireEl<HTMLDivElement>('song-list');
 const scanErrorsEl = requireEl<HTMLDivElement>('scan-errors');
@@ -88,6 +89,31 @@ calibrateBtn.addEventListener('click', () =>
 );
 
 refreshCalibrateLabel();
+
+// Auto-kick (DTXmania bAutoPlay.BD + bAutoPlay.LBD equivalent). Persist via
+// localStorage; URL param ?autokick=1 / 0 lets users lock a state without
+// touching the UI (handy for demos / recordings). The stored state wins
+// over the default OFF when the URL param isn't present.
+const AUTOKICK_KEY = 'dtxmania.autokick';
+{
+  const qs = new URLSearchParams(window.location.search).get('autokick');
+  if (qs === '1') localStorage.setItem(AUTOKICK_KEY, '1');
+  else if (qs === '0') localStorage.removeItem(AUTOKICK_KEY);
+}
+function isAutoKickEnabled(): boolean {
+  return localStorage.getItem(AUTOKICK_KEY) === '1';
+}
+function refreshAutoKickLabel(): void {
+  autoKickBtn.textContent = `Auto-kick: ${isAutoKickEnabled() ? 'ON' : 'OFF'}`;
+}
+autoKickBtn.addEventListener('click', () => {
+  const next = !isAutoKickEnabled();
+  if (next) localStorage.setItem(AUTOKICK_KEY, '1');
+  else localStorage.removeItem(AUTOKICK_KEY);
+  refreshAutoKickLabel();
+  activeGame?.setAutoKick(next);
+});
+refreshAutoKickLabel();
 
 void init();
 
@@ -273,6 +299,7 @@ async function launchGame(dtxText: string, fs?: GameFsContext): Promise<void> {
         refreshXrButton();
       }
     },
+    autoKick: isAutoKickEnabled(),
   };
   if (fs) {
     setStatus('Loading samples…');
