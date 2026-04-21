@@ -65,13 +65,22 @@ export class SongWheel {
     private readonly callbacks: SongWheelCallbacks
   ) {}
 
-  /** Replace the library tree shown in the wheel and reset navigation to
-   * the root box. */
+  /** Replace the library tree shown in the wheel. Preserves the
+   * player's browse position across Rescans by matching BoxNode paths
+   * — a user-triggered Rescan produces fresh BoxNode instances, so we
+   * can't hold the reference, but the path string of an unchanged
+   * folder survives. Falls back to root on a full folder change or if
+   * the previous box was deleted. */
   setRoot(root: BoxNode | null): void {
+    const prevPath = this.currentBox?.path ?? null;
+    const prevFocus = this.focusIdx;
     this.root = root;
-    this.currentBox = root;
-    this.focusIdx = 0;
+    const resume = root && prevPath !== null ? findBoxByPath(root, prevPath) : null;
+    this.currentBox = resume ?? root;
     this.rebuildEntries();
+    this.focusIdx = resume
+      ? Math.min(Math.max(0, prevFocus), Math.max(0, this.entries.length - 1))
+      : 0;
     this.render();
     this.emitFocusChanged();
   }
@@ -486,6 +495,19 @@ export class SongWheel {
     }
     this.statusPanelEl.appendChild(metaBlock);
   }
+}
+
+/** Walk the tree looking for a BoxNode whose `path` matches. Lets
+ * setRoot restore the player's browse position across Rescans where
+ * BoxNode identity changes. */
+function findBoxByPath(box: BoxNode, path: string): BoxNode | null {
+  if (box.path === path) return box;
+  for (const child of box.children) {
+    if (child.type !== 'box') continue;
+    const found = findBoxByPath(child, path);
+    if (found) return found;
+  }
+  return null;
 }
 
 function rowTitle(entry: DisplayEntry): string {
