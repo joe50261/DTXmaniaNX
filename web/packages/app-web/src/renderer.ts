@@ -308,6 +308,17 @@ export class Renderer {
     this.lastPadHitMs = map;
   }
 
+  /**
+   * Hide / show the entire playfield group (bg, dim, pads, flush, HUD).
+   * Used by Game while the VR menu is up so the result overlay and scrolling
+   * pads don't paint over the menu panel: our playfield layers have
+   * depthTest:false + high renderOrder (to survive sub-mm XR Z deltas), so
+   * they'd otherwise always win the transparent sort against the menu mesh.
+   */
+  setPlayfieldVisible(visible: boolean): void {
+    this.playfield.visible = visible;
+  }
+
   /** Submit new game state for the next frame's HUD paint. */
   render(state: RenderState): void {
     this.paintHud(state);
