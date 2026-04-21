@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SongScanner } from '../src/scanner/scanner.js';
+import { SongScanner, flattenSongs } from '../src/scanner/scanner.js';
 import { MemoryFs } from './helpers/memory-fs.js';
 
 function makeFs(files: Record<string, string>): MemoryFs {
@@ -206,5 +206,57 @@ describe('SongScanner', () => {
     const index = await new SongScanner(fs).scan('Songs');
     expect(index.songs).toHaveLength(1);
     expect(index.songs[0]?.title).toBe('a');
+  });
+
+  it('exposes a folder tree: root BoxNode with nested Box + Song children', async () => {
+    const fs = makeFs({
+      'Songs/Rock/a.dtx': '#TITLE A',
+      'Songs/Pop/Bubblegum/b.dtx': '#TITLE B',
+      'Songs/Pop/Ballads/c.dtx': '#TITLE C',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    // Flat list still preserved for back-compat.
+    expect(flattenSongs(index.root)).toEqual(index.songs);
+    // Root has two child boxes: Rock + Pop.
+    const rootBoxes = index.root.children.filter((c) => c.type === 'box');
+    expect(rootBoxes.map((b) => (b as { name: string }).name).sort()).toEqual(['Pop', 'Rock']);
+    const pop = rootBoxes.find((b) => (b as { name: string }).name === 'Pop');
+    expect(pop?.type).toBe('box');
+    if (pop?.type !== 'box') throw new Error('pop must be a box');
+    // Pop has two sub-boxes (Bubblegum, Ballads), each with one song.
+    expect(pop.children).toHaveLength(2);
+    for (const sub of pop.children) {
+      expect(sub.type).toBe('box');
+      if (sub.type !== 'box') continue;
+      expect(sub.children).toHaveLength(1);
+      expect(sub.children[0]!.type).toBe('song');
+      expect(sub.parent).toBe(pop);
+    }
+  });
+
+  it('prunes empty boxes so dead folders do not clutter the tree', async () => {
+    const fs = makeFs({
+      'Songs/Rock/a.dtx': '#TITLE A',
+      'Songs/EmptyDir/placeholder.txt': 'not a chart',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    const boxes = index.root.children.filter((c) => c.type === 'box');
+    expect(boxes.map((b) => (b as { name: string }).name)).toEqual(['Rock']);
+  });
+
+  it('fills preview / preimage / comment metadata when parseMeta is on', async () => {
+    const fs = makeFs({
+      'Songs/Rock/song.dtx': [
+        '#TITLE Foo',
+        '#ARTIST Someone',
+        '#PREVIEW pv.wav',
+        '#PREIMAGE cover.png',
+        '#COMMENT A short blurb',
+      ].join('\n'),
+    });
+    const index = await new SongScanner(fs, { parseMeta: true }).scan('Songs');
+    expect(index.songs[0]?.preview).toBe('pv.wav');
+    expect(index.songs[0]?.preimage).toBe('cover.png');
+    expect(index.songs[0]?.comment).toBe('A short blurb');
   });
 });
