@@ -1,4 +1,7 @@
 /// <reference types="vite/client" />
+import { installOnScreenLog } from './on-screen-log.js';
+installOnScreenLog();
+
 import { dirname, SongScanner, type ChartEntry, type SongEntry } from '@dtxmania/dtx-core';
 import { Game, type GameFsContext } from './game.js';
 import { HandleFileSystemBackend } from './fs/handle-backend.js';
@@ -340,6 +343,10 @@ function refreshXrButton(): void {
     });
 }
 
+console.info('[boot] attaching Enter VR click handler — xrBtn exists =', !!xrBtn);
+// Backup diagnostic: if 'click' never fires but 'pointerdown' does, the click
+// is being swallowed by something after the initial press.
+xrBtn.addEventListener('pointerdown', () => console.info('[xr] Enter VR pointerdown'));
 xrBtn.addEventListener('click', () => {
   // Must stay on the synchronous path to requestSession() so Quest Browser
   // keeps the user-activation token. Any awaited work (skin, chart, menu)
