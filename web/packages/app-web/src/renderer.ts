@@ -148,9 +148,15 @@ export class Renderer {
     this.hudTexture = new THREE.CanvasTexture(this.hud);
     this.hudTexture.minFilter = THREE.LinearFilter;
     this.hudTexture.generateMipmaps = false;
-    const hudMat = new THREE.MeshBasicMaterial({ map: this.hudTexture, transparent: true });
+    const hudMat = new THREE.MeshBasicMaterial({
+      map: this.hudTexture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    });
     this.hudMesh = new THREE.Mesh(new THREE.PlaneGeometry(CANVAS_W, CANVAS_H), hudMat);
     this.hudMesh.position.z = 1; // in front of background / pads
+    this.hudMesh.renderOrder = 4;
     this.playfield.add(this.hudMesh);
 
     this.applySkin(skin);
@@ -180,6 +186,7 @@ export class Renderer {
       const mat = new THREE.MeshBasicMaterial({ map: skin.background, transparent: false });
       this.bgMesh = new THREE.Mesh(new THREE.PlaneGeometry(CANVAS_W, CANVAS_H), mat);
       this.bgMesh.position.z = -1; // behind everything
+      this.bgMesh.renderOrder = 0;
       this.playfield.add(this.bgMesh);
 
       // Dim the busy background so HUD + chips stay readable. Sits between
@@ -189,9 +196,12 @@ export class Renderer {
         color: 0x000000,
         transparent: true,
         opacity: 0.55,
+        depthTest: false,
+        depthWrite: false,
       });
       this.dimMesh = new THREE.Mesh(new THREE.PlaneGeometry(CANVAS_W, CANVAS_H), dimMat);
       this.dimMesh.position.z = -0.5;
+      this.dimMesh.renderOrder = 1;
       this.playfield.add(this.dimMesh);
     }
 
@@ -230,11 +240,17 @@ export class Renderer {
         tex.needsUpdate = true;
         tex.repeat.set(PAD_SIZE / atlasW, PAD_SIZE / atlasH);
         tex.offset.set(rect.sx / atlasW, 1 - (rect.sy + PAD_SIZE) / atlasH);
-        const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+        const mat = new THREE.MeshBasicMaterial({
+          map: tex,
+          transparent: true,
+          depthTest: false,
+          depthWrite: false,
+        });
         const mesh = new THREE.Mesh(new THREE.PlaneGeometry(PAD_SIZE, PAD_SIZE), mat);
         const centerX = spec.x + spec.width / 2;
         const baseY = -(JUDGE_LINE_Y - CANVAS_H / 2);
         mesh.position.set(centerX - CANVAS_W / 2, baseY, 0.5);
+        mesh.renderOrder = 2;
         this.playfield.add(mesh);
         this.padMeshes.push(mesh);
         this.padBaseY.push(baseY);
@@ -252,10 +268,12 @@ export class Renderer {
             transparent: true,
             opacity: 0,
             blending: THREE.AdditiveBlending,
+            depthTest: false,
             depthWrite: false,
           });
           const fMesh = new THREE.Mesh(new THREE.PlaneGeometry(PAD_SIZE, PAD_SIZE), fMat);
           fMesh.position.set(centerX - CANVAS_W / 2, baseY, 0.6); // in front of pad
+          fMesh.renderOrder = 3;
           this.playfield.add(fMesh);
           this.flushMeshes.push(fMesh);
         } else {
