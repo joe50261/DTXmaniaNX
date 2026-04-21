@@ -83,6 +83,7 @@ export class Game {
       }
     });
     this.xrControllers = new XrControllers(this.renderer.webgl, this.renderer.scene);
+    this.xrControllers.setPadsTexture(skin.pads);
     this.xrControllers.onHit((e) => this.handleLaneHit(e));
   }
 

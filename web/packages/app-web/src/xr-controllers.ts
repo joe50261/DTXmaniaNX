@@ -1,25 +1,28 @@
 import * as THREE from 'three';
 import { Lane, type LaneValue } from '@dtxmania/input';
+import { LANE_LAYOUT } from './lane-layout.js';
+import { PAD_ATLAS, PAD_SIZE } from './pad-atlas.js';
 
 /**
  * VR virtual drum kit.
  *
- * Ten circular pads are arranged in a semicircle around the player at waist
- * height (see `PAD_POSITIONS`). The Quest 3 Touch Plus controllers are
- * treated as drumsticks — a small sphere at each controller's grip position
- * acts as the stick tip.
+ * Ten square pads laid out horizontally in front of the player, matching the
+ * on-screen DTXMania lane order so the 3D layout reads exactly like the 2D
+ * playfield. Each pad is textured with its slice of the 7_pads.png atlas,
+ * so the player sees the same drum graphics as the HUD.
+ *
+ * Controllers are treated as drumsticks — a ~35 cm cylinder extends forward
+ * from each controller grip, and the tip of that cylinder is what's tested
+ * against the pad planes, not the grip itself. That matches the muscle
+ * memory of holding a real stick.
  *
  * Hit detection per frame:
- *   - Track each controller's previous and current grip position.
- *   - If vertical velocity is strongly downward (< HIT_VELOCITY_THRESHOLD_MPS)
- *     AND the grip crossed a pad's y plane this frame (was above, now below)
- *     AND the (x, z) projection is inside the pad's bounding circle,
- *     emit a lane-hit event for that pad and pulse the controller haptics.
- *   - Each pad has a short cool-down (`HIT_COOLDOWN_MS`) so a single big
- *     swing doesn't register twice from minor jitter.
- *
- * Button mappings are deliberately gone; the player's physical motion is the
- * input. Falling back to buttons would undo what makes VR feel like drums.
+ *   - Compute each controller's stick-tip world position (grip + forward*0.35).
+ *   - If the tip crossed a pad's y plane this frame (was above, now below)
+ *     AND vertical velocity is strongly downward (< HIT_VELOCITY_THRESHOLD_MPS)
+ *     AND the (x, z) projection at the crossing is inside the pad's AABB,
+ *     emit a lane-hit event and pulse the controller's haptics.
+ *   - 80 ms per-pad cool-down debounces single-swing jitter.
  */
 
 export interface XrLaneEvent {
@@ -33,48 +36,59 @@ export type XrLaneListener = (e: XrLaneEvent) => void;
 
 interface PadLayout {
   lane: LaneValue;
-  label: string;
-  color: number;
   /** World-space centre in metres relative to the playspace origin. */
   position: THREE.Vector3;
-  /** Radius of the pad disc in metres. */
-  radius: number;
+  /** Half-edge of the square pad (AABB half-extent in x and z). */
+  half: number;
 }
 
-// Laid out in a shallow arc in front of and around the player, seated-like
-// drum-kit framing. Coords: x = lateral (right positive), y = height from
-// floor, z = forward (negative = away from viewer). Values picked to keep
-// everything inside a ~1 m reach from a seated position.
-const PAD_POSITIONS: readonly PadLayout[] = [
-  // Cymbals high and to the sides
-  { lane: Lane.LC, label: 'LC', color: 0xe74c3c, position: new THREE.Vector3(-0.55, 1.25, -0.55), radius: 0.14 },
-  { lane: Lane.CY, label: 'CY', color: 0xff6b9d, position: new THREE.Vector3( 0.45, 1.25, -0.65), radius: 0.14 },
-  { lane: Lane.RD, label: 'RD', color: 0x7ed6df, position: new THREE.Vector3( 0.70, 1.15, -0.40), radius: 0.14 },
-  // HiHat upper-left
-  { lane: Lane.HH, label: 'HH', color: 0xf1c40f, position: new THREE.Vector3(-0.40, 1.05, -0.50), radius: 0.12 },
-  // Snare + toms at waist in a row
-  { lane: Lane.SD, label: 'SD', color: 0xecf0f1, position: new THREE.Vector3(-0.15, 0.95, -0.40), radius: 0.12 },
-  { lane: Lane.HT, label: 'HT', color: 0x3498db, position: new THREE.Vector3( 0.10, 1.05, -0.55), radius: 0.11 },
-  { lane: Lane.LT, label: 'LT', color: 0x1abc9c, position: new THREE.Vector3( 0.30, 1.00, -0.55), radius: 0.11 },
-  { lane: Lane.FT, label: 'FT', color: 0xe67e22, position: new THREE.Vector3( 0.50, 0.90, -0.45), radius: 0.12 },
-  // Pedals low (act as kick/LP — player strikes downward from above)
-  { lane: Lane.BD, label: 'BD', color: 0x2ecc71, position: new THREE.Vector3( 0.00, 0.30, -0.30), radius: 0.16 },
-  { lane: Lane.LP, label: 'LP', color: 0x9b59b6, position: new THREE.Vector3(-0.20, 0.30, -0.30), radius: 0.14 },
-];
-
+const STICK_LENGTH_M = 0.35;         // drumstick length from grip to tip
+const STICK_RADIUS_M = 0.01;
+const PAD_WORLD_SIZE_M = 0.22;        // each pad ≈ 22 cm square → 11 cm half-extent
+const PAD_Y_M = 0.95;                 // waist / lap level for a standing player
+const PAD_Z_M = -0.55;                // half a metre in front of viewer
+const PAD_ROW_WIDTH_M = 1.6;          // total lateral span of the ten pads
 const HIT_VELOCITY_THRESHOLD_MPS = 1.0;
 const HIT_COOLDOWN_MS = 80;
+
+/**
+ * Map the DTXMania-Type-A screen x (lane-layout.ts) into a world-space x so
+ * the 3D row order matches the 2D HUD order and spacing. The 2D lane band
+ * spans 263–851 px (LC left edge to RD right edge); we linearly remap that
+ * to ±PAD_ROW_WIDTH_M/2.
+ */
+function buildPadRow(): PadLayout[] {
+  const edgeLeft = LANE_LAYOUT[0]!.x;
+  const last = LANE_LAYOUT[LANE_LAYOUT.length - 1]!;
+  const edgeRight = last.x + last.width;
+  const pxCenter = (edgeLeft + edgeRight) / 2;
+  const pxRange = edgeRight - edgeLeft;
+  const pxToM = PAD_ROW_WIDTH_M / pxRange;
+  return LANE_LAYOUT.map((spec) => {
+    const laneCenterPx = spec.x + spec.width / 2;
+    const x = (laneCenterPx - pxCenter) * pxToM;
+    return {
+      lane: spec.lane,
+      position: new THREE.Vector3(x, PAD_Y_M, PAD_Z_M),
+      half: PAD_WORLD_SIZE_M / 2,
+    };
+  });
+}
 
 export class XrControllers {
   private listener: XrLaneListener | null = null;
   private readonly addedToScene: THREE.Object3D[] = [];
 
-  /** Previous-frame controller grip positions (metres, world space). */
-  private readonly prevPos: (THREE.Vector3 | null)[] = [null, null];
+  /** Stick-tip world position from the previous frame, per controller. */
+  private readonly prevTip: (THREE.Vector3 | null)[] = [null, null];
+  /** Reusable vectors to avoid per-frame allocations. */
+  private readonly tipForward = new THREE.Vector3(0, 0, -STICK_LENGTH_M);
+  private readonly tipWorld = new THREE.Vector3();
   private prevFrameMs: number | null = null;
-
-  /** Last hit timestamp per pad, to debounce. */
   private readonly lastHitMs = new Map<LaneValue, number>();
+
+  private readonly padLayout: PadLayout[] = buildPadRow();
+  private padsTexture: THREE.Texture | null = null;
 
   constructor(private readonly webgl: THREE.WebGLRenderer, private readonly scene: THREE.Scene) {}
 
@@ -82,46 +96,99 @@ export class XrControllers {
     this.listener = cb;
   }
 
-  start(): void {
-    // Drum pads — double-sided discs laid horizontally so the player can
-    // strike from above. Emissive-ish MeshBasicMaterial since we're not
-    // lighting the scene.
-    for (const pad of PAD_POSITIONS) {
-      const geom = new THREE.CircleGeometry(pad.radius, 32);
-      geom.rotateX(-Math.PI / 2); // face up
-      const mat = new THREE.MeshBasicMaterial({
-        color: pad.color,
-        transparent: true,
-        opacity: 0.55,
-        side: THREE.DoubleSide,
-      });
-      const mesh = new THREE.Mesh(geom, mat);
-      mesh.position.copy(pad.position);
-      this.scene.add(mesh);
-      this.addedToScene.push(mesh);
+  /** Supply the 7_pads.png atlas so the 3D pads can use the DTX sprites. */
+  setPadsTexture(tex: THREE.Texture | undefined): void {
+    this.padsTexture = tex ?? null;
+  }
 
-      // Rim ring for depth cue.
-      const ring = new THREE.Mesh(
-        new THREE.RingGeometry(pad.radius * 0.95, pad.radius, 32).rotateX(-Math.PI / 2),
-        new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
-      );
-      ring.position.copy(pad.position);
-      ring.position.y += 0.001;
-      this.scene.add(ring);
-      this.addedToScene.push(ring);
+  start(): void {
+    for (const pad of this.padLayout) {
+      this.scene.add(...this.buildPadMeshes(pad));
     }
 
-    // Controllers: grip pose + a small sphere as the "stick tip".
+    // Drumsticks: a thin cylinder forward from each grip, with a dark tip so
+    // the player can aim.
     for (let i = 0; i < 2; i++) {
       const grip = this.webgl.xr.getControllerGrip(i);
-      const tip = new THREE.Mesh(
-        new THREE.SphereGeometry(0.02, 16, 12),
-        new THREE.MeshBasicMaterial({ color: 0xffffff })
-      );
-      grip.add(tip);
+      grip.add(this.buildStick());
       this.scene.add(grip);
       this.addedToScene.push(grip);
     }
+  }
+
+  private buildPadMeshes(pad: PadLayout): THREE.Object3D[] {
+    const rect = PAD_ATLAS.find((r) => r.lane === pad.lane);
+    const out: THREE.Object3D[] = [];
+
+    // Pad face — a horizontal square with the atlas sprite on top. Falls back
+    // to a solid coloured plane if the skin didn't load.
+    let padMat: THREE.MeshBasicMaterial;
+    if (this.padsTexture && rect) {
+      const tex = this.padsTexture.clone();
+      tex.needsUpdate = true;
+      const atlasW = this.padsTexture.image?.width ?? 384;
+      const atlasH = this.padsTexture.image?.height ?? 288;
+      tex.repeat.set(PAD_SIZE / atlasW, PAD_SIZE / atlasH);
+      tex.offset.set(rect.sx / atlasW, 1 - (rect.sy + PAD_SIZE) / atlasH);
+      padMat = new THREE.MeshBasicMaterial({
+        map: tex,
+        transparent: true,
+        side: THREE.DoubleSide,
+      });
+    } else {
+      const laneColor = LANE_LAYOUT.find((l) => l.lane === pad.lane)?.color ?? '#888';
+      padMat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(laneColor),
+        transparent: true,
+        opacity: 0.65,
+        side: THREE.DoubleSide,
+      });
+    }
+    const geom = new THREE.PlaneGeometry(PAD_WORLD_SIZE_M, PAD_WORLD_SIZE_M);
+    geom.rotateX(-Math.PI / 2); // face up
+    const padMesh = new THREE.Mesh(geom, padMat);
+    padMesh.position.copy(pad.position);
+    out.push(padMesh);
+    this.addedToScene.push(padMesh);
+
+    // Thin white border so pads are legible against any bg.
+    const border = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.PlaneGeometry(PAD_WORLD_SIZE_M, PAD_WORLD_SIZE_M)),
+      new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 })
+    );
+    border.rotation.x = -Math.PI / 2;
+    border.position.copy(pad.position);
+    border.position.y += 0.001;
+    out.push(border);
+    this.addedToScene.push(border);
+
+    return out;
+  }
+
+  private buildStick(): THREE.Object3D {
+    const group = new THREE.Group();
+    // Cylinder default axis is along Y; rotate to align with -Z (forward).
+    const geom = new THREE.CylinderGeometry(
+      STICK_RADIUS_M,
+      STICK_RADIUS_M * 1.3,
+      STICK_LENGTH_M,
+      12
+    );
+    geom.rotateX(-Math.PI / 2);
+    // Shift so the grip-end is at local origin, tip at (0, 0, -STICK_LENGTH).
+    geom.translate(0, 0, -STICK_LENGTH_M / 2);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xdddddd });
+    const shaft = new THREE.Mesh(geom, mat);
+    group.add(shaft);
+
+    const tip = new THREE.Mesh(
+      new THREE.SphereGeometry(STICK_RADIUS_M * 1.6, 16, 12),
+      new THREE.MeshBasicMaterial({ color: 0x333333 })
+    );
+    tip.position.set(0, 0, -STICK_LENGTH_M);
+    group.add(tip);
+
+    return group;
   }
 
   /** Poll controller motion; call once per frame. */
@@ -133,37 +200,30 @@ export class XrControllers {
     const nowMs = performance.now();
     const dtMs = this.prevFrameMs === null ? 0 : nowMs - this.prevFrameMs;
     this.prevFrameMs = nowMs;
-    // Skip if dt is obviously bogus (first frame, long pause).
     if (dtMs <= 0 || dtMs > 100) {
-      for (let i = 0; i < 2; i++) {
-        this.prevPos[i] = this.capturePosition(i);
-      }
+      for (let i = 0; i < 2; i++) this.prevTip[i] = this.captureTip(i);
       return;
     }
     const dtSec = dtMs / 1000;
 
     for (let i = 0; i < 2; i++) {
-      const cur = this.capturePosition(i);
-      const prev = this.prevPos[i];
-      this.prevPos[i] = cur;
+      const cur = this.captureTip(i);
+      const prev = this.prevTip[i];
+      this.prevTip[i] = cur;
       if (!cur || !prev) continue;
 
       const vy = (cur.y - prev.y) / dtSec;
-      if (vy > -HIT_VELOCITY_THRESHOLD_MPS) continue; // not a downward strike
+      if (vy > -HIT_VELOCITY_THRESHOLD_MPS) continue;
 
-      // Which pad (if any) did this grip cross this frame?
-      for (const pad of PAD_POSITIONS) {
+      for (const pad of this.padLayout) {
         const padY = pad.position.y;
         const crossed = prev.y > padY && cur.y <= padY;
         if (!crossed) continue;
-        // Interpolated crossing point in (x, z) to avoid missing hits on the
-        // edge when the controller moves fast.
         const t = (prev.y - padY) / (prev.y - cur.y);
         const hx = prev.x + (cur.x - prev.x) * t;
         const hz = prev.z + (cur.z - prev.z) * t;
-        const dx = hx - pad.position.x;
-        const dz = hz - pad.position.z;
-        if (dx * dx + dz * dz > pad.radius * pad.radius) continue;
+        if (Math.abs(hx - pad.position.x) > pad.half) continue;
+        if (Math.abs(hz - pad.position.z) > pad.half) continue;
 
         const lastMs = this.lastHitMs.get(pad.lane) ?? -Infinity;
         if (nowMs - lastMs < HIT_COOLDOWN_MS) continue;
@@ -172,25 +232,25 @@ export class XrControllers {
         this.listener({
           lane: pad.lane,
           timestampMs: nowMs,
-          key: `xr-pad-${pad.label}`,
+          key: `xr-pad-${laneLabel(pad.lane)}`,
         });
         this.pulseHaptic(session, i);
-        break; // one hit per grip per frame
+        break;
       }
     }
   }
 
-  private capturePosition(index: number): THREE.Vector3 | null {
+  /** Stick tip in world space: grip position + (grip rotation applied to -Z * STICK_LENGTH). */
+  private captureTip(index: number): THREE.Vector3 | null {
     const grip = this.webgl.xr.getControllerGrip(index);
-    // Pose arrives via the WebXRManager updates; Object3D.position is set by
-    // Three.js when the grip has an active pose. If no pose yet, skip.
-    if (grip.position.lengthSq() === 0 && !grip.quaternion.x) return null;
-    return grip.position.clone();
+    if (grip.position.lengthSq() === 0 && grip.quaternion.x === 0 && grip.quaternion.y === 0 && grip.quaternion.z === 0) {
+      return null;
+    }
+    this.tipWorld.copy(this.tipForward).applyQuaternion(grip.quaternion).add(grip.position);
+    return this.tipWorld.clone();
   }
 
   private pulseHaptic(session: XRSession, controllerIdx: number): void {
-    // Match the controller index to an input source. Order of inputSources
-    // isn't guaranteed left-then-right, so we use handedness best-effort.
     let i = 0;
     for (const src of session.inputSources) {
       if (!src.gamepad) continue;
@@ -212,10 +272,26 @@ export class XrControllers {
   stop(): void {
     for (const o of this.addedToScene) this.scene.remove(o);
     this.addedToScene.length = 0;
-    this.prevPos[0] = null;
-    this.prevPos[1] = null;
+    this.prevTip[0] = null;
+    this.prevTip[1] = null;
     this.prevFrameMs = null;
     this.lastHitMs.clear();
     this.listener = null;
+  }
+}
+
+function laneLabel(lane: LaneValue): string {
+  switch (lane) {
+    case Lane.LC: return 'LC';
+    case Lane.HH: return 'HH';
+    case Lane.LP: return 'LP';
+    case Lane.SD: return 'SD';
+    case Lane.HT: return 'HT';
+    case Lane.BD: return 'BD';
+    case Lane.LT: return 'LT';
+    case Lane.FT: return 'FT';
+    case Lane.CY: return 'CY';
+    case Lane.RD: return 'RD';
+    default: return String(lane);
   }
 }
