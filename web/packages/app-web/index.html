@@ -171,7 +171,23 @@
   <body>
     <div id="app">
       <canvas id="game" width="1280" height="720"></canvas>
+      <button id="enter-xr" style="display:none">Enter VR</button>
     </div>
+    <style>
+      #enter-xr {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        z-index: 50;
+        font: 14px ui-monospace, SFMono-Regular, Menlo, monospace;
+        padding: 10px 16px;
+        background: #3355ff;
+        color: #fff;
+        border: 0;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+    </style>
     <div id="overlay">
       <div class="panel">
         <div class="title">DTXmania Web</div>
@@ -179,7 +195,6 @@
         <div class="status" id="status">Pick your Songs folder to begin.</div>
         <div class="buttons">
           <button id="pick-folder">Pick folder</button>
-          <button id="enter-xr" style="display:none">Enter VR</button>
           <button id="start-demo" class="ghost">Play bundled demo</button>
           <button id="forget-folder" class="ghost" style="display:none">Forget folder</button>
           <button id="calibrate" class="ghost">Calibrate latency</button>
