@@ -9,6 +9,7 @@ import {
   type Chip,
   type FileSystemBackend,
   type Song,
+  type SongEntry,
 } from '@dtxmania/dtx-core';
 import { AudioEngine, SampleBank } from '@dtxmania/audio-engine';
 import { KeyboardInput, type LaneHitEvent, type LaneValue } from '@dtxmania/input';
@@ -23,6 +24,7 @@ import {
 } from './renderer.js';
 import { channelToLane, LANE_LAYOUT, laneSpec } from './lane-layout.js';
 import { XrControllers } from './xr-controllers.js';
+import { VrMenu, type VrMenuPick } from './vr-menu.js';
 import { loadAudioOffsetMs } from './calibrate.js';
 
 const COUNTDOWN_MS = 2000;
@@ -75,6 +77,8 @@ export class Game {
   private onRestart: (() => void) | null = null;
   private bgmSources: AudioBufferSourceNode[] = [];
   private readonly xrControllers: XrControllers;
+  private readonly vrMenu: VrMenu;
+  private menuIsShown = false;
 
   constructor(private readonly canvas: HTMLCanvasElement, skin: SkinTextures = {}) {
     this.renderer = new Renderer(canvas, skin);
@@ -90,15 +94,44 @@ export class Game {
     this.xrControllers = new XrControllers(this.renderer.webgl, this.renderer.scene);
     this.xrControllers.setPadsTexture(skin.pads);
     this.xrControllers.onHit((e) => this.handleLaneHit(e));
+    this.vrMenu = new VrMenu(this.renderer.webgl, this.renderer.scene);
+    // Tick every frame, even before a chart is loaded, so the VR menu's
+    // raycaster + trigger polling keeps working while the player's still
+    // picking a song.
+    this.renderer.onFrame(() => this.tick());
   }
 
   /** Enter a WebXR immersive-vr session (Quest browser). Throws if unsupported. */
   async enterXR(onEnded: () => void): Promise<void> {
     await this.renderer.enterXR(() => {
       this.xrControllers.stop();
+      this.vrMenu.hide();
+      this.menuIsShown = false;
       onEnded();
     });
     this.xrControllers.start();
+  }
+
+  /**
+   * Show the in-VR song picker. Renderer.onFrame already ticks xrControllers
+   * and the menu every frame so raycast updates while this is visible.
+   */
+  showVrMenu(
+    songs: SongEntry[],
+    onPick: (pick: VrMenuPick) => void,
+    onExit: () => void
+  ): void {
+    this.menuIsShown = true;
+    this.vrMenu.show(songs, onPick, onExit);
+  }
+
+  hideVrMenu(): void {
+    this.menuIsShown = false;
+    this.vrMenu.hide();
+  }
+
+  get inXR(): boolean {
+    return this.renderer.inXR;
   }
 
   async loadAndStart(
@@ -153,13 +186,12 @@ export class Game {
     this.engine.startSongClock(COUNTDOWN_MS);
 
     this.scheduleBgm(this.song);
-
-    this.renderer.onFrame(() => this.tick());
   }
 
   stop(): void {
     this.input.detach();
     this.stopBgm();
+    this.vrMenu.dispose();
     this.renderer.dispose();
   }
 
@@ -256,6 +288,7 @@ export class Game {
 
   private tick(): void {
     this.xrControllers.tick();
+    this.vrMenu.tick();
     if (!this.song) return;
     const songTime = this.engine.songTimeMs();
 
