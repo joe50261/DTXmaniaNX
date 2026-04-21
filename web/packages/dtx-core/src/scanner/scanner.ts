@@ -313,3 +313,97 @@ function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
   return String(e);
 }
+
+/**
+ * Persisted scan-cache schema. Bumped whenever SongEntry, ChartEntry, or
+ * BoxNode shape changes in a way that would make an old cache produce
+ * wrong-looking rows. Consumers should throw-away caches whose version !==
+ * INDEX_CACHE_VERSION instead of trying to migrate.
+ */
+export const INDEX_CACHE_VERSION = 1;
+
+/** JSON-friendly mirror of the BoxNode / SongNode tree. Strips parent
+ * refs (they're reconstructed on load) so the shape is structured-
+ * cloneable and IDB-storable without cycles. */
+export interface SerializedIndex {
+  version: number;
+  rootPath: string;
+  root: SerializedBox;
+  errors: ScanError[];
+  /** Wall-clock epoch ms when the scan completed. UI can display it so
+   * the player knows how stale the cached view is. */
+  scannedAtMs: number;
+}
+
+interface SerializedBox {
+  kind: 'box';
+  name: string;
+  path: string;
+  children: Array<SerializedBox | SerializedSong>;
+}
+
+interface SerializedSong {
+  kind: 'song';
+  entry: SongEntry;
+}
+
+export function serializeIndex(index: SongIndex): SerializedIndex {
+  return {
+    version: INDEX_CACHE_VERSION,
+    rootPath: index.rootPath,
+    root: serializeBox(index.root),
+    errors: index.errors,
+    scannedAtMs: Date.now(),
+  };
+}
+
+function serializeBox(box: BoxNode): SerializedBox {
+  const children: SerializedBox['children'] = [];
+  for (const child of box.children) {
+    if (child.type === 'song') {
+      children.push({ kind: 'song', entry: child.entry });
+    } else {
+      children.push(serializeBox(child));
+    }
+  }
+  return { kind: 'box', name: box.name, path: box.path, children };
+}
+
+/**
+ * Rebuild a live SongIndex (with parent refs) from a persisted
+ * SerializedIndex. Throws if the version doesn't match the current
+ * code's INDEX_CACHE_VERSION — caller should clear the cache and do a
+ * fresh scan in that case.
+ */
+export function deserializeIndex(s: SerializedIndex): SongIndex {
+  if (s.version !== INDEX_CACHE_VERSION) {
+    throw new Error(
+      `scan cache version ${s.version} does not match current ${INDEX_CACHE_VERSION}`
+    );
+  }
+  const root = deserializeBox(s.root, null);
+  return {
+    rootPath: s.rootPath,
+    root,
+    songs: flattenSongs(root),
+    errors: s.errors,
+  };
+}
+
+function deserializeBox(s: SerializedBox, parent: BoxNode | null): BoxNode {
+  const box: BoxNode = {
+    type: 'box',
+    name: s.name,
+    path: s.path,
+    parent,
+    children: [],
+  };
+  for (const child of s.children) {
+    if (child.kind === 'song') {
+      box.children.push({ type: 'song', entry: child.entry, parent: box });
+    } else {
+      box.children.push(deserializeBox(child, box));
+    }
+  }
+  return box;
+}
