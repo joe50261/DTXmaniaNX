@@ -125,6 +125,11 @@ export class Game {
       this.xrControllers.stop();
       this.vrMenu.hide();
       this.menuIsShown = false;
+      // Restore playfield visibility: if the player exited via the Exit VR
+      // button, the VR menu was up and we'd hidden the playfield. Without
+      // this, the next enterXR would scale + position the playfield but
+      // leave it invisible — user sees an empty VR scene.
+      this.renderer.setPlayfieldVisible(true);
       onEnded();
     });
     this.xrControllers.start();
