@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VR Drum Kit Design — DTXmania Web</title>
+<style>
+  :root {
+    color-scheme: dark;
+  }
+  body {
+    margin: 0;
+    padding: 32px 40px 80px;
+    background: #0a0f18;
+    color: #e2e8f0;
+    font: 14px ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  h1 {
+    font-size: 22px;
+    margin: 0 0 6px;
+  }
+  .subtitle {
+    opacity: 0.55;
+    font-size: 12px;
+    margin-bottom: 28px;
+  }
+  h2 {
+    font-size: 14px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0.65;
+    margin: 36px 0 8px;
+  }
+  .hint {
+    opacity: 0.55;
+    font-size: 12px;
+    margin: 6px 0 14px;
+  }
+  .view {
+    position: relative;
+    background:
+      radial-gradient(ellipse at 50% 110%, rgba(80,120,255,0.08), transparent 70%),
+      #141b28;
+    border: 1px solid #2a3548;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .pad {
+    position: absolute;
+    background-image: url(./skin/7_pads.png);
+    background-size: 384px 288px;
+    background-repeat: no-repeat;
+    box-sizing: border-box;
+    image-rendering: pixelated;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));
+  }
+  .pad::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 50%;
+    pointer-events: none;
+  }
+  .pad.bd-face::after {
+    border-radius: 12px;
+  }
+  .pad .label {
+    position: absolute;
+    top: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 11px;
+    font-weight: bold;
+    color: #fff;
+    letter-spacing: 0.15em;
+    text-shadow: 0 0 4px #000, 0 0 4px #000;
+    white-space: nowrap;
+  }
+  .coord {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, calc(100% + 6px));
+    font-size: 9px;
+    opacity: 0.55;
+    white-space: nowrap;
+  }
+
+  /* Atlas cell offsets from pad-atlas.ts (each cell 96×96). */
+  .lc { background-position:    0px    0px; }
+  .hh { background-position:  -96px    0px; }
+  .cy { background-position: -192px    0px; }
+  .rd { background-position: -288px    0px; }
+  .sd { background-position:    0px  -96px; }
+  .ht { background-position:  -96px  -96px; }
+  .lt { background-position: -192px  -96px; }
+  .ft { background-position: -288px  -96px; }
+  .bd { background-position:    0px -192px; }
+  .lp { background-position:  -96px -192px; }
+
+  .player {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #ffeb3b;
+    border: 2px solid #1a1a1a;
+    z-index: 10;
+  }
+  .player-arrow {
+    position: absolute;
+    width: 2px;
+    background: linear-gradient(to top, rgba(255,235,59,0.9), rgba(255,235,59,0));
+    z-index: 9;
+  }
+  .floor {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: #2a3548;
+  }
+  .grid-line {
+    position: absolute;
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .axis-label {
+    position: absolute;
+    font-size: 10px;
+    opacity: 0.4;
+  }
+
+  table.legend {
+    border-collapse: collapse;
+    margin-top: 8px;
+    font-size: 12px;
+  }
+  table.legend th, table.legend td {
+    text-align: left;
+    padding: 4px 12px 4px 0;
+    border-bottom: 1px solid #1e2738;
+  }
+  table.legend th {
+    opacity: 0.6;
+    font-weight: normal;
+  }
+</style>
+</head>
+<body>
+
+<h1>VR 鼓組佈局設計</h1>
+<div class="subtitle">
+  DTXmania Web — WebXR 階段。貼圖直接從 <code>/skin/7_pads.png</code> atlas 取用，
+  對齊 on-screen HUD 視覺語言。玩家 = 黃點（朝 -Z 方向）。
+</div>
+
+<h2>Top-down view（俯視）</h2>
+<div class="hint">x = 左右 (m)，z = 前後 (m, 越負越遠)，1 m ≈ 400 px。</div>
+<div id="top-view" class="view" style="height: 480px;"></div>
+
+<h2>Side view（從玩家右側看）</h2>
+<div class="hint">z 橫軸（右=玩家位置、左=前方遠處），y 縱軸（floor=地板, 上方 = 高）。</div>
+<div id="side-view" class="view" style="height: 400px;"></div>
+
+<h2>Drummer POV（玩家視角，粗略透視投影）</h2>
+<div class="hint">x-y 投影，越靠前（|z| 小）的鼓畫得越大。未模擬頭部視差，僅示意。</div>
+<div id="front-view" class="view" style="height: 500px;"></div>
+
+<h2>座標 / 尺寸表</h2>
+<table class="legend">
+  <thead>
+    <tr><th>Lane</th><th>x (m)</th><th>y (m)</th><th>z (m)</th><th>尺寸</th><th>傾角</th><th>備註</th></tr>
+  </thead>
+  <tbody id="legend-rows"></tbody>
+</table>
+
+<script>
+  const PADS = [
+    { lane: 'lc', x: -0.65, y: 1.35, z: -0.60, px: 96,  tiltDeg: 10, shape: 'disc',  note: '左崩鈸，高位' },
+    { lane: 'hh', x: -0.50, y: 0.95, z: -0.40, px: 80,  tiltDeg: 0,  shape: 'disc',  note: 'hi-hat 左手' },
+    { lane: 'lp', x: -0.30, y: 0.20, z: -0.25, px: 54,  tiltDeg: 0,  shape: 'pedal', note: '地板 pedal' },
+    { lane: 'sd', x: -0.15, y: 0.80, z: -0.40, px: 88,  tiltDeg: 0,  shape: 'disc',  note: '小鼓' },
+    { lane: 'ht', x: -0.05, y: 1.00, z: -0.60, px: 70,  tiltDeg: 10, shape: 'disc',  note: 'hi tom' },
+    { lane: 'bd', x:  0.15, y: 0.35, z: -0.50, px: 128, tiltDeg: 0,  shape: 'face',  note: 'kick drum 正面' },
+    { lane: 'lt', x:  0.20, y: 1.00, z: -0.60, px: 70,  tiltDeg: 10, shape: 'disc',  note: 'low tom' },
+    { lane: 'ft', x:  0.50, y: 0.80, z: -0.50, px: 92,  tiltDeg: 0,  shape: 'disc',  note: 'floor tom' },
+    { lane: 'cy', x:  0.55, y: 1.35, z: -0.70, px: 96,  tiltDeg: 10, shape: 'disc',  note: '右崩鈸，高位' },
+    { lane: 'rd', x:  0.75, y: 1.15, z: -0.55, px: 112, tiltDeg: 8,  shape: 'disc',  note: 'ride cymbal' },
+  ];
+
+  function el(tag, cls, style) {
+    const d = document.createElement(tag);
+    if (cls) d.className = cls;
+    if (style) Object.assign(d.style, style);
+    return d;
+  }
+
+  function addPadSprite(container, pad, x, y, size, extras = {}) {
+    const p = el('div', `pad ${pad.lane}` + (pad.shape === 'face' ? ' bd-face' : ''));
+    p.style.left = (x - size / 2) + 'px';
+    p.style.top = (y - size / 2) + 'px';
+    p.style.width = size + 'px';
+    p.style.height = size + 'px';
+    if (extras.rotate) p.style.transform = `rotate(${extras.rotate}deg)`;
+    if (extras.opacity !== undefined) p.style.opacity = extras.opacity;
+    const label = el('span', 'label');
+    label.textContent = pad.lane.toUpperCase();
+    p.appendChild(label);
+    container.appendChild(p);
+    return p;
+  }
+
+  function renderTopView() {
+    const v = document.getElementById('top-view');
+    const W = v.clientWidth, H = v.clientHeight;
+    const scaleX = 400, scaleZ = 400;
+    const cx = W / 2;
+    const playerY = H - 70;
+
+    // grid
+    for (let m = -1; m <= 1; m += 0.5) {
+      const x = cx + m * scaleX;
+      const line = el('div', 'grid-line');
+      Object.assign(line.style, { left: x + 'px', top: 0, bottom: 0, width: '1px' });
+      v.appendChild(line);
+      const lbl = el('div', 'axis-label');
+      lbl.textContent = `x=${m}`;
+      Object.assign(lbl.style, { left: (x + 3) + 'px', bottom: '4px' });
+      v.appendChild(lbl);
+    }
+    for (let m = 0; m >= -1.2; m -= 0.3) {
+      const y = playerY + m * scaleZ;
+      if (y < 0 || y > H) continue;
+      const line = el('div', 'grid-line');
+      Object.assign(line.style, { top: y + 'px', left: 0, right: 0, height: '1px' });
+      v.appendChild(line);
+      const lbl = el('div', 'axis-label');
+      lbl.textContent = `z=${m.toFixed(1)}`;
+      Object.assign(lbl.style, { top: (y - 12) + 'px', left: '4px' });
+      v.appendChild(lbl);
+    }
+
+    // player mark + forward arrow
+    const arrow = el('div', 'player-arrow');
+    Object.assign(arrow.style, { left: cx + 'px', top: (playerY - 100) + 'px', height: '100px' });
+    v.appendChild(arrow);
+    const p = el('div', 'player');
+    Object.assign(p.style, { left: (cx - 7) + 'px', top: (playerY - 7) + 'px' });
+    v.appendChild(p);
+
+    for (const pad of PADS) {
+      const size = Math.round(pad.px * 0.9);
+      const x = cx + pad.x * scaleX;
+      const y = playerY + pad.z * scaleZ;
+      addPadSprite(v, pad, x, y, size);
+    }
+  }
+
+  function renderSideView() {
+    const v = document.getElementById('side-view');
+    const W = v.clientWidth, H = v.clientHeight;
+    const scaleY = 220, scaleZ = 450;
+    const floorY = H - 30;
+    const viewerX = W - 80;
+
+    // floor
+    const floor = el('div', 'floor');
+    floor.style.top = floorY + 'px';
+    v.appendChild(floor);
+
+    // y gridlines
+    for (let m = 0; m <= 1.6; m += 0.4) {
+      const y = floorY - m * scaleY;
+      const line = el('div', 'grid-line');
+      Object.assign(line.style, { top: y + 'px', left: 0, right: 0, height: '1px' });
+      v.appendChild(line);
+      const lbl = el('div', 'axis-label');
+      lbl.textContent = `y=${m.toFixed(1)}`;
+      Object.assign(lbl.style, { top: (y - 12) + 'px', left: '4px' });
+      v.appendChild(lbl);
+    }
+
+    // player mark (1.6m tall standing)
+    const p = el('div', 'player');
+    Object.assign(p.style, { left: (viewerX - 7) + 'px', top: (floorY - 1.6 * scaleY - 7) + 'px' });
+    v.appendChild(p);
+    const body = el('div');
+    Object.assign(body.style, {
+      position: 'absolute',
+      left: (viewerX - 1) + 'px',
+      top: (floorY - 1.6 * scaleY) + 'px',
+      width: '2px',
+      height: (1.6 * scaleY) + 'px',
+      background: 'rgba(255,235,59,0.45)',
+    });
+    v.appendChild(body);
+
+    for (const pad of PADS) {
+      const size = Math.round(pad.px * 0.75);
+      const x = viewerX + pad.z * scaleZ;
+      const y = floorY - pad.y * scaleY;
+      addPadSprite(v, pad, x, y, size, { rotate: pad.tiltDeg ? -pad.tiltDeg : 0 });
+    }
+  }
+
+  function renderFrontView() {
+    const v = document.getElementById('front-view');
+    const W = v.clientWidth, H = v.clientHeight;
+    const floorY = H - 30;
+    const scaleX = 700, scaleY = 260;
+    const cx = W / 2;
+
+    // floor
+    const floor = el('div', 'floor');
+    floor.style.top = floorY + 'px';
+    v.appendChild(floor);
+
+    // draw far-to-near so closer pads occlude farther ones
+    const sorted = PADS.slice().sort((a, b) => a.z - b.z);
+    for (const pad of sorted) {
+      const depth = -pad.z; // 0.2..0.8
+      const perspective = 0.9 / (0.55 + depth);
+      const size = Math.round(pad.px * perspective);
+      const x = cx + pad.x * scaleX * perspective;
+      const y = floorY - pad.y * scaleY;
+      addPadSprite(v, pad, x, y, size, { opacity: 0.6 + 0.4 * perspective });
+    }
+  }
+
+  function renderLegend() {
+    const tbody = document.getElementById('legend-rows');
+    for (const pad of PADS) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><strong>${pad.lane.toUpperCase()}</strong></td>
+        <td>${pad.x.toFixed(2)}</td>
+        <td>${pad.y.toFixed(2)}</td>
+        <td>${pad.z.toFixed(2)}</td>
+        <td>${pad.px}px</td>
+        <td>${pad.tiltDeg}°</td>
+        <td style="opacity:0.7">${pad.note}</td>`;
+      tbody.appendChild(tr);
+    }
+  }
+
+  renderTopView();
+  renderSideView();
+  renderFrontView();
+  renderLegend();
+</script>
+</body>
+</html>
