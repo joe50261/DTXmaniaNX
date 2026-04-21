@@ -1,45 +1,96 @@
 import * as THREE from 'three';
-import type { ChartEntry, SongEntry } from '@dtxmania/dtx-core';
+import type { BoxNode, ChartEntry, LibraryNode, SongEntry } from '@dtxmania/dtx-core';
 
 /**
- * In-VR song-selection panel.
+ * In-VR song-selection panel — DTXmania Stage 05 flavour.
  *
- * Renders the song / chart list to an offscreen 2D canvas, uploads it as a
- * CanvasTexture on a floating Three.js plane, and lets the player point one
- * of their controllers at a row and pull the trigger to pick it. The rest
- * of the shell UI (folder picker, calibration) stays DOM-only — those
- * require a desktop gesture or a keyboard, neither of which the headset
- * can fake.
+ * Renders a focused-center wheel to a 2D canvas, uploads it as a
+ * CanvasTexture onto a floating Three.js plane, and walks the BoxNode
+ * tree the scanner produces. Matches the desktop SongWheel's behaviour
+ * so a player can move between desktop and headset without relearning.
  *
- * Why re-render the canvas: anything displayed in VR has to be part of the
- * Three.js scene, DOM overlays aren't visible in the headset. We already
- * paint the gameplay HUD that way (see renderer.ts) so the pattern is
- * familiar.
+ * Controls:
+ *   Right thumbstick Y         focus up / down (edge-triggered at ±0.5)
+ *   Right thumbstick X         cycle difficulty on the focused song
+ *   Primary trigger            activate (play song / drill folder / back / random)
+ *   Squeeze                    back (same as focusing BACK then activating)
+ *   Any laser ray + trigger    still clicks chart buttons + Exit VR
+ *
+ * DOM overlays aren't visible inside an immersive session, so cover art +
+ * status need to be painted onto the same canvas. The host wires an
+ * async byte-loader (File System Access / fetch) + the shared preview
+ * audio player through callbacks so this class doesn't need to know
+ * about backends directly.
  */
 
 const PANEL_W_PX = 1024;
 const PANEL_H_PX = 768;
-const PANEL_WORLD_W = 1.6;   // metres
-const PANEL_WORLD_H = PANEL_W_PX ? (PANEL_WORLD_W * PANEL_H_PX) / PANEL_W_PX : 1.2;
+const PANEL_WORLD_W = 1.6;
+const PANEL_WORLD_H = (PANEL_WORLD_W * PANEL_H_PX) / PANEL_W_PX;
 const PANEL_POS = new THREE.Vector3(0, 1.45, -1.5);
 
-const ROW_H = 78;
-const CHART_BTN_W = 116;
-const CHART_BTN_H = 48;
+/** Number of wheel rows — odd so there's a single visual focus row. */
+const WHEEL_VISIBLE_ROWS = 7;
+const WHEEL_CENTER_OFFSET = (WHEEL_VISIBLE_ROWS - 1) / 2;
+const WHEEL_X = 40;
+const WHEEL_W = 560;
+const WHEEL_ROW_H = 74;
+const WHEEL_TOP = 130;
+
+const COVER_X = 620;
+const COVER_Y = WHEEL_TOP;
+const COVER_SIZE = 200;
+
+const STATUS_X = COVER_X;
+const STATUS_Y = COVER_Y + COVER_SIZE + 16;
+const STATUS_W = PANEL_W_PX - STATUS_X - 40;
+
+const EXIT_W = 200;
+const EXIT_H = 50;
+const EXIT_X = PANEL_W_PX - 40 - EXIT_W;
+const EXIT_Y = PANEL_H_PX - 70;
+
+const DIFFICULTY_SLOT_LABELS = ['NOVICE', 'REGULAR', 'EXPERT', 'MASTER', 'DTX'] as const;
+
+/** Stick magnitude past which we treat an axis as "pushed" — edge-detected
+ * so a held stick doesn't spam focus changes every frame. */
+const STICK_THRESHOLD = 0.55;
+/** Dead-band coming back: the stick must fall below this before the next
+ * edge can fire. Prevents jitter at the threshold. */
+const STICK_RELEASE = 0.3;
+
+type SyntheticEntry =
+  | { kind: 'back'; parent: BoxNode }
+  | { kind: 'random'; box: BoxNode };
+type DisplayEntry = { kind: 'node'; node: LibraryNode } | SyntheticEntry;
 
 interface ButtonHit {
-  action: 'chart';
-  song: SongEntry;
-  chart: ChartEntry;
+  /** Canvas rectangle. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** What happens on trigger/click. */
+  action:
+    | { kind: 'activate'; entryIdx: number }
+    | { kind: 'chart'; song: SongEntry; chart: ChartEntry }
+    | { kind: 'exit' };
 }
-interface ActionButtonHit {
-  action: 'exit';
-}
-type HitRecord = (ButtonHit | ActionButtonHit) & { x: number; y: number; w: number; h: number };
 
 export interface VrMenuPick {
   song: SongEntry;
   chart: ChartEntry;
+}
+
+/** Callbacks injected by main.ts so the menu can drive preview audio + load
+ * cover-art bytes without knowing about the FS backend. */
+export interface VrMenuDeps {
+  /** Resolve a path relative to the backend's root to raw bytes. */
+  loadBytes: (path: string) => Promise<ArrayBuffer>;
+  /** Join a folder + relative file path. Same helper as the scanner. */
+  joinPath: (folder: string, rel: string) => string;
+  /** Called when focus lands on a song — host starts/stops preview audio. */
+  onFocusedSong: (song: SongEntry | null) => void;
 }
 
 export class VrMenu {
@@ -48,18 +99,27 @@ export class VrMenu {
   private readonly texture: THREE.CanvasTexture;
   private readonly mesh: THREE.Mesh;
 
-  /** Laser pointers (one per controller) — visible only while menu is open. */
   private readonly lasers: THREE.Line[] = [];
-  /** Tip markers that follow each laser's hit point. */
   private readonly tipMarks: THREE.Mesh[] = [];
-  /** Per-controller previous trigger state, for edge-triggered clicks. */
   private readonly wasPressed: boolean[] = [false, false];
-  /** Bound XRInputSource per controller index, same as XrControllers'. */
+  private readonly wasSqueezed: boolean[] = [false, false];
   private readonly inputSources: (XRInputSource | null)[] = [null, null];
+  private readonly stickX = { pushed: 0 };
+  private readonly stickY = { pushed: 0 };
 
-  private hits: HitRecord[] = [];
+  private hits: ButtonHit[] = [];
   private hoveredIdx = -1;
-  private songs: SongEntry[] = [];
+
+  private root: BoxNode | null = null;
+  private currentBox: BoxNode | null = null;
+  private entries: DisplayEntry[] = [];
+  private focusIdx = 0;
+  private preferredSlot = 4;
+  /** Decoded cover art for the focused song. Cleared when focus moves off
+   * a song or onto a song without #PREIMAGE. */
+  private coverBitmap: ImageBitmap | null = null;
+  /** Latest cover-load request token; stale responses are dropped. */
+  private coverRequestId = 0;
   private onPick: ((pick: VrMenuPick) => void) | null = null;
   private onExit: (() => void) | null = null;
   private shown = false;
@@ -67,7 +127,14 @@ export class VrMenu {
   private readonly raycaster = new THREE.Raycaster();
   private readonly addedControllers: THREE.Group[] = [];
 
-  constructor(private readonly webgl: THREE.WebGLRenderer, private readonly scene: THREE.Scene) {
+  /** Supplied at show() time so the Game class doesn't need to know about
+   * backends at construction. Cleared on hide. */
+  private deps: VrMenuDeps | null = null;
+
+  constructor(
+    private readonly webgl: THREE.WebGLRenderer,
+    private readonly scene: THREE.Scene
+  ) {
     this.canvas = document.createElement('canvas');
     this.canvas.width = PANEL_W_PX;
     this.canvas.height = PANEL_H_PX;
@@ -88,16 +155,25 @@ export class VrMenu {
     this.mesh.visible = false;
   }
 
-  show(songs: SongEntry[], onPick: (pick: VrMenuPick) => void, onExit: () => void): void {
-    this.songs = songs;
+  show(
+    root: BoxNode,
+    onPick: (pick: VrMenuPick) => void,
+    onExit: () => void,
+    deps: VrMenuDeps
+  ): void {
+    this.root = root;
+    this.currentBox = root;
+    this.focusIdx = 0;
+    this.preferredSlot = 4;
+    this.rebuildEntries();
     this.onPick = onPick;
     this.onExit = onExit;
+    this.deps = deps;
     this.hoveredIdx = -1;
     this.shown = true;
     this.mesh.visible = true;
     if (!this.scene.children.includes(this.mesh)) this.scene.add(this.mesh);
 
-    // Spawn laser pointers + input-source capture.
     for (let i = 0; i < 2; i++) {
       const controller = this.webgl.xr.getController(i);
       const idx = i;
@@ -128,6 +204,9 @@ export class VrMenu {
       this.scene.add(tip);
       this.tipMarks.push(tip);
     }
+
+    this.emitFocusedSong();
+    void this.loadCoverForFocused();
     this.paint();
   }
 
@@ -136,6 +215,8 @@ export class VrMenu {
     this.mesh.visible = false;
     for (const l of this.lasers) l.visible = false;
     for (const t of this.tipMarks) t.visible = false;
+    this.deps?.onFocusedSong(null);
+    this.deps = null;
   }
 
   dispose(): void {
@@ -149,58 +230,62 @@ export class VrMenu {
     this.texture.dispose();
   }
 
-  /** Poll controller rays + trigger state; repaint if hover changed. */
+  /** Per-frame: poll laser rays (hover feedback + clickable buttons),
+   * right-hand thumbstick (focus / difficulty), trigger + squeeze (activate
+   * + back). Cheap no-op when the menu is hidden. */
   tick(): void {
     if (!this.shown) return;
     const session = this.webgl.xr.getSession();
     if (!session) return;
 
+    // Hover + ray-cast trigger-click
     let hovered = -1;
-    let firstHitPoint: THREE.Vector3 | null = null;
-    let firstHitCtrl = -1;
-
     for (let i = 0; i < 2; i++) {
       const controller = this.webgl.xr.getController(i);
       const laser = this.lasers[i];
       const tipMark = this.tipMarks[i];
       if (!laser || !tipMark) continue;
 
-      // World-space ray forward from controller.
       const origin = new THREE.Vector3();
       const direction = new THREE.Vector3(0, 0, -1);
       controller.getWorldPosition(origin);
       direction.applyQuaternion(controller.getWorldQuaternion(new THREE.Quaternion())).normalize();
       this.raycaster.set(origin, direction);
-      const hits = this.raycaster.intersectObject(this.mesh, false);
-      if (hits.length === 0) {
+      const hitsRay = this.raycaster.intersectObject(this.mesh, false);
+
+      let rayHitIdx = -1;
+      if (hitsRay.length > 0) {
+        const hit = hitsRay[0]!;
+        tipMark.visible = true;
+        tipMark.position.copy(hit.point);
+        const uv = hit.uv;
+        if (uv) {
+          const px = uv.x * PANEL_W_PX;
+          const py = (1 - uv.y) * PANEL_H_PX;
+          rayHitIdx = this.hits.findIndex(
+            (h) => px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h
+          );
+          if (rayHitIdx >= 0 && hovered === -1) hovered = rayHitIdx;
+        }
+      } else {
         tipMark.visible = false;
-        continue;
-      }
-      const hit = hits[0]!;
-      tipMark.visible = true;
-      tipMark.position.copy(hit.point);
-      if (firstHitPoint === null) {
-        firstHitPoint = hit.point;
-        firstHitCtrl = i;
       }
 
-      // UV → canvas pixel.
-      const uv = hit.uv;
-      if (!uv) continue;
-      const px = uv.x * PANEL_W_PX;
-      const py = (1 - uv.y) * PANEL_H_PX;
-      const idx = this.hits.findIndex(
-        (h) => px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h
-      );
-      if (idx >= 0 && hovered === -1) hovered = idx;
-
-      // Trigger edge detect for click.
       const src = this.inputSources[i];
       const pressed = src?.gamepad?.buttons[0]?.pressed ?? false;
-      if (pressed && !this.wasPressed[i] && idx >= 0) {
-        this.activate(idx);
+      const squeezed = src?.gamepad?.buttons[1]?.pressed ?? false;
+      if (pressed && !this.wasPressed[i]) {
+        if (rayHitIdx >= 0) {
+          this.invokeHit(this.hits[rayHitIdx]!);
+        } else {
+          this.activateFocused();
+        }
+      }
+      if (squeezed && !this.wasSqueezed[i]) {
+        this.goBack();
       }
       this.wasPressed[i] = pressed;
+      this.wasSqueezed[i] = squeezed;
     }
 
     if (hovered !== this.hoveredIdx) {
@@ -208,18 +293,203 @@ export class VrMenu {
       this.paint();
     }
 
-    // Silence unused variable lint.
-    void firstHitPoint;
-    void firstHitCtrl;
+    // Right thumbstick: Y → focus, X → difficulty. Edge-detect with a
+    // release dead-band so a slowly-moving stick only fires once per push.
+    const rightStick = this.rightThumbstick();
+    if (rightStick) {
+      const [sx, sy] = rightStick;
+      // Y: -1 = up on Quest. Match desktop ↑ arrow → focus up.
+      if (sy <= -STICK_THRESHOLD && this.stickY.pushed !== -1) {
+        this.stickY.pushed = -1;
+        this.moveFocus(-1);
+      } else if (sy >= STICK_THRESHOLD && this.stickY.pushed !== 1) {
+        this.stickY.pushed = 1;
+        this.moveFocus(1);
+      } else if (Math.abs(sy) < STICK_RELEASE) {
+        this.stickY.pushed = 0;
+      }
+      if (sx <= -STICK_THRESHOLD && this.stickX.pushed !== -1) {
+        this.stickX.pushed = -1;
+        this.cycleDifficulty(-1);
+      } else if (sx >= STICK_THRESHOLD && this.stickX.pushed !== 1) {
+        this.stickX.pushed = 1;
+        this.cycleDifficulty(1);
+      } else if (Math.abs(sx) < STICK_RELEASE) {
+        this.stickX.pushed = 0;
+      }
+    }
   }
 
-  private activate(idx: number): void {
-    const hit = this.hits[idx];
-    if (!hit) return;
-    if (hit.action === 'chart' && this.onPick) {
-      this.onPick({ song: hit.song, chart: hit.chart });
-    } else if (hit.action === 'exit' && this.onExit) {
-      this.onExit();
+  private rightThumbstick(): [number, number] | null {
+    for (const src of this.inputSources) {
+      if (!src || src.handedness !== 'right') continue;
+      const axes = src.gamepad?.axes;
+      if (!axes) continue;
+      // Quest layout: axes[2] = X, axes[3] = Y. axes[0]/[1] are the legacy
+      // trackpad which Touch controllers don't have but the spec still
+      // reserves. Fall back if only 2 axes are reported.
+      const x = axes[2] ?? axes[0] ?? 0;
+      const y = axes[3] ?? axes[1] ?? 0;
+      return [x, y];
+    }
+    return null;
+  }
+
+  private moveFocus(delta: number): void {
+    const n = this.entries.length;
+    if (n === 0) return;
+    this.focusIdx = ((this.focusIdx + delta) % n + n) % n;
+    this.emitFocusedSong();
+    void this.loadCoverForFocused();
+    this.paint();
+  }
+
+  private cycleDifficulty(delta: number): void {
+    const song = this.focusedSong();
+    if (!song || song.charts.length === 0) return;
+    const slots = song.charts.map((c) => c.slot).sort((a, b) => a - b);
+    const effective = this.chartForPreferred(song);
+    const curIdx = slots.indexOf(effective.slot);
+    const next = ((curIdx + delta) % slots.length + slots.length) % slots.length;
+    this.preferredSlot = slots[next]!;
+    this.paint();
+  }
+
+  private focusedSong(): SongEntry | null {
+    const entry = this.entries[this.focusIdx];
+    if (entry?.kind !== 'node') return null;
+    return entry.node.type === 'song' ? entry.node.entry : null;
+  }
+
+  private chartForPreferred(song: SongEntry): ChartEntry {
+    const sorted = [...song.charts].sort((a, b) => a.slot - b.slot);
+    const exact = sorted.find((c) => c.slot === this.preferredSlot);
+    if (exact) return exact;
+    const nextHigher = sorted.find((c) => c.slot >= this.preferredSlot);
+    return nextHigher ?? sorted[sorted.length - 1]!;
+  }
+
+  private activateFocused(): void {
+    const entry = this.entries[this.focusIdx];
+    if (!entry) return;
+    if (entry.kind === 'back') {
+      this.goBack();
+      return;
+    }
+    if (entry.kind === 'random') {
+      const song = this.pickRandomSongIn(entry.box);
+      if (song && this.onPick) {
+        this.onPick({ song, chart: this.chartForPreferred(song) });
+      }
+      return;
+    }
+    const node = entry.node;
+    if (node.type === 'box') {
+      this.enterBox(node);
+      return;
+    }
+    if (this.onPick) {
+      this.onPick({ song: node.entry, chart: this.chartForPreferred(node.entry) });
+    }
+  }
+
+  private enterBox(box: BoxNode): void {
+    this.currentBox = box;
+    this.focusIdx = 0;
+    this.rebuildEntries();
+    this.emitFocusedSong();
+    void this.loadCoverForFocused();
+    this.paint();
+  }
+
+  private goBack(): void {
+    const cur = this.currentBox;
+    if (!cur || !cur.parent) return;
+    const parent = cur.parent;
+    this.currentBox = parent;
+    this.rebuildEntries();
+    const returnIdx = this.entries.findIndex(
+      (e) => e.kind === 'node' && e.node.type === 'box' && e.node === cur
+    );
+    this.focusIdx = returnIdx >= 0 ? returnIdx : 0;
+    this.emitFocusedSong();
+    void this.loadCoverForFocused();
+    this.paint();
+  }
+
+  private pickRandomSongIn(box: BoxNode): SongEntry | null {
+    const songs: SongEntry[] = [];
+    const stack: LibraryNode[] = [box];
+    while (stack.length > 0) {
+      const node = stack.pop()!;
+      if (node.type === 'song') songs.push(node.entry);
+      else for (const c of node.children) stack.push(c);
+    }
+    if (songs.length === 0) return null;
+    return songs[Math.floor(Math.random() * songs.length)] ?? null;
+  }
+
+  private rebuildEntries(): void {
+    const box = this.currentBox;
+    this.entries = [];
+    if (!box) return;
+    if (box.parent) this.entries.push({ kind: 'back', parent: box.parent });
+    this.entries.push({ kind: 'random', box });
+    for (const child of box.children) this.entries.push({ kind: 'node', node: child });
+  }
+
+  private invokeHit(hit: ButtonHit): void {
+    switch (hit.action.kind) {
+      case 'activate':
+        // The row-level ray hit: move focus to it and activate.
+        this.focusIdx = hit.action.entryIdx;
+        this.emitFocusedSong();
+        void this.loadCoverForFocused();
+        this.activateFocused();
+        return;
+      case 'chart':
+        this.preferredSlot = hit.action.chart.slot;
+        if (this.onPick) this.onPick({ song: hit.action.song, chart: hit.action.chart });
+        return;
+      case 'exit':
+        if (this.onExit) this.onExit();
+        return;
+    }
+  }
+
+  private emitFocusedSong(): void {
+    this.deps?.onFocusedSong(this.focusedSong());
+  }
+
+  private async loadCoverForFocused(): Promise<void> {
+    const song = this.focusedSong();
+    const myId = ++this.coverRequestId;
+    if (!song?.preimage || !this.deps) {
+      this.coverBitmap?.close();
+      this.coverBitmap = null;
+      this.paint();
+      return;
+    }
+    const deps = this.deps;
+    const path = deps.joinPath(song.folderPath, song.preimage);
+    try {
+      const bytes = await deps.loadBytes(path);
+      if (myId !== this.coverRequestId) return;
+      const blob = new Blob([bytes.slice(0)]);
+      const bm = await createImageBitmap(blob);
+      if (myId !== this.coverRequestId) {
+        bm.close();
+        return;
+      }
+      this.coverBitmap?.close();
+      this.coverBitmap = bm;
+      this.paint();
+    } catch (e) {
+      if (myId !== this.coverRequestId) return;
+      console.warn('[vr-menu] cover load failed', path, e);
+      this.coverBitmap?.close();
+      this.coverBitmap = null;
+      this.paint();
     }
   }
 
@@ -232,95 +502,229 @@ export class VrMenu {
 
     // Header
     ctx.fillStyle = '#e2e8f0';
-    ctx.font = 'bold 34px ui-monospace, monospace';
+    ctx.font = 'bold 30px ui-monospace, monospace';
     ctx.textAlign = 'left';
-    ctx.fillText('Song Library', 40, 60);
-    ctx.font = '16px ui-monospace, monospace';
+    ctx.fillText('Song Library', 40, 52);
+
+    // Breadcrumb
+    ctx.font = '15px ui-monospace, monospace';
     ctx.fillStyle = '#94a3b8';
-    ctx.fillText(
-      'Point a controller at a difficulty button and press the trigger.',
-      40, 90
-    );
+    ctx.fillText(this.breadcrumbText(), 40, 86);
 
-    // Song rows
-    const listTop = 130;
-    const visibleRows = Math.floor((PANEL_H_PX - listTop - 80) / ROW_H);
-    const songs = this.songs.slice(0, visibleRows);
-    for (let i = 0; i < songs.length; i++) {
-      const song = songs[i]!;
-      const y = listTop + i * ROW_H;
-      // Title + meta
-      ctx.fillStyle = '#cbd5e1';
-      ctx.font = 'bold 22px ui-monospace, monospace';
-      ctx.fillText(song.title, 40, y + 28);
-      ctx.font = '14px ui-monospace, monospace';
-      ctx.fillStyle = '#64748b';
-      const meta: string[] = [];
-      if (song.artist) meta.push(song.artist);
-      if (song.bpm) meta.push(`BPM ${Math.round(song.bpm)}`);
-      if (meta.length) ctx.fillText(meta.join(' · '), 40, y + 52);
-
-      // Chart buttons
-      const btnY = y + 10;
-      let btnX = PANEL_W_PX - 40 - song.charts.length * (CHART_BTN_W + 10) + 10;
-      for (const chart of song.charts) {
-        const hitIdx = this.hits.length;
-        const isHover = hitIdx === this.hoveredIdx;
-        this.hits.push({
-          action: 'chart',
-          song,
-          chart,
-          x: btnX,
-          y: btnY,
-          w: CHART_BTN_W,
-          h: CHART_BTN_H,
-        });
-        ctx.fillStyle = isHover ? '#3355ff' : '#1e2a55';
-        ctx.fillRect(btnX, btnY, CHART_BTN_W, CHART_BTN_H);
-        ctx.fillStyle = '#fff';
-        ctx.font = 'bold 14px ui-monospace, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(chart.label, btnX + CHART_BTN_W / 2, btnY + 22);
-        if (chart.drumLevel !== undefined && chart.drumLevel > 0) {
-          ctx.font = '11px ui-monospace, monospace';
-          ctx.fillStyle = '#cbd5e1';
-          ctx.fillText(`L.${(chart.drumLevel / 100).toFixed(2)}`, btnX + CHART_BTN_W / 2, btnY + 38);
-        }
-        btnX += CHART_BTN_W + 10;
-      }
-      ctx.textAlign = 'left';
-
-      // Separator
-      ctx.fillStyle = 'rgba(255,255,255,0.05)';
-      ctx.fillRect(40, y + ROW_H - 2, PANEL_W_PX - 80, 1);
-    }
-
-    // Exit VR button, bottom-right
-    const exitW = 200;
-    const exitH = 50;
-    const exitX = PANEL_W_PX - 40 - exitW;
-    const exitY = PANEL_H_PX - 70;
-    const exitIdx = this.hits.length;
-    this.hits.push({ action: 'exit', x: exitX, y: exitY, w: exitW, h: exitH });
-    const exitHover = exitIdx === this.hoveredIdx;
-    ctx.fillStyle = exitHover ? '#dc2626' : '#374151';
-    ctx.fillRect(exitX, exitY, exitW, exitH);
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 16px ui-monospace, monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('Exit VR', exitX + exitW / 2, exitY + 32);
-
-    if (songs.length < this.songs.length) {
-      ctx.fillStyle = '#64748b';
-      ctx.font = '13px ui-monospace, monospace';
-      ctx.textAlign = 'left';
-      ctx.fillText(
-        `+${this.songs.length - songs.length} more — scroll not yet available in VR.`,
-        40,
-        PANEL_H_PX - 40
-      );
-    }
+    this.paintWheel();
+    this.paintCover();
+    this.paintStatusPanel();
+    this.paintFooter();
 
     this.texture.needsUpdate = true;
   }
+
+  private breadcrumbText(): string {
+    const chain: string[] = [];
+    for (let b: BoxNode | null = this.currentBox; b; b = b.parent) chain.push(b.name);
+    chain.reverse();
+    return chain.join('  ›  ');
+  }
+
+  private paintWheel(): void {
+    const ctx = this.ctx;
+    if (this.entries.length === 0) {
+      ctx.fillStyle = '#64748b';
+      ctx.font = '16px ui-monospace, monospace';
+      ctx.fillText('Empty folder.', WHEEL_X, WHEEL_TOP + 40);
+      return;
+    }
+    const n = this.entries.length;
+    const centerY = WHEEL_TOP + WHEEL_CENTER_OFFSET * WHEEL_ROW_H;
+    for (let i = 0; i < WHEEL_VISIBLE_ROWS; i++) {
+      const offset = i - WHEEL_CENTER_OFFSET;
+      const idx = ((this.focusIdx + offset) % n + n) % n;
+      const entry = this.entries[idx]!;
+      const y = WHEEL_TOP + i * WHEEL_ROW_H;
+      this.paintWheelRow(entry, y, offset === 0, idx);
+    }
+    void centerY;
+  }
+
+  private paintWheelRow(
+    entry: DisplayEntry,
+    y: number,
+    focused: boolean,
+    entryIdx: number
+  ): void {
+    const ctx = this.ctx;
+    const h = WHEEL_ROW_H - 4;
+
+    if (focused) {
+      ctx.fillStyle = 'rgba(80, 120, 255, 0.18)';
+      ctx.fillRect(WHEEL_X, y, WHEEL_W, h);
+      ctx.strokeStyle = 'rgba(80, 120, 255, 0.55)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(WHEEL_X + 0.5, y + 0.5, WHEEL_W - 1, h - 1);
+    }
+
+    // Row is also a clickable activate target for laser rays.
+    this.hits.push({
+      x: WHEEL_X,
+      y,
+      w: WHEEL_W,
+      h,
+      action: { kind: 'activate', entryIdx },
+    });
+
+    const title = rowTitle(entry);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = focused ? '#f1f5f9' : '#94a3b8';
+    ctx.font = focused
+      ? 'bold 22px ui-monospace, monospace'
+      : '16px ui-monospace, monospace';
+    ctx.fillText(title, WHEEL_X + 14, y + (focused ? 32 : 26));
+
+    if (!focused) return;
+    if (entry.kind !== 'node' || entry.node.type !== 'song') return;
+
+    // Focused song row: chart buttons (right-aligned inside the wheel col)
+    // overlaying the bottom half of the focused cell.
+    const song = entry.node.entry;
+    const selected = this.chartForPreferred(song);
+    const btnH = 32;
+    const btnW = 96;
+    const btnGap = 6;
+    const charts = [...song.charts].sort((a, b) => a.slot - b.slot);
+    let btnX = WHEEL_X + WHEEL_W - 14 - charts.length * (btnW + btnGap) + btnGap;
+    const btnY = y + h - btnH - 8;
+    for (const chart of charts) {
+      const isSelected = chart.slot === selected.slot;
+      ctx.fillStyle = isSelected ? '#3355ff' : '#1e2a55';
+      ctx.fillRect(btnX, btnY, btnW, btnH);
+      if (isSelected) {
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(btnX + 1, btnY + 1, btnW - 2, btnH - 2);
+      }
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(chart.label, btnX + btnW / 2, btnY + 14);
+      if (chart.drumLevel !== undefined && chart.drumLevel > 0) {
+        ctx.font = '11px ui-monospace, monospace';
+        ctx.fillStyle = '#cbd5e1';
+        ctx.fillText(`L.${(chart.drumLevel / 100).toFixed(2)}`, btnX + btnW / 2, btnY + 27);
+      }
+      this.hits.push({
+        x: btnX,
+        y: btnY,
+        w: btnW,
+        h: btnH,
+        action: { kind: 'chart', song, chart },
+      });
+      btnX += btnW + btnGap;
+    }
+    ctx.textAlign = 'left';
+  }
+
+  private paintCover(): void {
+    const ctx = this.ctx;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
+    ctx.fillRect(COVER_X, COVER_Y, COVER_SIZE, COVER_SIZE);
+    if (this.coverBitmap) {
+      ctx.drawImage(this.coverBitmap, COVER_X, COVER_Y, COVER_SIZE, COVER_SIZE);
+    } else {
+      ctx.fillStyle = '#334155';
+      ctx.font = '12px ui-monospace, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('(no cover)', COVER_X + COVER_SIZE / 2, COVER_Y + COVER_SIZE / 2);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  private paintStatusPanel(): void {
+    const ctx = this.ctx;
+    const song = this.focusedSong();
+    if (!song) return;
+
+    const slotsUsed = new Map<number, ChartEntry>();
+    for (const c of song.charts) slotsUsed.set(c.slot, c);
+    const selected = this.chartForPreferred(song);
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
+    ctx.fillRect(STATUS_X, STATUS_Y, STATUS_W, 310);
+
+    let y = STATUS_Y + 22;
+    ctx.font = '13px ui-monospace, monospace';
+    for (let slot = 0; slot < DIFFICULTY_SLOT_LABELS.length; slot++) {
+      const chart = slotsUsed.get(slot);
+      const isSelected = chart !== undefined && chart.slot === selected.slot;
+      if (isSelected) {
+        ctx.fillStyle = 'rgba(251, 191, 36, 0.15)';
+        ctx.fillRect(STATUS_X + 6, y - 14, STATUS_W - 12, 20);
+      }
+      ctx.fillStyle = chart ? '#cbd5e1' : '#475569';
+      ctx.textAlign = 'left';
+      ctx.fillText(chart?.label ?? DIFFICULTY_SLOT_LABELS[slot]!, STATUS_X + 12, y);
+      ctx.textAlign = 'right';
+      ctx.fillText(
+        chart?.drumLevel !== undefined && chart.drumLevel > 0
+          ? `L.${(chart.drumLevel / 100).toFixed(2)}`
+          : '—',
+        STATUS_X + STATUS_W - 12,
+        y
+      );
+      y += 24;
+    }
+
+    // Meta block
+    y += 8;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.fillRect(STATUS_X + 12, y - 10, STATUS_W - 24, 1);
+    y += 12;
+    ctx.textAlign = 'left';
+    const lines: Array<[string, string | undefined]> = [
+      ['Artist', song.artist],
+      ['Genre', song.genre],
+      ['BPM', song.bpm ? Math.round(song.bpm).toString() : undefined],
+    ];
+    for (const [k, v] of lines) {
+      if (!v) continue;
+      ctx.fillStyle = '#64748b';
+      ctx.fillText(k, STATUS_X + 12, y);
+      ctx.fillStyle = '#cbd5e1';
+      ctx.fillText(truncate(v, 24), STATUS_X + 70, y);
+      y += 20;
+    }
+  }
+
+  private paintFooter(): void {
+    const ctx = this.ctx;
+    ctx.fillStyle = '#64748b';
+    ctx.font = '13px ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(
+      'Right stick: browse / difficulty   ·   Trigger: play / enter   ·   Squeeze: back',
+      40,
+      PANEL_H_PX - 40
+    );
+
+    // Exit VR
+    const hovered = this.hoveredIdx >= 0 && this.hits[this.hoveredIdx]?.action.kind === 'exit';
+    ctx.fillStyle = hovered ? '#dc2626' : '#374151';
+    ctx.fillRect(EXIT_X, EXIT_Y, EXIT_W, EXIT_H);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 16px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Exit VR', EXIT_X + EXIT_W / 2, EXIT_Y + 32);
+    this.hits.push({ x: EXIT_X, y: EXIT_Y, w: EXIT_W, h: EXIT_H, action: { kind: 'exit' } });
+  }
+}
+
+function rowTitle(entry: DisplayEntry): string {
+  if (entry.kind === 'back') return `⬆  ..  (${entry.parent.name})`;
+  if (entry.kind === 'random') return '🎲  Random';
+  const node = entry.node;
+  if (node.type === 'box') return `📁  ${node.name}`;
+  return node.entry.title;
+}
+
+function truncate(s: string, max: number): string {
+  return s.length <= max ? s : s.slice(0, max - 1) + '…';
 }

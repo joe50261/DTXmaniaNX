@@ -28,7 +28,8 @@ import {
 } from './renderer.js';
 import { channelToLane, LANE_LAYOUT, laneSpec } from './lane-layout.js';
 import { XrControllers } from './xr-controllers.js';
-import { VrMenu, type VrMenuPick } from './vr-menu.js';
+import { VrMenu, type VrMenuDeps, type VrMenuPick } from './vr-menu.js';
+import type { BoxNode } from '@dtxmania/dtx-core';
 import { loadAudioOffsetMs } from './calibrate.js';
 
 const COUNTDOWN_MS = 2000;
@@ -152,9 +153,10 @@ export class Game {
    * and the menu every frame so raycast updates while this is visible.
    */
   showVrMenu(
-    songs: SongEntry[],
+    root: BoxNode,
     onPick: (pick: VrMenuPick) => void,
-    onExit: () => void
+    onExit: () => void,
+    deps: VrMenuDeps
   ): void {
     this.menuIsShown = true;
     // Hide playfield while the menu is up. Without this the result HUD +
@@ -162,7 +164,7 @@ export class Game {
     // the menu panel (renderOrder 0) and the player can't see what they
     // picked — and thinks auto-return / pad-hit-skip "didn't fire".
     this.renderer.setPlayfieldVisible(false);
-    this.vrMenu.show(songs, onPick, onExit);
+    this.vrMenu.show(root, onPick, onExit, deps);
   }
 
   hideVrMenu(): void {

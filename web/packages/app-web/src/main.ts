@@ -2,7 +2,14 @@
 import { installOnScreenLog } from './on-screen-log.js';
 installOnScreenLog();
 
-import { dirname, joinPath, SongScanner, type ChartEntry, type SongEntry } from '@dtxmania/dtx-core';
+import {
+  dirname,
+  joinPath,
+  SongScanner,
+  type BoxNode,
+  type ChartEntry,
+  type SongEntry,
+} from '@dtxmania/dtx-core';
 import { Game, type GameFsContext } from './game.js';
 import { SongWheel } from './song-wheel.js';
 import { PreviewPlayer } from '@dtxmania/audio-engine';
@@ -185,6 +192,7 @@ function clearPreimage(): void {
 interface Library {
   handle: FileSystemDirectoryHandle;
   backend: HandleFileSystemBackend;
+  root: BoxNode;
   songs: SongEntry[];
 }
 let library: Library | null = null;
@@ -314,7 +322,7 @@ async function scanIntoLibrary(handle: FileSystemDirectoryHandle): Promise<void>
   const backend = new HandleFileSystemBackend(handle);
   const scanner = new SongScanner(backend);
   const index = await scanner.scan('');
-  library = { handle, backend, songs: index.songs };
+  library = { handle, backend, root: index.root, songs: index.songs };
   pickBtn.textContent = 'Change folder';
   forgetBtn.style.display = 'inline-block';
   setStatus(`Found ${index.songs.length} song(s) in "${handle.name}".`);
@@ -407,13 +415,14 @@ async function launchGame(dtxText: string, fs?: GameFsContext): Promise<void> {
 
 function showVrMenuForActive(fs?: GameFsContext): void {
   if (!activeGame || !library) return;
+  const lib = library;
   activeGame.showVrMenu(
-    library.songs,
+    lib.root,
     (pick) => {
       run(async () => {
-        const text = await library!.backend.readText(pick.chart.chartPath);
+        const text = await lib.backend.readText(pick.chart.chartPath);
         await launchGame(text, {
-          backend: library!.backend,
+          backend: lib.backend,
           folder: dirname(pick.chart.chartPath),
         });
       });
@@ -424,6 +433,16 @@ function showVrMenuForActive(fs?: GameFsContext): void {
       // Exit button → end the XR session; enterXR's onEnded handler cleans up.
       const session = (activeGame as Game).display.webgl.xr.getSession();
       session?.end().catch(() => {});
+    },
+    {
+      loadBytes: (path) => lib.backend.readFile(path),
+      joinPath: (folder, rel) => joinPath(folder, rel),
+      onFocusedSong: (song) => {
+        // Reuse the desktop preview pipeline — schedulePreview already
+        // handles the 600 ms debounce and stop-on-replace, so VR wheel
+        // scrolling gets the same feel.
+        schedulePreview(song);
+      },
     }
   );
 }
