@@ -376,7 +376,15 @@ async function scanIntoLibrary(
   }
 
   setStatus(`Scanning "${handle.name}"…`);
-  const scanner = new SongScanner(backend);
+  const scanner = new SongScanner(backend, {
+    onMetaProgress: (done, total) => {
+      // Keep the update throttled enough that DOM reflow doesn't steal
+      // frames from the scan itself on a slow headset browser.
+      if (done === 0 || done === total || done % 3 === 0) {
+        setStatus(`Scanning "${handle.name}"… ${done}/${total}`);
+      }
+    },
+  });
   const index = await scanner.scan('');
   applyLibrary(handle, backend, index);
   setStatus(`Scanned ${index.songs.length} song(s) in "${handle.name}".`);
