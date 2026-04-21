@@ -5,6 +5,8 @@ import { HandleFileSystemBackend } from './fs/handle-backend.js';
 import { clearRootHandle, loadRootHandle, saveRootHandle } from './fs/handle-store.js';
 import { loadSkin } from './skin.js';
 import type { SkinTextures } from './renderer.js';
+import { loadAudioOffsetMs, runCalibration, saveAudioOffsetMs } from './calibrate.js';
+import { AudioEngine } from '@dtxmania/audio-engine';
 
 const canvas = requireEl<HTMLCanvasElement>('game');
 const overlay = requireEl<HTMLDivElement>('overlay');
@@ -12,6 +14,7 @@ const statusEl = requireEl<HTMLDivElement>('status');
 const pickBtn = requireEl<HTMLButtonElement>('pick-folder');
 const demoBtn = requireEl<HTMLButtonElement>('start-demo');
 const forgetBtn = requireEl<HTMLButtonElement>('forget-folder');
+const calibrateBtn = requireEl<HTMLButtonElement>('calibrate');
 const xrBtn = requireEl<HTMLButtonElement>('enter-xr');
 const songListEl = requireEl<HTMLDivElement>('song-list');
 const scanErrorsEl = requireEl<HTMLDivElement>('scan-errors');
@@ -45,7 +48,34 @@ forgetBtn.addEventListener('click', () =>
   })
 );
 
+calibrateBtn.addEventListener('click', () =>
+  run(async () => {
+    // The AudioEngine the calibration routine drives is separate from the
+    // Game's engine (which only exists while a chart is playing). That's
+    // fine — AudioContexts share the same destination within the tab.
+    const engine = new AudioEngine();
+    const offset = await runCalibration(engine, document.body);
+    if (offset !== null) {
+      saveAudioOffsetMs(offset);
+      setStatus(`Audio offset saved: ${offset.toFixed(1)} ms (${offset > 0 ? 'later' : 'earlier'} than beat).`);
+      refreshCalibrateLabel();
+    } else {
+      setStatus('Calibration cancelled.');
+    }
+  })
+);
+
+refreshCalibrateLabel();
+
 void init();
+
+function refreshCalibrateLabel(): void {
+  const offset = loadAudioOffsetMs();
+  calibrateBtn.textContent =
+    offset === 0
+      ? 'Calibrate latency'
+      : `Calibrate latency (${offset >= 0 ? '+' : ''}${offset.toFixed(0)} ms)`;
+}
 
 async function init(): Promise<void> {
   if (!('showDirectoryPicker' in window)) {
