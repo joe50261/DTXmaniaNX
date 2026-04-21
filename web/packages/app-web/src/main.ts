@@ -2,9 +2,10 @@
 import { installOnScreenLog } from './on-screen-log.js';
 installOnScreenLog();
 
-import { dirname, SongScanner, type ChartEntry, type SongEntry } from '@dtxmania/dtx-core';
+import { dirname, joinPath, SongScanner, type ChartEntry, type SongEntry } from '@dtxmania/dtx-core';
 import { Game, type GameFsContext } from './game.js';
 import { SongWheel } from './song-wheel.js';
+import { PreviewPlayer } from '@dtxmania/audio-engine';
 import { HandleFileSystemBackend } from './fs/handle-backend.js';
 import { clearRootHandle, loadRootHandle, saveRootHandle } from './fs/handle-store.js';
 import { loadSkin } from './skin.js';
@@ -23,6 +24,7 @@ const autoKickBtn = requireEl<HTMLButtonElement>('toggle-autokick');
 const xrBtn = requireEl<HTMLButtonElement>('enter-xr');
 const wheelEl = requireEl<HTMLDivElement>('song-wheel');
 const statusPanelEl = requireEl<HTMLDivElement>('status-panel');
+const preimageEl = requireEl<HTMLImageElement>('preimage-panel');
 const scanErrorsEl = requireEl<HTMLDivElement>('scan-errors');
 
 const songWheel = new SongWheel(wheelEl, statusPanelEl, {
@@ -31,6 +33,7 @@ const songWheel = new SongWheel(wheelEl, statusPanelEl, {
   isActive: () => overlay.style.display !== 'none',
 });
 songWheel.attachKeyboard();
+songWheel.onFocusChanged(() => onFocusChanged());
 
 // Preload skin PNGs once at boot. Games created later reuse these textures.
 const skinPromise: Promise<SkinTextures> = loadSkin(import.meta.env.BASE_URL);
@@ -53,6 +56,74 @@ try {
 } catch (e) {
   // WebGL unavailable — page still usable for non-game actions if any.
   console.warn('Game init failed', e);
+}
+
+// Song-select preview audio: rides on the Game's AudioContext so a single
+// user gesture resumes both, and the browser's AudioContext cap doesn't
+// bite. The loader closes over `library` so switching folders picks up
+// the new backend automatically.
+const previewPlayer: PreviewPlayer | null = activeGame
+  ? new PreviewPlayer(activeGame.audioContext, async (path) => {
+      if (!library) throw new Error('no library loaded');
+      return library.backend.readFile(path);
+    })
+  : null;
+
+/** Cancels an outstanding 600 ms preview-start timer. DTXmania's canonical
+ * delay — prevents preview thrash while the player scrolls the wheel. */
+let pendingPreviewTimer: number | null = null;
+/** Object URL currently assigned to preimageEl; revoked when replaced. */
+let currentPreimageUrl: string | null = null;
+
+function onFocusChanged(): void {
+  const song = songWheel.focusedSong();
+  schedulePreview(song);
+  void updatePreimage(song);
+}
+
+function schedulePreview(song: SongEntry | null): void {
+  if (pendingPreviewTimer !== null) {
+    clearTimeout(pendingPreviewTimer);
+    pendingPreviewTimer = null;
+  }
+  previewPlayer?.stop(200);
+  if (!song?.preview || !library || !previewPlayer) return;
+  const path = joinPath(song.folderPath, song.preview);
+  pendingPreviewTimer = window.setTimeout(() => {
+    pendingPreviewTimer = null;
+    void previewPlayer.play(path, 0.7);
+  }, 600);
+}
+
+async function updatePreimage(song: SongEntry | null): Promise<void> {
+  if (!song?.preimage || !library) {
+    clearPreimage();
+    return;
+  }
+  const path = joinPath(song.folderPath, song.preimage);
+  try {
+    const buf = await library.backend.readFile(path);
+    // focus may have moved while we were loading — abort if stale
+    if (songWheel.focusedSong() !== song) return;
+    const blob = new Blob([buf.slice(0)]);
+    const url = URL.createObjectURL(blob);
+    if (currentPreimageUrl) URL.revokeObjectURL(currentPreimageUrl);
+    currentPreimageUrl = url;
+    preimageEl.src = url;
+    preimageEl.classList.add('visible');
+  } catch (e) {
+    console.warn('[preimage] load failed', path, e);
+    clearPreimage();
+  }
+}
+
+function clearPreimage(): void {
+  preimageEl.classList.remove('visible');
+  preimageEl.removeAttribute('src');
+  if (currentPreimageUrl) {
+    URL.revokeObjectURL(currentPreimageUrl);
+    currentPreimageUrl = null;
+  }
 }
 
 interface Library {
@@ -260,6 +331,13 @@ async function launchGame(dtxText: string, fs?: GameFsContext): Promise<void> {
       },
     };
   }
+  // Drop any in-flight preview audio + cover art so gameplay audio isn't
+  // mixed against it and the object URL gets freed.
+  if (pendingPreviewTimer !== null) {
+    clearTimeout(pendingPreviewTimer);
+    pendingPreviewTimer = null;
+  }
+  previewPlayer?.stop(120);
   try {
     game.hideVrMenu();
     await game.loadAndStart(dtxText, startOpts);

@@ -180,6 +180,13 @@ export class Game {
     return this.song !== null;
   }
 
+  /** Expose the shared AudioContext so the song-select preview player can
+   * ride on the same AC (avoids hitting the browser's low cap on
+   * concurrent AudioContexts, and means one user gesture resumes both). */
+  get audioContext(): AudioContext {
+    return this.engine.ctx;
+  }
+
   /**
    * Inject skin textures after construction. Lets main.ts build the Game
    * eagerly (so Enter-VR stays on a synchronous gesture path) and apply
