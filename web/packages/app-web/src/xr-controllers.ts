@@ -361,7 +361,10 @@ export class XrControllers {
     this.lastHitMs.clear();
     this.inputSources[0] = null;
     this.inputSources[1] = null;
-    this.listener = null;
+    // Intentionally NOT nulling this.listener: Game wires it once at
+    // construction via onHit(), and tick() already bails early when no
+    // XR session is active, so there's no stale-dispatch risk. Clearing
+    // it here would break re-enter-VR — start() doesn't re-subscribe.
   }
 }
 
