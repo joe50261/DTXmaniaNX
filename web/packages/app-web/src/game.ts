@@ -68,6 +68,8 @@ export class Game {
   private lastBufferByLane = new Map<LaneValue, { buffer: AudioBuffer; wavId: number }>();
   private tracker = new ScoreTracker(0);
   private status: 'idle' | 'playing' | 'finished' = 'idle';
+  /** Once-per-chart latch so the VR auto-return timer doesn't re-fire. */
+  private finishedAutoHandled = false;
   private judgmentFlash: JudgmentFlash | null = null;
   private hitFlashes: HitFlash[] = [];
   /** Life / skill gauge, 0..1. Filled by hits, drained by misses. Starts at 0.5 so the player has headroom. */
@@ -183,6 +185,7 @@ export class Game {
     this.tracker = new ScoreTracker(this.playables.length);
 
     this.status = 'playing';
+    this.finishedAutoHandled = false;
     this.engine.startSongClock(COUNTDOWN_MS);
 
     this.scheduleBgm(this.song);
@@ -316,6 +319,21 @@ export class Game {
     // Game-over check: song finished + small tail for last miss detection.
     if (songTime > this.song.durationMs + 500 && this.status === 'playing') {
       this.status = 'finished';
+    }
+
+    // In VR there's no keyboard, so the player can't press Esc to return
+    // to the menu like on desktop. Auto-fire onRestart ~2 s after FINISHED
+    // shows so the VR song-picker appears on its own. The latch keeps it
+    // to one call per chart.
+    if (
+      this.status === 'finished' &&
+      !this.finishedAutoHandled &&
+      this.renderer.inXR &&
+      this.onRestart
+    ) {
+      this.finishedAutoHandled = true;
+      const cb = this.onRestart;
+      setTimeout(() => cb(), 2000);
     }
 
     this.hitFlashes = this.hitFlashes.filter((f) => songTime - f.spawnedMs < 400);
