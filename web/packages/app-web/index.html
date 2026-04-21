@@ -91,42 +91,68 @@
         font-size: 12px;
         line-height: 1.5;
       }
-      #song-list {
+      #song-select {
+        display: grid;
+        grid-template-columns: 1fr 200px;
+        gap: 14px;
         margin-top: 16px;
-        max-height: 56vh;
-        overflow-y: auto;
         border-top: 1px solid rgba(255, 255, 255, 0.08);
+        padding-top: 14px;
       }
-      .song {
-        padding: 10px 4px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      #song-wheel {
+        min-height: 44vh;
+        max-height: 52vh;
         display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
+        flex-direction: column;
+        justify-content: center;
+        gap: 2px;
       }
-      .song-head {
-        flex: 1;
-        min-width: 0;
+      .wheel-empty {
+        opacity: 0.5;
+        font-size: 14px;
+        text-align: center;
+        padding: 20px 0;
       }
-      .song-title {
+      .wheel-row {
+        padding: 5px 10px;
+        border-radius: 4px;
+        overflow: hidden;
+        transition: background 80ms linear, opacity 80ms linear;
+        cursor: pointer;
+      }
+      .wheel-row.wheel-off-1 { opacity: 0.65; font-size: 13px; }
+      .wheel-row.wheel-off-2 { opacity: 0.40; font-size: 12px; }
+      .wheel-row.wheel-off-3 { opacity: 0.22; font-size: 11px; }
+      .wheel-row.wheel-focus {
+        background: rgba(80, 120, 255, 0.18);
+        border: 1px solid rgba(80, 120, 255, 0.45);
+        opacity: 1;
+        cursor: default;
+        padding: 10px 12px;
+      }
+      .wheel-title {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
         font-size: 14px;
       }
-      .song-meta {
+      .wheel-focus .wheel-title {
+        font-size: 18px;
+        font-weight: bold;
+        margin-bottom: 4px;
+      }
+      .wheel-meta {
         opacity: 0.55;
         font-size: 11px;
-        margin-top: 2px;
+        margin-bottom: 6px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      .chart-row {
+      .wheel-charts {
         display: flex;
         gap: 6px;
-        flex-shrink: 0;
+        flex-wrap: wrap;
       }
       .chart-btn {
         font-size: 12px !important;
@@ -137,13 +163,75 @@
         align-items: center;
         gap: 1px;
         line-height: 1.1;
+        border: 1px solid transparent;
       }
       .chart-btn:hover {
+        background: #3355ff !important;
+      }
+      .chart-btn.selected {
+        border-color: #fbbf24;
         background: #3355ff !important;
       }
       .chart-btn .level {
         font-size: 10px;
         opacity: 0.7;
+      }
+      #status-panel {
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.04);
+        border-radius: 6px;
+        font-size: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .status-diffs {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+      .status-diff {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding: 3px 6px;
+        border-radius: 3px;
+      }
+      .status-diff.selected {
+        background: rgba(251, 191, 36, 0.15);
+      }
+      .status-diff.empty {
+        opacity: 0.35;
+      }
+      .diff-label { font-size: 11px; letter-spacing: 0.05em; }
+      .diff-level { font-variant-numeric: tabular-nums; opacity: 0.85; }
+      .status-meta {
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        padding-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .status-meta-line {
+        display: flex;
+        gap: 8px;
+        font-size: 11px;
+      }
+      .status-meta-key {
+        opacity: 0.55;
+        min-width: 44px;
+        flex-shrink: 0;
+      }
+      .status-meta-val {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #wheel-help {
+        margin-top: 10px;
+        font-size: 11px;
+        opacity: 0.5;
+        text-align: center;
       }
       .errors {
         margin-top: 10px;
@@ -197,7 +285,11 @@
           <button id="calibrate" class="ghost">Calibrate latency</button>
           <button id="toggle-autokick" class="ghost">Auto-kick: OFF</button>
         </div>
-        <div id="song-list"></div>
+        <div id="song-select">
+          <div id="song-wheel"></div>
+          <div id="status-panel"></div>
+        </div>
+        <div id="wheel-help">↑ ↓ browse · ← → difficulty · Enter play</div>
         <div class="errors" id="scan-errors"></div>
         <div class="hint">
           Keys: S/D = Snare, Space = Bass, H = HiHat, J = Left Cymbal, F = Crash,

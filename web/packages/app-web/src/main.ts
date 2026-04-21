@@ -4,6 +4,7 @@ installOnScreenLog();
 
 import { dirname, SongScanner, type ChartEntry, type SongEntry } from '@dtxmania/dtx-core';
 import { Game, type GameFsContext } from './game.js';
+import { SongWheel } from './song-wheel.js';
 import { HandleFileSystemBackend } from './fs/handle-backend.js';
 import { clearRootHandle, loadRootHandle, saveRootHandle } from './fs/handle-store.js';
 import { loadSkin } from './skin.js';
@@ -20,8 +21,16 @@ const forgetBtn = requireEl<HTMLButtonElement>('forget-folder');
 const calibrateBtn = requireEl<HTMLButtonElement>('calibrate');
 const autoKickBtn = requireEl<HTMLButtonElement>('toggle-autokick');
 const xrBtn = requireEl<HTMLButtonElement>('enter-xr');
-const songListEl = requireEl<HTMLDivElement>('song-list');
+const wheelEl = requireEl<HTMLDivElement>('song-wheel');
+const statusPanelEl = requireEl<HTMLDivElement>('status-panel');
 const scanErrorsEl = requireEl<HTMLDivElement>('scan-errors');
+
+const songWheel = new SongWheel(wheelEl, statusPanelEl, {
+  onStart: (chart) => run(() => startChart(chart)),
+  formatLevel,
+  isActive: () => overlay.style.display !== 'none',
+});
+songWheel.attachKeyboard();
 
 // Preload skin PNGs once at boot. Games created later reuse these textures.
 const skinPromise: Promise<SkinTextures> = loadSkin(import.meta.env.BASE_URL);
@@ -62,7 +71,7 @@ forgetBtn.addEventListener('click', () =>
   run(async () => {
     await clearRootHandle();
     library = null;
-    songListEl.replaceChildren();
+    songWheel.setSongs([]);
     forgetBtn.style.display = 'none';
     pickBtn.textContent = 'Pick folder';
     onPick = pickAndScan;
@@ -182,68 +191,9 @@ async function scanIntoLibrary(handle: FileSystemDirectoryHandle): Promise<void>
   pickBtn.textContent = 'Change folder';
   forgetBtn.style.display = 'inline-block';
   setStatus(`Found ${index.songs.length} song(s) in "${handle.name}".`);
-  renderSongList(index.songs);
+  songWheel.setSongs(index.songs);
   renderScanErrors(index.errors);
   refreshXrButton();
-}
-
-function renderSongList(songs: SongEntry[]): void {
-  songListEl.replaceChildren();
-  if (songs.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'song-title';
-    empty.style.opacity = '0.5';
-    empty.textContent = 'No .dtx charts found in this folder.';
-    songListEl.appendChild(empty);
-    return;
-  }
-  for (const song of songs) {
-    const row = document.createElement('div');
-    row.className = 'song';
-
-    const head = document.createElement('div');
-    head.className = 'song-head';
-    const title = document.createElement('div');
-    title.className = 'song-title';
-    title.textContent = song.title;
-    head.appendChild(title);
-    const metaText = formatSongMeta(song);
-    if (metaText) {
-      const meta = document.createElement('div');
-      meta.className = 'song-meta';
-      meta.textContent = metaText;
-      head.appendChild(meta);
-    }
-    row.appendChild(head);
-
-    const charts = document.createElement('div');
-    charts.className = 'chart-row';
-    for (const chart of song.charts) {
-      const btn = document.createElement('button');
-      btn.className = 'chart-btn';
-      const label = document.createElement('span');
-      label.textContent = chart.label;
-      btn.appendChild(label);
-      if (chart.drumLevel !== undefined && chart.drumLevel > 0) {
-        const lvl = document.createElement('span');
-        lvl.className = 'level';
-        lvl.textContent = formatLevel(chart.drumLevel);
-        btn.appendChild(lvl);
-      }
-      btn.addEventListener('click', () => run(() => startChart(chart)));
-      charts.appendChild(btn);
-    }
-    row.appendChild(charts);
-    songListEl.appendChild(row);
-  }
-}
-
-function formatSongMeta(song: SongEntry): string {
-  const parts: string[] = [];
-  if (song.artist) parts.push(song.artist);
-  if (song.genre) parts.push(song.genre);
-  if (song.bpm) parts.push(`BPM ${Math.round(song.bpm)}`);
-  return parts.join(' · ');
 }
 
 // DTXMania stores #DLEVEL as 0..1000 (three digits shown as e.g. "5.62").
