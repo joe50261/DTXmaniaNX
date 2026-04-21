@@ -23,6 +23,7 @@ import {
 } from './renderer.js';
 import { channelToLane, LANE_LAYOUT, laneSpec } from './lane-layout.js';
 import { XrControllers } from './xr-controllers.js';
+import { loadAudioOffsetMs } from './calibrate.js';
 
 const COUNTDOWN_MS = 2000;
 const BGM_CHANNEL = 0x01;
@@ -308,6 +309,10 @@ export class Game {
   private handleLaneHit(event: LaneHitEvent): void {
     if (this.status !== 'playing' || !this.song) return;
     const songTime = this.engine.songTimeMs();
+    // Player's calibrated offset: positive = the player's press lands after
+    // the beat (audio output latency / headset lag). Subtracting shifts the
+    // judgment window so a consistent lag still counts as PERFECT.
+    const offset = loadAudioOffsetMs();
 
     // Find the nearest unhit chip in this lane (visual lane; so HH accepts HHO, BD accepts LBD).
     let bestIdx = -1;
@@ -316,7 +321,7 @@ export class Game {
       const p = this.playables[i]!;
       if (p.hit || p.missed) continue;
       if (p.laneValue !== event.lane) continue;
-      const delta = songTime - p.chip.playbackTimeMs;
+      const delta = songTime - p.chip.playbackTimeMs - offset;
       if (Math.abs(delta) > HIT_RANGES_MS.POOR) continue;
       if (Math.abs(delta) < Math.abs(bestDelta)) {
         bestDelta = delta;
