@@ -74,6 +74,35 @@ export interface Config {
   volumeBgm: number;
   volumeDrums: number;
   volumePreview: number;
+  /** Poll standard gamepads (non-XR) and route button presses as lane hits.
+   * Defaults on so plugging a pad just works. XR sessions disable polling
+   * internally so this flag doesn't need to flip per-session. */
+  gamepadEnabled: boolean;
+  /** Request Web MIDI access on first user gesture and route noteon
+   * messages as lane hits. Defaults on; denied/unsupported browsers
+   * degrade silently (keyboard + gamepad still work). */
+  midiEnabled: boolean;
+  /** Limit MIDI routing to a single input port ID. null → every input
+   * port routes hits (common case: one e-kit or one DAW). */
+  midiInputId: string | null;
+  /** Playback-rate multiplier for practice mode. 1.0 = normal; 0.5 =
+   * half-speed; capped [0.25, 2.0]. Non-1 values suppress best-score
+   * writes (see isPractice). */
+  practiceRate: number;
+  /** If true, `AudioBufferSourceNode.preservesPitch` is set on BGM +
+   * drum samples so slow-downs don't pitch down. Browsers that don't
+   * support the flag ignore it silently. */
+  preservePitch: boolean;
+  /** Reserved — loop UI + `game.seekTo()` are a follow-up. The flag is
+   * wired into `isPracticeRun` already so that when the runtime lands
+   * the guarding is in place; toggling this today has no gameplay
+   * effect beyond suppressing best-score writes (which is consistent
+   * with practice intent). */
+  practiceLoopEnabled: boolean;
+  /** Reserved — see `practiceLoopEnabled`. 0-based measure index. */
+  practiceLoopStartMeasure: number;
+  /** Reserved — see `practiceLoopEnabled`. null = end of song. */
+  practiceLoopEndMeasure: number | null;
 }
 
 const EMPTY_AUTO_PLAY: AutoPlayMap = Object.freeze({
@@ -100,7 +129,23 @@ export const DEFAULT_CONFIG: Config = Object.freeze({
   volumeBgm: 1.0,
   volumeDrums: 1.0,
   volumePreview: 0.7,
+  gamepadEnabled: true,
+  midiEnabled: true,
+  midiInputId: null,
+  practiceRate: 1.0,
+  preservePitch: true,
+  practiceLoopEnabled: false,
+  practiceLoopStartMeasure: 0,
+  practiceLoopEndMeasure: null,
 });
+
+/** True when the current run should NOT commit a best-score record.
+ * Mirrors DTXmania's `Check PlaySpeed` guard (C# commit d4faf41). */
+export function isPracticeRun(cfg: Config, didLoop = false): boolean {
+  if (cfg.practiceRate !== 1.0) return true;
+  if (cfg.practiceLoopEnabled) return true;
+  return didLoop;
+}
 
 const STORAGE_KEY = 'dtxmania.config';
 const LEGACY_AUTOKICK_KEY = 'dtxmania.autokick';

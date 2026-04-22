@@ -16,7 +16,12 @@ import {
   type SongEntry,
 } from '@dtxmania/dtx-core';
 import { AudioEngine, SampleBank } from '@dtxmania/audio-engine';
-import { KeyboardInput, type LaneHitEvent, type LaneValue } from '@dtxmania/input';
+import {
+  KeyboardInput,
+  type LaneHitEvent,
+  type LaneValue,
+  type MenuEvent,
+} from '@dtxmania/input';
 import {
   Renderer,
   CANVAS_W,
@@ -323,6 +328,28 @@ export class Game {
   /** Expose the Three.js renderer so the caller can request an XR session. */
   get display(): Renderer {
     return this.renderer;
+  }
+
+  /**
+   * Ingest a lane-hit event sourced outside the built-in keyboard listener
+   * (Gamepad, MIDI, any future input module). Routes through the same
+   * matcher path as keyboard so judgement + scoring stay consistent.
+   */
+  ingestHit(e: LaneHitEvent): void {
+    this.handleLaneHit(e);
+  }
+
+  /**
+   * Ingest a menu action from an external input source. Only `cancel` has
+   * game-side semantics here (mid-song quit / return from results); other
+   * actions are no-ops — the caller routes them to the wheel / overlay
+   * separately.
+   */
+  ingestMenu(e: MenuEvent): void {
+    if (e.action !== 'cancel') return;
+    if (this.status === 'finished' || this.status === 'playing') {
+      this.leaveSong();
+    }
   }
 
   private stopBgm(): void {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampVolume, computeScheduleWhen } from './engine.js';
+import { clampRate, clampVolume, computeScheduleWhen, rebaseSongStart } from './engine.js';
 
 /**
  * These tests cover the two pure seams of AudioEngine: volume clamping
@@ -78,5 +78,63 @@ describe('computeScheduleWhen — past-time schedule compensation', () => {
     const a = computeScheduleWhen(6, 5);
     const b = computeScheduleWhen(7, 5);
     expect(b.when).toBeGreaterThanOrEqual(a.when);
+  });
+});
+
+describe('clampRate — practice-rate bounds', () => {
+  it('passes through mid-range values unchanged', () => {
+    expect(clampRate(0.5)).toBe(0.5);
+    expect(clampRate(1)).toBe(1);
+    expect(clampRate(1.5)).toBe(1.5);
+  });
+
+  it('clamps to [0.25, 2.0]', () => {
+    expect(clampRate(0.1)).toBe(0.25);
+    expect(clampRate(0)).toBe(0.25);
+    expect(clampRate(-1)).toBe(0.25);
+    expect(clampRate(3)).toBe(2.0);
+    expect(clampRate(Infinity)).toBe(2.0);
+  });
+
+  it('NaN → 1 (silent-fallback to normal speed)', () => {
+    // Same philosophy as clampVolume: a broken slider should degrade to
+    // "normal play", not "stopped" or "frozen at last good value".
+    expect(clampRate(NaN)).toBe(1);
+  });
+});
+
+describe('rebaseSongStart — rate-change continuity', () => {
+  /** Helper: chart-ms given the song-start + rate formula used in
+   * AudioEngine.songTimeMs. Matches the body exactly so test values
+   * stay coupled to the real computation. */
+  const songMs = (now: number, start: number, rate: number): number =>
+    (now - start) * 1000 * rate;
+
+  it('songTimeMs before == songTimeMs after a rate change (continuity invariant)', () => {
+    const now = 10;
+    const oldStart = 1;
+    const oldRate = 1.0;
+    const before = songMs(now, oldStart, oldRate);
+
+    for (const newRate of [0.5, 0.75, 1.25, 2.0]) {
+      const newStart = rebaseSongStart(now, oldStart, oldRate, newRate);
+      const after = songMs(now, newStart, newRate);
+      expect(after).toBeCloseTo(before, 9);
+    }
+  });
+
+  it('rate = rate (no-op) leaves start unchanged', () => {
+    // Not used by setRate (which early-returns on equality), but the
+    // formula should still be a fixed point.
+    expect(rebaseSongStart(10, 1, 0.75, 0.75)).toBeCloseTo(1, 9);
+  });
+
+  it('handles advance from 0.5 → 1.0 mid-song', () => {
+    // At wall 4 s, half-speed song has advanced 2000 chart-ms. After
+    // flipping to 1.0 at wall 4 s, the NEXT wall-ms should advance
+    // chart-ms at 1:1 — i.e. at wall 4.001 s, songTimeMs == 2001.
+    const newStart = rebaseSongStart(4, 0, 0.5, 1.0);
+    expect(songMs(4, newStart, 1.0)).toBeCloseTo(2000, 9);
+    expect(songMs(4.001, newStart, 1.0)).toBeCloseTo(2001, 9);
   });
 });

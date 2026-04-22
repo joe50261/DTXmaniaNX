@@ -12,3 +12,17 @@ export type {
   MenuHandler,
   KeyboardInputOptions,
 } from './keyboard.js';
+
+export {
+  GamepadInput,
+  DEFAULT_GAMEPAD_MAP,
+  DEFAULT_GAMEPAD_MENU_MAP,
+} from './gamepad.js';
+export type { GamepadInputOptions } from './gamepad.js';
+
+export {
+  MidiInput,
+  DEFAULT_MIDI_NOTE_MAP,
+  midiMessageToLaneHit,
+} from './midi.js';
+export type { MidiInputOptions, MidiPortInfo } from './midi.js';

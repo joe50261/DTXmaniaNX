@@ -1,7 +1,7 @@
 /**
- * Tiny synthesized drum kit. Good enough for MVP demos that don't ship real
- * WAV assets. Real sample playback via AudioBuffer will live in sample-bank.ts
- * (Phase 2.5).
+ * Tiny synthesized drum kit. Real sample playback lives in sample-bank.ts;
+ * this synth is the fallback when no #WAV is bound (or decoding fails) so
+ * the demo chart always makes noise.
  *
  * All voices are one-shot: start at absolute AudioContext time `when` and
  * release with an exponential ramp. They free themselves when finished.

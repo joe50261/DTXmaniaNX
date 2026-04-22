@@ -21,8 +21,14 @@ import {
 import { Game, type GameFsContext } from './game.js';
 import { SongWheel } from './song-wheel.js';
 import { ConfigPanel } from './config-panel.js';
-import { getConfig, subscribe, updateConfig, type AutoPlayMap } from './config.js';
-import { Lane, type LaneValue } from '@dtxmania/input';
+import {
+  getConfig,
+  isPracticeRun,
+  subscribe,
+  updateConfig,
+  type AutoPlayMap,
+} from './config.js';
+import { GamepadInput, Lane, MidiInput, type LaneValue, type MidiPortInfo } from '@dtxmania/input';
 import { PreviewPlayer } from '@dtxmania/audio-engine';
 import { HandleFileSystemBackend } from './fs/handle-backend.js';
 import {
@@ -172,6 +178,8 @@ try {
   boot.audio.setBgmVolume(cfg0.volumeBgm);
   boot.audio.setDrumsVolume(cfg0.volumeDrums);
   boot.audio.setPreviewVolume(cfg0.volumePreview);
+  boot.audio.setRate(cfg0.practiceRate);
+  boot.audio.setPreservePitch(cfg0.preservePitch);
 } catch (e) {
   // WebGL unavailable — page still usable for non-game actions if any.
   console.warn('Game init failed', e);
@@ -328,7 +336,65 @@ refreshCalibrateLabel();
   }
 }
 
-const configPanel = new ConfigPanel();
+// Gamepad polling loop lives alongside the keyboard listener. XR gating
+// comes from the Game.inXR flag — xrControllers already owns the VR hit
+// path, so polling a Standard gamepad while in VR would double-fire.
+const gamepadInput = new GamepadInput({ isGated: () => activeGame?.inXR ?? false });
+gamepadInput.onLaneHit((e) => activeGame?.ingestHit(e));
+gamepadInput.onMenu((e) => {
+  // Dpad / Start-Back currently only forward `cancel` (mid-song quit).
+  // Menu navigation dpad → song wheel is a phase-2 addition once the
+  // wheel exposes a public navigate(action) API.
+  activeGame?.ingestMenu(e);
+});
+if (getConfig().gamepadEnabled) gamepadInput.attach();
+
+// MIDI: resolve on first attempt only. A denied permission prompt
+// shouldn't be re-requested every config flip — the user can reload to
+// try again. The `midiStatus` snapshot lets the Settings UI show "None"
+// vs "Unsupported" vs "Denied" unambiguously.
+type MidiStatus = 'pending' | 'ready' | 'unsupported' | 'denied';
+let midiInput: MidiInput | null = null;
+let midiStatus: MidiStatus = 'pending';
+let midiPorts: MidiPortInfo[] = [];
+const midiPortsListeners = new Set<(ports: MidiPortInfo[], status: MidiStatus) => void>();
+
+function emitMidiPorts(): void {
+  for (const cb of midiPortsListeners) cb(midiPorts, midiStatus);
+}
+
+async function initMidi(): Promise<void> {
+  if (midiInput || midiStatus !== 'pending') return;
+  if (typeof navigator === 'undefined' || typeof navigator.requestMIDIAccess !== 'function') {
+    midiStatus = 'unsupported';
+    emitMidiPorts();
+    return;
+  }
+  const access = await MidiInput.requestAccess();
+  if (!access) {
+    midiStatus = 'denied';
+    emitMidiPorts();
+    return;
+  }
+  midiInput = new MidiInput(access, { portId: getConfig().midiInputId });
+  midiInput.onLaneHit((e) => activeGame?.ingestHit(e));
+  midiInput.onPortsChanged((ports) => {
+    midiPorts = ports;
+    emitMidiPorts();
+  });
+  if (getConfig().midiEnabled) midiInput.attach();
+  midiPorts = midiInput.listPorts();
+  midiStatus = 'ready';
+  emitMidiPorts();
+}
+
+const configPanel = new ConfigPanel({
+  onMidiPortsChanged: (cb) => {
+    midiPortsListeners.add(cb);
+    cb(midiPorts, midiStatus);
+    return () => midiPortsListeners.delete(cb);
+  },
+});
 configBtn.addEventListener('click', () => configPanel.open());
 
 // Live config → Game / Renderer. The renderer reads scrollSpeed /
@@ -346,8 +412,43 @@ const applyConfigToActive = (cfg: ReturnType<typeof getConfig>): void => {
   activeGame.audio.setBgmVolume(cfg.volumeBgm);
   activeGame.audio.setDrumsVolume(cfg.volumeDrums);
   activeGame.audio.setPreviewVolume(cfg.volumePreview);
+  activeGame.audio.setRate(cfg.practiceRate);
+  activeGame.audio.setPreservePitch(cfg.preservePitch);
 };
 subscribe(applyConfigToActive);
+// Separate subscription for input-plumbing toggles — they don't need an
+// activeGame and stay wired across chart reloads.
+subscribe((cfg) => {
+  if (cfg.gamepadEnabled) gamepadInput.attach();
+  else gamepadInput.detach();
+  // Lazy-init MIDI if the user flips the toggle ON after boot (e.g.
+  // enabled it in Settings having booted with it off, or denied the
+  // browser prompt initially and wants to retry — a reload would also
+  // work but this is less surprising). Idempotent thanks to initMidi's
+  // own early-return.
+  if (cfg.midiEnabled && !midiInput && midiStatus === 'pending') {
+    void initMidi();
+  }
+  if (midiInput) {
+    if (cfg.midiEnabled) midiInput.attach();
+    else midiInput.detach();
+    midiInput.setPort(cfg.midiInputId);
+  }
+});
+
+// Request MIDI access on first user gesture. The Chromium prompt is
+// idempotent so the "first gesture" only matters for UX — it lets the
+// prompt coincide with a click the user made. If it fails or is denied,
+// keyboard + gamepad still work.
+const midiTriggerOnce = (): void => {
+  window.removeEventListener('pointerdown', midiTriggerOnce);
+  window.removeEventListener('keydown', midiTriggerOnce);
+  if (getConfig().midiEnabled) void initMidi();
+};
+if (getConfig().midiEnabled) {
+  window.addEventListener('pointerdown', midiTriggerOnce, { once: false });
+  window.addEventListener('keydown', midiTriggerOnce, { once: false });
+}
 
 void init();
 
@@ -602,11 +703,17 @@ async function launchGame(
       }
     },
     // Finish-event plumbing: only scanner-backed charts persist records.
-    // The bundled demo has no stable ID so we skip it.
+    // The bundled demo has no stable ID so we skip it. Practice runs
+    // (non-1 rate or loop enabled) also skip — DTXmania guards best
+    // scores on PlaySpeed (C# commit d4faf41) and we mirror that here.
     ...(chart
       ? {
           chartPath: chart.chartPath,
           onChartFinished: (chartPath: string, snap: ScoreSnapshot) => {
+            if (isPracticeRun(getConfig())) {
+              console.info('[result] practice run — skipping best-score write');
+              return;
+            }
             persistChartResult(chart, chartPath, snap);
           },
         }
