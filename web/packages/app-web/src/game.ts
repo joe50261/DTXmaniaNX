@@ -8,7 +8,6 @@ import {
   isFullCombo,
   isExcellent,
   Judgment,
-  HIT_RANGES_MS,
   joinPath,
   type Chip,
   type FileSystemBackend,
@@ -28,6 +27,7 @@ import {
   type SkinTextures,
 } from './renderer.js';
 import { applyAutoFire } from './autofire.js';
+import { detectMisses, matchLaneHit } from './matcher.js';
 import { channelToLane, LANE_LAYOUT, laneSpec } from './lane-layout.js';
 import { XrControllers } from './xr-controllers.js';
 import { VrMenu, type VrMenuDeps, type VrMenuPick } from './vr-menu.js';
@@ -470,21 +470,22 @@ export class Game {
     // autoFireLanes below.
     this.autoFireLanes(songTime);
 
-    // Miss detection: any unhit chip whose judgment window has fully passed.
-    for (const p of this.playables) {
-      if (p.hit || p.missed) continue;
-      if (songTime - p.chip.playbackTimeMs > HIT_RANGES_MS.POOR) {
-        p.missed = true;
-        this.tracker.record(Judgment.MISS);
-        this.applyGaugeDelta(Judgment.MISS);
-        this.judgmentFlash = {
-          text: 'MISS',
-          judgment: Judgment.MISS,
-          color: '#ef4444',
-          lane: p.laneValue,
-          spawnedMs: songTime,
-        };
-      }
+    // Miss detection via matcher.ts — pure helper flips `missed = true`
+    // on each chip whose POOR window has passed and returns the events
+    // so we can apply the tracker / gauge / flash side effects here.
+    // Only the newest miss wins the on-screen judgment flash; tracker
+    // and gauge take every one.
+    const missEvents = detectMisses(this.playables, songTime);
+    for (const m of missEvents) {
+      this.tracker.record(Judgment.MISS);
+      this.applyGaugeDelta(Judgment.MISS);
+      this.judgmentFlash = {
+        text: 'MISS',
+        judgment: Judgment.MISS,
+        color: '#ef4444',
+        lane: m.lane,
+        spawnedMs: songTime,
+      };
     }
 
     // Game-over check: song finished + small tail for last miss detection.
@@ -622,23 +623,12 @@ export class Game {
     // the beat (audio output latency / headset lag). Subtracting shifts the
     // judgment window so a consistent lag still counts as PERFECT.
     const offset = loadAudioOffsetMs();
+    // matcher.ts handles the nearest-chip search + POOR-window clamp +
+    // classifyDeltaMs; it also flips p.hit = true on match so a repeat
+    // call in the same frame finds nothing. Null return → stray hit.
+    const match = matchLaneHit(this.playables, event.lane, songTime, offset);
 
-    // Find the nearest unhit chip in this lane (visual lane; so HH accepts HHO, BD accepts LBD).
-    let bestIdx = -1;
-    let bestDelta = Infinity;
-    for (let i = 0; i < this.playables.length; i++) {
-      const p = this.playables[i]!;
-      if (p.hit || p.missed) continue;
-      if (p.laneValue !== event.lane) continue;
-      const delta = songTime - p.chip.playbackTimeMs - offset;
-      if (Math.abs(delta) > HIT_RANGES_MS.POOR) continue;
-      if (Math.abs(delta) < Math.abs(bestDelta)) {
-        bestDelta = delta;
-        bestIdx = i;
-      }
-    }
-
-    if (bestIdx < 0) {
+    if (match === null) {
       // Stray hit: play the most recent real sample that fired on this lane
       // so off-note keystrokes still sound like a drum, not a synth. Only
       // fall back to synth if the lane has never fired a real-sample chip
@@ -649,21 +639,19 @@ export class Game {
       return;
     }
 
-    const p = this.playables[bestIdx]!;
-    p.hit = true;
-    const judgment = classifyDeltaMs(bestDelta);
-    this.tracker.record(judgment);
-    this.applyGaugeDelta(judgment);
+    const p = this.playables[match.idx]!;
+    this.tracker.record(match.judgment);
+    this.applyGaugeDelta(match.judgment);
     this.judgmentFlash = {
-      text: judgment,
-      judgment,
-      color: judgmentColor(judgment),
+      text: match.judgment,
+      judgment: match.judgment,
+      color: judgmentColor(match.judgment),
       lane: event.lane,
       spawnedMs: songTime,
-      // Sign matches handleLaneHit's delta: negative = press landed
-      // before the target (FAST), positive = after (SLOW). Renderer
-      // only surfaces the arrow when config.showFastSlow is on.
-      deltaMs: bestDelta,
+      // Sign matches matcher.ts's delta: negative = press landed before
+      // the target (FAST), positive = after (SLOW). Renderer only
+      // surfaces the arrow when config.showFastSlow is on.
+      deltaMs: match.deltaMs,
     };
     this.hitFlashes.push({ lane: event.lane, spawnedMs: songTime });
     this.lastPadHitMs.set(event.lane, performance.now());
