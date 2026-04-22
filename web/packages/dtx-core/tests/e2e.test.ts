@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parseDtx } from '../src/parser/parser.js';
 import { computeTiming } from '../src/timing/timing.js';
-import { Channel } from '../src/model/channel.js';
+import { Channel, isDrumLane } from '../src/model/channel.js';
 import { Judgment } from '../src/scoring/judgment.js';
-import { ScoreTracker } from '../src/scoring/score.js';
+import { ScoreTracker, computeAchievementRate, computeRank } from '../src/scoring/score.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -73,5 +73,30 @@ describe('end-to-end: simple-rock.dtx', () => {
     for (let i = 0; i < notes.length; i++) tracker.record(Judgment.MISS);
     expect(tracker.snapshot().score).toBe(0);
     expect(tracker.snapshot().maxCombo).toBe(0);
+  });
+
+  it('all-auto playthrough: every drum chip counted as auto; rank collapses to E', () => {
+    // Simulates the in-game auto-play path with every lane enabled —
+    // matches what Game.autoFireLanes would do with autoPlayLanes set
+    // to the full drum-channel set. Exercises the full parse → timing
+    // → ScoreTracker.recordAuto → rank pipeline without touching any
+    // of the renderer / audio / DOM layer.
+    const playables = song.chips.filter((c) => isDrumLane(c.channel));
+    expect(playables.length).toBeGreaterThan(0);
+    const tracker = new ScoreTracker(playables.length);
+    for (let i = 0; i < playables.length; i++) tracker.recordAuto();
+    const snap = tracker.snapshot();
+    expect(snap.totalNotes).toBe(playables.length);
+    expect(snap.autoCount).toBe(playables.length);
+    // effective denominator = totalNotes - autoCount = 0, so both score
+    // and achievement rate collapse to 0 — matches the DTXmania
+    // convention where a fully-autoplayed run earns nothing.
+    expect(snap.score).toBe(0);
+    expect(snap.counts[Judgment.PERFECT]).toBe(0);
+    expect(snap.counts[Judgment.MISS]).toBe(0);
+    expect(snap.maxCombo).toBe(0);
+    const rate = computeAchievementRate(snap);
+    expect(rate).toBe(0);
+    expect(computeRank(rate, snap.totalNotes)).toBe('E');
   });
 });
