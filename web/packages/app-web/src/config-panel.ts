@@ -132,6 +132,7 @@ class ConfigForm {
   private readonly loopEnabledInput: HTMLInputElement;
   private readonly loopAVal: HTMLSpanElement;
   private readonly loopBVal: HTMLSpanElement;
+  private readonly loopWarn: HTMLDivElement;
 
   constructor(deps?: ConfigPanelDeps) {
     this.root = document.createElement('div');
@@ -377,6 +378,16 @@ class ConfigForm {
     clearRow.appendChild(clearBtn);
     practice.body.appendChild(clearRow);
 
+    // Inline warning when resolveLoopWindow would reject the current
+    // range (B ≤ A). Hidden otherwise. Silent-disable without this
+    // hint confuses players ("I enabled loop but nothing happens").
+    this.loopWarn = document.createElement('div');
+    this.loopWarn.className = 'config-note config-note-warn';
+    this.loopWarn.style.color = '#fbbf24';
+    this.loopWarn.style.display = 'none';
+    this.loopWarn.textContent = 'Range is invalid (B must be after A). Loop is disabled.';
+    practice.body.appendChild(this.loopWarn);
+
     const loopHint = document.createElement('div');
     loopHint.className = 'config-note';
     loopHint.textContent =
@@ -462,6 +473,10 @@ class ConfigForm {
       cfg.practiceLoopEndMeasure === null
         ? '— end of song —'
         : formatMeasure(cfg.practiceLoopEndMeasure);
+    const invalid =
+      cfg.practiceLoopEndMeasure !== null &&
+      cfg.practiceLoopEndMeasure <= cfg.practiceLoopStartMeasure;
+    this.loopWarn.style.display = invalid ? '' : 'none';
   }
 }
 

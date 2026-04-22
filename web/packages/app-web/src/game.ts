@@ -433,14 +433,16 @@ export class Game {
   /** Teleport the song clock + re-arm chips whose playback time moves
    * back behind the cursor. Called by the loop tick branch when the
    * song time crosses the loop's end; could be reused by a future
-   * manual "seek to measure" UI. */
+   * manual "seek to measure" UI.
+   *
+   * Stops BGM only — drum sample tails are short (typically < 500 ms)
+   * and letting them decay across the seek sounds more natural than
+   * an abrupt silence for hits fired just before the loop boundary.
+   * BGM must stop because re-scheduling against the seeked clock is
+   * how we realign the song track. */
   private seekTo(songMs: number): void {
     if (!this.song) return;
-    // Stop every BGM / sample source BEFORE rescheduling BGM — otherwise
-    // scheduleBgm would re-add into liveSources and stopAllLiveSources
-    // would kill the fresh entries too.
-    this.engine.stopAllLiveSources();
-    this.bgmSources.length = 0;
+    this.stopBgm();
     for (const p of this.playables) {
       if (p.chip.playbackTimeMs >= songMs) {
         p.hit = false;

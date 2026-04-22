@@ -192,23 +192,10 @@ export class AudioEngine {
 
   /** Teleport the song clock so `songTimeMs() === songMs` immediately.
    * No clamp — Game owns range semantics. Live sources are NOT stopped;
-   * callers that want "seek and re-schedule" should call
-   * `stopAllLiveSources` first. */
+   * the loop-seek caller (Game.seekTo) stops only BGM via its own
+   * `bgmSources` tracker so drum-sample tails can decay naturally. */
   seekSongClock(songMs: number): void {
     this._songStartCtxTime = computeSeekStart(this.ctx.currentTime, this._rate, songMs);
-  }
-
-  /** Stop every live BGM/sample source and drop the set. Swallow errors
-   * from sources that haven't started yet or have already ended. */
-  stopAllLiveSources(): void {
-    for (const src of this.liveSources) {
-      try {
-        src.stop();
-      } catch {
-        /* not-yet-started or already ended */
-      }
-    }
-    this.liveSources.clear();
   }
 
   /** Per-category volume setters. Values clamp to [0, 1]; no ramp — the
