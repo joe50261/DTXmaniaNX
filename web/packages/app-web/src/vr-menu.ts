@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import type { BoxNode, ChartEntry, LibraryNode, SongEntry } from '@dtxmania/dtx-core';
+import {
+  findButtonAtPoint,
+  stepStickAxis,
+  type StickAxisState,
+} from './vr-menu-input.js';
 
 /**
  * In-VR song-selection panel — DTXmania Stage 05 flavour.
@@ -52,13 +57,6 @@ const EXIT_Y = PANEL_H_PX - 70;
 
 const DIFFICULTY_SLOT_LABELS = ['NOVICE', 'REGULAR', 'EXPERT', 'MASTER', 'DTX'] as const;
 
-/** Stick magnitude past which we treat an axis as "pushed" — edge-detected
- * so a held stick doesn't spam focus changes every frame. */
-const STICK_THRESHOLD = 0.55;
-/** Dead-band coming back: the stick must fall below this before the next
- * edge can fire. Prevents jitter at the threshold. */
-const STICK_RELEASE = 0.3;
-
 type SyntheticEntry =
   | { kind: 'back'; parent: BoxNode }
   | { kind: 'random'; box: BoxNode };
@@ -107,7 +105,7 @@ export class VrMenu {
   /** Per-controller stick edge state. Both sticks do the same job
    * (Y = focus, X = difficulty) so it doesn't matter which hand the
    * player reaches with. Index matches inputSources[0|1]. */
-  private readonly stickState: Array<{ x: number; y: number }> = [
+  private readonly stickState: Array<{ x: StickAxisState; y: StickAxisState }> = [
     { x: 0, y: 0 },
     { x: 0, y: 0 },
   ];
@@ -293,9 +291,7 @@ export class VrMenu {
         if (uv) {
           const px = uv.x * PANEL_W_PX;
           const py = (1 - uv.y) * PANEL_H_PX;
-          rayHitIdx = this.hits.findIndex(
-            (h) => px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h
-          );
+          rayHitIdx = findButtonAtPoint(this.hits, px, py);
           if (rayHitIdx >= 0 && hovered === -1) hovered = rayHitIdx;
         }
       } else {
@@ -340,25 +336,13 @@ export class VrMenu {
       const sy = axes[3] ?? axes[1] ?? 0;
       const st = this.stickState[i]!;
 
-      if (sy <= -STICK_THRESHOLD && st.y !== -1) {
-        st.y = -1;
-        this.moveFocus(-1);
-      } else if (sy >= STICK_THRESHOLD && st.y !== 1) {
-        st.y = 1;
-        this.moveFocus(1);
-      } else if (Math.abs(sy) < STICK_RELEASE) {
-        st.y = 0;
-      }
+      const yStep = stepStickAxis(sy, st.y);
+      st.y = yStep.next;
+      if (yStep.fired !== 0) this.moveFocus(yStep.fired);
 
-      if (sx <= -STICK_THRESHOLD && st.x !== -1) {
-        st.x = -1;
-        this.cycleDifficulty(-1);
-      } else if (sx >= STICK_THRESHOLD && st.x !== 1) {
-        st.x = 1;
-        this.cycleDifficulty(1);
-      } else if (Math.abs(sx) < STICK_RELEASE) {
-        st.x = 0;
-      }
+      const xStep = stepStickAxis(sx, st.x);
+      st.x = xStep.next;
+      if (xStep.fired !== 0) this.cycleDifficulty(xStep.fired);
     }
   }
 

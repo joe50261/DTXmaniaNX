@@ -31,6 +31,13 @@ import { detectMisses, matchLaneHit } from './matcher.js';
 import { channelToLane, LANE_LAYOUT, laneSpec } from './lane-layout.js';
 import { XrControllers } from './xr-controllers.js';
 import { resetStateOnVrExit } from './vr-lifecycle.js';
+import {
+  applyGaugeDelta,
+  shouldEnterFinishedState,
+  shouldFireResultPadHitReturn,
+  shouldFireVrAutoReturn,
+  updateCancelEdgeState,
+} from './tick-state.js';
 import { VrMenu, type VrMenuDeps, type VrMenuPick } from './vr-menu.js';
 import type { BoxNode } from '@dtxmania/dtx-core';
 import { loadAudioOffsetMs } from './calibrate.js';
@@ -440,26 +447,25 @@ export class Game {
     // doesn't re-fire, and deliberately only active during 'playing' —
     // VrMenu handles its own back input, and the RESULTS screen is
     // already covered by Esc / pad-hit / 5 s auto-return.
-    if (this.status === 'playing' && this.renderer.inXR) {
-      const sources = this.xrControllers.currentInputSources;
-      for (let i = 0; i < 2; i++) {
-        const btns = sources[i]?.gamepad?.buttons;
-        // Index 4 = A (right) / X (left); index 5 = B / Y. Either counts.
-        const pressed =
-          (btns?.[4]?.pressed ?? false) || (btns?.[5]?.pressed ?? false);
-        if (pressed && !this.cancelSqueezed[i]) {
-          this.cancelSqueezed[i] = true;
-          console.info('[game] VR face-button → leaveSong');
-          this.leaveSong();
-          return;
-        }
-        if (!pressed) this.cancelSqueezed[i] = false;
-      }
-    } else {
-      // Reset edge state so a button held across state changes doesn't
-      // fire when we come back to playing.
-      this.cancelSqueezed[0] = false;
-      this.cancelSqueezed[1] = false;
+    const sources = this.xrControllers.currentInputSources;
+    // Index 4 = A (right) / X (left); index 5 = B / Y. Either counts.
+    const pressed0 =
+      (sources[0]?.gamepad?.buttons?.[4]?.pressed ?? false) ||
+      (sources[0]?.gamepad?.buttons?.[5]?.pressed ?? false);
+    const pressed1 =
+      (sources[1]?.gamepad?.buttons?.[4]?.pressed ?? false) ||
+      (sources[1]?.gamepad?.buttons?.[5]?.pressed ?? false);
+    const edge = updateCancelEdgeState({
+      prev: [this.cancelSqueezed[0]!, this.cancelSqueezed[1]!],
+      pressed: [pressed0, pressed1],
+      active: this.status === 'playing' && this.renderer.inXR,
+    });
+    this.cancelSqueezed[0] = edge.next[0];
+    this.cancelSqueezed[1] = edge.next[1];
+    if (edge.firedBy !== null) {
+      console.info('[game] VR face-button → leaveSong');
+      this.leaveSong();
+      return;
     }
     if (!this.song) return;
     const songTime = this.engine.songTimeMs();
@@ -490,7 +496,7 @@ export class Game {
     }
 
     // Game-over check: song finished + small tail for last miss detection.
-    if (songTime > this.song.durationMs + 500 && this.status === 'playing') {
+    if (shouldEnterFinishedState(songTime, this.song.durationMs, this.status)) {
       this.status = 'finished';
       this.finishedAtMs = performance.now();
       console.info('[result] entered finished state, inXR=', this.renderer.inXR);
@@ -518,16 +524,18 @@ export class Game {
     // keeps running, so we drive the dwell off performance.now() deltas and
     // check it every frame. Latch to single-shot.
     if (
-      this.status === 'finished' &&
-      !this.finishedReturnHandled &&
-      this.renderer.inXR &&
-      this.onRestart &&
-      this.finishedAtMs !== null &&
-      performance.now() - this.finishedAtMs > 5000
+      shouldFireVrAutoReturn({
+        status: this.status,
+        finishedReturnHandled: this.finishedReturnHandled,
+        inXR: this.renderer.inXR,
+        hasOnRestart: this.onRestart !== null,
+        finishedAtMs: this.finishedAtMs,
+        nowMs: performance.now(),
+      })
     ) {
       this.finishedReturnHandled = true;
       console.info('[result] VR auto-return fired');
-      this.onRestart();
+      this.onRestart!();
     }
 
     this.hitFlashes = this.hitFlashes.filter((f) => songTime - f.spawnedMs < 400);
@@ -610,12 +618,18 @@ export class Game {
         hasOnRestart: !!this.onRestart,
         dwellMs: dwell,
       });
-      if (this.finishedReturnHandled || !this.onRestart) return;
-      if (this.finishedAtMs === null) return;
-      if (dwell < 400) return;
+      if (
+        !shouldFireResultPadHitReturn({
+          status: this.status,
+          finishedReturnHandled: this.finishedReturnHandled,
+          hasOnRestart: this.onRestart !== null,
+          finishedAtMs: this.finishedAtMs,
+          nowMs: performance.now(),
+        })
+      ) return;
       this.finishedReturnHandled = true;
       console.info('[result] pad-hit skip → onRestart');
-      this.onRestart();
+      this.onRestart!();
       return;
     }
     if (this.status !== 'playing' || !this.song) return;
@@ -679,13 +693,7 @@ export class Game {
 
   /** Adjust the life gauge based on the latest judgment. Clamped to [0, 1]. */
   private applyGaugeDelta(judgment: ReturnType<typeof classifyDeltaMs>): void {
-    const delta =
-      judgment === Judgment.PERFECT ?  0.025 :
-      judgment === Judgment.GREAT   ?  0.015 :
-      judgment === Judgment.GOOD    ?  0.005 :
-      judgment === Judgment.POOR    ? -0.020 :
-      /* MISS */                      -0.050;
-    this.gauge = Math.max(0, Math.min(1, this.gauge + delta));
+    this.gauge = applyGaugeDelta(this.gauge, judgment);
   }
 }
 
