@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { DEFAULT_CONFIG, loadConfig } from './config.js';
+import { DEFAULT_CONFIG, isPracticeRun, loadConfig } from './config.js';
 
 /**
  * happy-dom gives us a real-ish localStorage out of the box; clear it
@@ -107,5 +107,38 @@ describe('loadConfig — migrations', () => {
     // no autoPlay field.
     expect(cfg.autoPlay.BD).toBe(false);
     expect(cfg.autoPlay.HH).toBe(false);
+  });
+
+  it('new Input/Practice defaults ship on clean storage', () => {
+    const cfg = loadConfig();
+    expect(cfg.gamepadEnabled).toBe(true);
+    expect(cfg.midiEnabled).toBe(true);
+    expect(cfg.midiInputId).toBeNull();
+    expect(cfg.practiceRate).toBe(1.0);
+    expect(cfg.preservePitch).toBe(true);
+    expect(cfg.practiceLoopEnabled).toBe(false);
+  });
+});
+
+describe('isPracticeRun — best-score gate', () => {
+  it('returns false for a plain 1× no-loop config', () => {
+    expect(isPracticeRun(DEFAULT_CONFIG)).toBe(false);
+  });
+
+  it('returns true when practiceRate !== 1', () => {
+    expect(isPracticeRun({ ...DEFAULT_CONFIG, practiceRate: 0.75 })).toBe(true);
+    expect(isPracticeRun({ ...DEFAULT_CONFIG, practiceRate: 1.25 })).toBe(true);
+  });
+
+  it('returns true when loop is enabled, even at 1× speed', () => {
+    expect(
+      isPracticeRun({ ...DEFAULT_CONFIG, practiceLoopEnabled: true }),
+    ).toBe(true);
+  });
+
+  it('returns true when a loop fired during the run (didLoop arg)', () => {
+    // Loop toggled off by end-of-song but looped at least once → still
+    // practice. Mirrors C# "any PlaySpeed / warp" gate semantics.
+    expect(isPracticeRun(DEFAULT_CONFIG, true)).toBe(true);
   });
 });
