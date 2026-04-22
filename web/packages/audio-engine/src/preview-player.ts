@@ -24,7 +24,12 @@ export class PreviewPlayer {
 
   constructor(
     private readonly ctx: AudioContext,
-    private readonly loader: (path: string) => Promise<ArrayBuffer>
+    private readonly loader: (path: string) => Promise<ArrayBuffer>,
+    /** Optional output node — defaults to ctx.destination so callers
+     * that don't care about category-level mixing keep working. Pass
+     * `engine.previewGain` to have the Settings → Preview volume
+     * slider govern playback level. */
+    private readonly destination: AudioNode = ctx.destination
   ) {}
 
   /**
@@ -66,7 +71,7 @@ export class PreviewPlayer {
     const gain = this.ctx.createGain();
     gain.gain.setValueAtTime(0, this.ctx.currentTime);
     gain.gain.linearRampToValueAtTime(volume, this.ctx.currentTime + 0.15);
-    gain.connect(this.ctx.destination);
+    gain.connect(this.destination);
 
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
