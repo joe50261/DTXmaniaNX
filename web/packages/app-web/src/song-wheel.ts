@@ -176,11 +176,7 @@ export class SongWheel {
   /** Pick the chart whose slot matches preferredSlot, falling back to the
    * nearest-higher and then the highest available. */
   private chartForPreferred(song: SongEntry): ChartEntry {
-    const sorted = [...song.charts].sort((a, b) => a.slot - b.slot);
-    const exact = sorted.find((c) => c.slot === this.preferredSlot);
-    if (exact) return exact;
-    const nextHigher = sorted.find((c) => c.slot >= this.preferredSlot);
-    return nextHigher ?? sorted[sorted.length - 1]!;
+    return pickChartForSlot(song, this.preferredSlot);
   }
 
   /** Commit the focused entry: start a song, descend into a box, pop out
@@ -541,10 +537,27 @@ function formatBestRecordLine(chart: ChartEntry): string | undefined {
   return `${score} (${r.bestRank})${medal}`;
 }
 
+/** Pick the chart whose slot matches `preferredSlot`, falling back to
+ * the nearest-higher slot and then the highest available. Pure so it
+ * can be unit-tested independent of SongWheel's DOM.
+ *
+ * Why "nearest higher" over "nearest either direction": if the player
+ * has been cycling through MASTER (slot 3) and lands on a song that
+ * only offers NOVICE (0) + REGULAR (1), picking the highest avoids a
+ * sudden difficulty downshift to the easiest chart — usually not
+ * what the player wants. */
+export function pickChartForSlot(song: SongEntry, preferredSlot: number): ChartEntry {
+  const sorted = [...song.charts].sort((a, b) => a.slot - b.slot);
+  const exact = sorted.find((c) => c.slot === preferredSlot);
+  if (exact) return exact;
+  const nextHigher = sorted.find((c) => c.slot >= preferredSlot);
+  return nextHigher ?? sorted[sorted.length - 1]!;
+}
+
 /** Walk the tree looking for a BoxNode whose `path` matches. Lets
  * setRoot restore the player's browse position across Rescans where
  * BoxNode identity changes. */
-function findBoxByPath(box: BoxNode, path: string): BoxNode | null {
+export function findBoxByPath(box: BoxNode, path: string): BoxNode | null {
   if (box.path === path) return box;
   for (const child of box.children) {
     if (child.type !== 'box') continue;
@@ -578,7 +591,7 @@ function levelKey(node: LibraryNode): number {
   return Math.max(...levels);
 }
 
-function compareNodes(a: LibraryNode, b: LibraryNode, mode: SortMode): number {
+export function compareNodes(a: LibraryNode, b: LibraryNode, mode: SortMode): number {
   // Boxes always sort above songs within the same tier so the folder
   // layout stays visually obvious after a sort. Mirrors DTXmania's habit
   // of listing BOX nodes at the top of a wheel.
