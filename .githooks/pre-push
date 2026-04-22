@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Pre-push gate: refuse to push if pnpm audit finds any high or critical
+# advisories. Root cause of CI breakage ~session 017cQr3QeHp3K5to3ciWcSQa
+# commit eaa427b → 30a6aee: happy-dom@15 had 3 CVEs that only CI's
+# audit:high caught. A local gate turns a 5-minute CI round-trip into a
+# pre-push warning.
+#
+# Escape hatch for hotfixes: SKIP_AUDIT=1 git push ...
+set -e
+
+if [ -n "$SKIP_AUDIT" ]; then
+  echo "[pre-push] SKIP_AUDIT=1 set, skipping audit" >&2
+  exit 0
+fi
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "[pre-push] pnpm not on PATH — skipping audit gate (install pnpm to enable)" >&2
+  exit 0
+fi
+
+# Run from the repo root regardless of where `git push` was invoked.
+repo_root="$(git rev-parse --show-toplevel)"
+echo "[pre-push] pnpm audit --audit-level=high (web/)"
+pnpm --dir "$repo_root/web" audit --audit-level=high

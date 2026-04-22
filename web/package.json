@@ -8,7 +8,8 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "audit": "pnpm audit --audit-level=moderate",
-    "audit:high": "pnpm audit --audit-level=high"
+    "audit:high": "pnpm audit --audit-level=high",
+    "prepare": "git -C .. config --local core.hooksPath .githooks 2>/dev/null || true"
   },
   "devDependencies": {
     "typescript": "^5.4.0",
