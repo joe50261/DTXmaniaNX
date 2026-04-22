@@ -79,6 +79,7 @@ class ConfigForm {
   private readonly judgeYInput: HTMLInputElement;
   private readonly judgeYVal: HTMLSpanElement;
   private readonly reverseInput: HTMLInputElement;
+  private readonly fastSlowInput: HTMLInputElement;
   private readonly autoPlayInputs: Record<keyof AutoPlayMap, HTMLInputElement>;
   private readonly bgmVolInput: HTMLInputElement;
   private readonly bgmVolVal: HTMLSpanElement;
@@ -123,6 +124,14 @@ class ConfigForm {
       updateConfig({ reverseScroll: rs.input.checked });
     });
     gameplay.body.appendChild(rs.row);
+
+    // FAST / SLOW indicator on judgment flashes
+    const fs = checkboxRow('Show FAST / SLOW indicator on hits');
+    this.fastSlowInput = fs.input;
+    fs.input.addEventListener('change', () => {
+      updateConfig({ showFastSlow: fs.input.checked });
+    });
+    gameplay.body.appendChild(fs.row);
 
     // Per-lane auto-play (DTXmania bAutoPlay struct — one checkbox per
     // drum lane). Grid laid out in two columns so all 11 fit without
@@ -186,6 +195,7 @@ class ConfigForm {
     this.judgeYInput.value = String(cfg.judgeLineY);
     this.judgeYVal.textContent = String(cfg.judgeLineY);
     this.reverseInput.checked = cfg.reverseScroll;
+    this.fastSlowInput.checked = cfg.showFastSlow;
     for (const lane of AUTO_PLAY_LANES) {
       this.autoPlayInputs[lane].checked = cfg.autoPlay[lane];
     }

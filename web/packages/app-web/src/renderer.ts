@@ -29,6 +29,9 @@ export interface JudgmentFlash {
   color: string;
   lane: LaneValue;
   spawnedMs: number;
+  /** Hit-time delta in ms. Negative = player pressed early (FAST),
+   * positive = late (SLOW). `undefined` for MISS (no user press). */
+  deltaMs?: number;
 }
 
 export interface HitFlash {
@@ -140,6 +143,12 @@ export class Renderer {
   private judgeLineY = DEFAULT_JUDGE_LINE_Y;
   /** False = chips fall top→bottom (DTX default). True = chips rise. */
   private reverseScroll = false;
+  /** When true, drawJudgmentFlash surfaces a small "FAST" / "SLOW"
+   * label on top of the judgment text. Controlled by config.showFastSlow. */
+  private showFastSlow = false;
+  /** Symmetric dead-band in ms; abs(delta) ≤ this → no label even
+   * with showFastSlow on. */
+  private fastSlowDeadMs = 8;
   /** HTMLImageElement of the chips atlas used by 2D drawImage per frame. */
   private chipsImage: HTMLImageElement | null = null;
   /** ScreenPlay judge strings 1.png — one row per judgment. */
@@ -360,6 +369,15 @@ export class Renderer {
    * player still hits them at the same physical spot). */
   setReverseScroll(v: boolean): void {
     this.reverseScroll = v;
+  }
+
+  /** Live setters for the FAST/SLOW label. Dead-band is symmetric —
+   * only hits outside ±deadMs show the arrow. */
+  setFastSlowEnabled(v: boolean): void {
+    this.showFastSlow = v;
+  }
+  setFastSlowDeadMs(v: number): void {
+    this.fastSlowDeadMs = Math.max(0, v);
   }
 
   /** Submit new game state for the next frame's HUD paint. */
@@ -810,6 +828,35 @@ export class Renderer {
     ctx.textAlign = 'center';
     ctx.fillText(state.judgmentFlash.text, lane.x + lane.width / 2, y);
     ctx.globalAlpha = 1;
+    this.drawFastSlowLabel(state, lane, y, alpha);
+  }
+
+  /**
+   * Paint a compact "FAST" / "SLOW" tag above the judgment text when
+   * the hit was outside the symmetric dead-band. Applies to both the
+   * sprite path and the text fallback — called at the end of
+   * drawJudgmentFlash so it always sits on top.
+   */
+  private drawFastSlowLabel(
+    state: RenderState,
+    lane: LaneSpec,
+    y: number,
+    alpha: number
+  ): void {
+    if (!this.showFastSlow) return;
+    const flash = state.judgmentFlash;
+    if (!flash || flash.deltaMs === undefined) return;
+    const absDelta = Math.abs(flash.deltaMs);
+    if (absDelta <= this.fastSlowDeadMs) return;
+    const early = flash.deltaMs < 0;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = early ? '#7dd3fc' : '#f87171';
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(early ? 'FAST' : 'SLOW', lane.x + lane.width / 2, y - 58);
+    ctx.restore();
   }
 
   private drawGauge(value: number): void {

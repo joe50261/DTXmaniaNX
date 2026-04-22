@@ -656,6 +656,10 @@ export class Game {
       color: judgmentColor(judgment),
       lane: event.lane,
       spawnedMs: songTime,
+      // Sign matches handleLaneHit's delta: negative = press landed
+      // before the target (FAST), positive = after (SLOW). Renderer
+      // only surfaces the arrow when config.showFastSlow is on.
+      deltaMs: bestDelta,
     };
     this.hitFlashes.push({ lane: event.lane, spawnedMs: songTime });
     this.lastPadHitMs.set(event.lane, performance.now());

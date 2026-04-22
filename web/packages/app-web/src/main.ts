@@ -166,6 +166,8 @@ try {
   boot.display.setScrollSpeed(cfg0.scrollSpeed);
   boot.display.setJudgeLineY(cfg0.judgeLineY);
   boot.display.setReverseScroll(cfg0.reverseScroll);
+  boot.display.setFastSlowEnabled(cfg0.showFastSlow);
+  boot.display.setFastSlowDeadMs(cfg0.fastSlowDeadMs);
   boot.setAutoPlayLanes(autoPlayToLanes(cfg0.autoPlay));
   boot.audio.setBgmVolume(cfg0.volumeBgm);
   boot.audio.setDrumsVolume(cfg0.volumeDrums);
@@ -339,6 +341,8 @@ const applyConfigToActive = (cfg: ReturnType<typeof getConfig>): void => {
   activeGame.display.setScrollSpeed(cfg.scrollSpeed);
   activeGame.display.setJudgeLineY(cfg.judgeLineY);
   activeGame.display.setReverseScroll(cfg.reverseScroll);
+  activeGame.display.setFastSlowEnabled(cfg.showFastSlow);
+  activeGame.display.setFastSlowDeadMs(cfg.fastSlowDeadMs);
   activeGame.audio.setBgmVolume(cfg.volumeBgm);
   activeGame.audio.setDrumsVolume(cfg.volumeDrums);
   activeGame.audio.setPreviewVolume(cfg.volumePreview);

@@ -59,6 +59,15 @@ export interface Config {
    * Migrated on first load: an old `autoKick: true` turns into
    * `autoPlay.BD = autoPlay.LBD = true`. */
   autoPlay: AutoPlayMap;
+  /** If true, judgment flashes show a tiny "FAST" / "SLOW" label
+   * above the PERFECT/GREAT/... text so the player can see whether
+   * they were rushing or dragging. Off by default — distracting
+   * for anyone not actively drilling timing. */
+  showFastSlow: boolean;
+  /** Symmetric dead-band around the target in ms; hits inside
+   * ±fastSlowDeadMs are shown as on-time (no label). Matches
+   * DTXmania's Ghost / Ghost 縦 feature distance of ~8 ms. */
+  fastSlowDeadMs: number;
   /** Master volumes per audio category, 0..1. BGM and drums default to
    * 1; preview defaults to 0.7 so song-select clips don't blast over
    * an active chart. */
@@ -86,6 +95,8 @@ export const DEFAULT_CONFIG: Config = Object.freeze({
   judgeLineY: 600,
   reverseScroll: false,
   autoPlay: { ...EMPTY_AUTO_PLAY },
+  showFastSlow: false,
+  fastSlowDeadMs: 8,
   volumeBgm: 1.0,
   volumeDrums: 1.0,
   volumePreview: 0.7,
