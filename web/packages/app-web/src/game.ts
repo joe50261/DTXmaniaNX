@@ -573,17 +573,24 @@ export class Game {
     this.xrControllers.tick();
     this.vrMenu.tick();
     // VR face-button mapping during play:
-    //   - LEFT X/Y (sources[0] buttons 4/5) → leaveSong (panic quit)
-    //   - RIGHT A (sources[1] button 4)     → capture loop A marker
-    //   - RIGHT B (sources[1] button 5)     → capture loop B marker
+    //   - LEFT  X (button 4) / Y (button 5) → leaveSong (panic quit)
+    //   - RIGHT A (button 4)                → capture loop A marker
+    //   - RIGHT B (button 5)                → capture loop B marker
     // Mnemonic: right-hand sets the loop bounds, left-hand is the
     // panic button. Previously all four buttons quit; splitting the
     // hands gives VR players a way to set loop markers without
     // removing a keyboard from the headset.
-    const sources = this.xrControllers.currentInputSources;
+    //
+    // Look up sources by `handedness`, NOT by Three.js slot index —
+    // WebXR doesn't guarantee slot 0 = left, and swapping connect
+    // order would silently invert loop-marker / quit on affected
+    // runtimes. `inputSourceByHand` returns null for trackers or
+    // disconnected hands.
+    const leftSrc = this.xrControllers.inputSourceByHand('left');
+    const rightSrc = this.xrControllers.inputSourceByHand('right');
     const leftPressed =
-      (sources[0]?.gamepad?.buttons?.[4]?.pressed ?? false) ||
-      (sources[0]?.gamepad?.buttons?.[5]?.pressed ?? false);
+      (leftSrc?.gamepad?.buttons?.[4]?.pressed ?? false) ||
+      (leftSrc?.gamepad?.buttons?.[5]?.pressed ?? false);
     const edge = updateCancelEdgeState({
       prev: [this.cancelSqueezed[0]!, this.cancelSqueezed[1]!],
       pressed: [leftPressed, false],
@@ -598,8 +605,8 @@ export class Game {
     }
 
     const captureActive = this.status === 'playing' && this.renderer.inXR;
-    const rightA = captureActive && (sources[1]?.gamepad?.buttons?.[4]?.pressed ?? false);
-    const rightB = captureActive && (sources[1]?.gamepad?.buttons?.[5]?.pressed ?? false);
+    const rightA = captureActive && (rightSrc?.gamepad?.buttons?.[4]?.pressed ?? false);
+    const rightB = captureActive && (rightSrc?.gamepad?.buttons?.[5]?.pressed ?? false);
     if (risingEdge(this.loopMarkerPressed[0], rightA)) {
       const m = this.captureLoopMarker('A');
       if (m !== null && this.onLoopMarkerCaptured) {

@@ -50,30 +50,30 @@ describe('clampVolume', () => {
 
 describe('computeScheduleWhen — past-time schedule compensation', () => {
   it('future target: play at target with zero source offset', () => {
-    expect(computeScheduleWhen(5.2, 5.0)).toEqual({ when: 5.2, offset: 0 });
+    expect(computeScheduleWhen(5.2, 5.0, 1)).toEqual({ when: 5.2, offset: 0 });
   });
 
   it('target === now: treat as on-time, no compensation', () => {
-    expect(computeScheduleWhen(5.0, 5.0)).toEqual({ when: 5.0, offset: 0 });
+    expect(computeScheduleWhen(5.0, 5.0, 1)).toEqual({ when: 5.0, offset: 0 });
   });
 
-  it('past target: start now, fast-forward into the buffer by the shortfall', () => {
-    // Target was 0.5s ago → start immediately, seek 0.5s into the buffer
+  it('past target at rate=1: start now, fast-forward by the shortfall', () => {
+    // Target was 0.5 s ago → start immediately, seek 0.5 s into the buffer
     // so playback stays aligned with the conceptual song clock.
-    expect(computeScheduleWhen(4.5, 5.0)).toEqual({ when: 5.0, offset: 0.5 });
+    expect(computeScheduleWhen(4.5, 5.0, 1)).toEqual({ when: 5.0, offset: 0.5 });
   });
 
-  it('the offset equals (now - target) exactly, no rounding', () => {
+  it('the rate=1 offset equals (now - target) exactly, no rounding', () => {
     // Pick a value that would reveal an off-by-something bug (e.g.
     // doubled offset, sign flip).
-    expect(computeScheduleWhen(10.0, 10.125)).toEqual({ when: 10.125, offset: 0.125 });
+    expect(computeScheduleWhen(10.0, 10.125, 1)).toEqual({ when: 10.125, offset: 0.125 });
   });
 
   it('very-far-past target: source still starts at `now` (not negative)', () => {
     // Even if target is 30 s behind, scheduleBuffer must never pass a
     // negative `when` to src.start() — the AudioNode spec rejects that
     // with DOMException. Protect the invariant.
-    const r = computeScheduleWhen(-20, 10);
+    const r = computeScheduleWhen(-20, 10, 1);
     expect(r.when).toBe(10);
     expect(r.offset).toBe(30);
   });
@@ -81,9 +81,30 @@ describe('computeScheduleWhen — past-time schedule compensation', () => {
   it('monotonic: a later target yields a later (or equal) when', () => {
     // Sanity property — if regressions twist the comparison they'd
     // violate this.
-    const a = computeScheduleWhen(6, 5);
-    const b = computeScheduleWhen(7, 5);
+    const a = computeScheduleWhen(6, 5, 1);
+    const b = computeScheduleWhen(7, 5, 1);
     expect(b.when).toBeGreaterThanOrEqual(a.when);
+  });
+
+  it('rate < 1 scales the buffer offset down — wall shortfall ≠ buffer seconds', () => {
+    // Past target by 1 wall second at rate 0.5: a source running at
+    // half speed since `target` has consumed only 0.5 buffer-seconds in
+    // that wall second, so the catch-up offset is 0.5 s, not 1 s.
+    // Regression catcher for the loop-seek-at-slow-rate bug.
+    const r = computeScheduleWhen(9.0, 10.0, 0.5);
+    expect(r.when).toBe(10);
+    expect(r.offset).toBeCloseTo(0.5, 9);
+  });
+
+  it('rate > 1 scales the buffer offset up', () => {
+    const r = computeScheduleWhen(9.0, 10.0, 2);
+    expect(r.when).toBe(10);
+    expect(r.offset).toBeCloseTo(2.0, 9);
+  });
+
+  it('rate is ignored for future targets (offset stays 0)', () => {
+    expect(computeScheduleWhen(12, 10, 0.5)).toEqual({ when: 12, offset: 0 });
+    expect(computeScheduleWhen(12, 10, 2)).toEqual({ when: 12, offset: 0 });
   });
 });
 

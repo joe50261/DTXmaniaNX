@@ -167,7 +167,7 @@ export class AudioEngine {
     const kind = options.kind ?? 'drums';
     const master = kind === 'bgm' ? this.bgmGain : this.drumsGain;
     const target = this._songStartCtxTime + songTimeMs / (1000 * this._rate);
-    const { when, offset } = computeScheduleWhen(target, this.ctx.currentTime);
+    const { when, offset } = computeScheduleWhen(target, this.ctx.currentTime, this._rate);
 
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
@@ -297,16 +297,25 @@ function applyPreservesPitch(src: AudioBufferSourceNode, preserve: boolean): voi
  * and fast-forward into it by `offset`, so a late-scheduled BGM/sample
  * stays aligned with song time rather than restarting from zero.
  *
+ * `rate` is the `AudioBufferSourceNode.playbackRate` the caller is
+ * about to set on the source. It matters for the past-time branch:
+ * `src.start(when, offset)` takes BUFFER seconds, but the wall-time
+ * shortfall `(now - target)` at rate ≠ 1 does NOT equal buffer
+ * seconds. During `now - target` wall seconds a source running at
+ * `rate` consumes `(now - target) * rate` buffer seconds, so the
+ * catch-up offset into the buffer is scaled by rate. At rate=1 this
+ * is a no-op and matches the original v1 behavior.
+ *
  * Exported (rather than kept inline in scheduleBuffer) so the past-time
  * compensation rule can be unit-tested without a real AudioContext.
  */
-export function computeScheduleWhen(target: number, now: number): {
+export function computeScheduleWhen(target: number, now: number, rate: number): {
   when: number;
   offset: number;
 } {
   const past = target < now;
   return {
     when: past ? now : target,
-    offset: past ? now - target : 0,
+    offset: past ? (now - target) * rate : 0,
   };
 }

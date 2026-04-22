@@ -120,11 +120,24 @@ export class XrControllers {
 
   /** Expose input sources so other subsystems (e.g. the game layer's
    * mid-song cancel-squeeze polling) can read button state without
-   * duplicating the `connected`/`disconnected` wiring. Returned array is
-   * indexed by controller (0 = left, 1 = right) but entries may be null
-   * if a controller hasn't connected yet. */
+   * duplicating the `connected`/`disconnected` wiring. Returned array
+   * is indexed by Three.js controller slot (0 / 1); ORDER IS NOT
+   * handedness — WebXR's input-source-change event decides slots
+   * independently of which hand connects first. Use `inputSourceByHand`
+   * when semantics depend on handedness (loop markers, quit). */
   get currentInputSources(): ReadonlyArray<XRInputSource | null> {
     return this.inputSources;
+  }
+
+  /** Look up the currently-connected input source for a specific hand.
+   * Returns null if that hand isn't connected or the runtime reports
+   * `handedness === 'none'` (rare; happens for trackers). Stable across
+   * controller slot reassignments within a session. */
+  inputSourceByHand(hand: 'left' | 'right'): XRInputSource | null {
+    for (const src of this.inputSources) {
+      if (src?.handedness === hand) return src;
+    }
+    return null;
   }
 
   onHit(cb: XrLaneListener): void {

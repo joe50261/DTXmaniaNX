@@ -1,4 +1,10 @@
-import { AUTO_PLAY_LANES, getConfig, updateConfig, type AutoPlayMap } from './config.js';
+import {
+  AUTO_PLAY_LANES,
+  getConfig,
+  subscribe,
+  updateConfig,
+  type AutoPlayMap,
+} from './config.js';
 import type { MidiPortInfo } from '@dtxmania/input';
 
 export type MidiStatus = 'pending' | 'ready' | 'unsupported' | 'denied';
@@ -61,6 +67,15 @@ export class ConfigPanel {
 
     this.form = new ConfigForm(deps);
     this.modal.appendChild(this.form.root);
+    // Keep the loop A/B readouts live while the panel is open — the
+    // player might capture a marker via `[` / `]` hotkey or VR face
+    // button without closing the modal. Without this subscribe the
+    // panel would show stale values until the next open(). Other
+    // fields are one-way (panel → config) so they don't need this,
+    // but the refresh is cheap so we just re-pull everything.
+    subscribe(() => {
+      if (this.backdrop.style.display !== 'none') this.form.refreshFromConfig();
+    });
 
     const footer = document.createElement('div');
     footer.className = 'config-footer';
