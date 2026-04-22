@@ -12,6 +12,38 @@
  *   4. Optionally subscribe(...) somewhere to apply it live
  */
 
+/** Per-lane auto-play toggles. Each key is a lane identifier matching
+ * the Lane enum names from @dtxmania/input; `true` means Game auto-
+ * fires chips on that lane. Mirrors DTXmania's bAutoPlay struct
+ * (CConstants.cs:580-595). */
+export interface AutoPlayMap {
+  LC: boolean;
+  HH: boolean;
+  LP: boolean;
+  SD: boolean;
+  HT: boolean;
+  BD: boolean;
+  LT: boolean;
+  FT: boolean;
+  CY: boolean;
+  RD: boolean;
+  LBD: boolean;
+}
+
+export const AUTO_PLAY_LANES: readonly (keyof AutoPlayMap)[] = [
+  'LC',
+  'HH',
+  'LP',
+  'SD',
+  'HT',
+  'BD',
+  'LT',
+  'FT',
+  'CY',
+  'RD',
+  'LBD',
+];
+
 export interface Config {
   /** px / ms scroll speed for chip fall. DTXmania "speed=1" works out
    * to ~0.625 px/ms; user-tuneable 0.30..1.50 here. */
@@ -23,8 +55,10 @@ export interface Config {
    * true  = chips rise bottom→top; player should also slide judgeLineY
    *         up to ~150 to make sense of it. */
   reverseScroll: boolean;
-  /** Auto-fire BD + LBD chips. Future: per-lane split. */
-  autoKick: boolean;
+  /** Per-lane auto-fire flags (replaces the old autoKick boolean).
+   * Migrated on first load: an old `autoKick: true` turns into
+   * `autoPlay.BD = autoPlay.LBD = true`. */
+  autoPlay: AutoPlayMap;
   /** Master volumes per audio category, 0..1. BGM and drums default to
    * 1; preview defaults to 0.7 so song-select clips don't blast over
    * an active chart. */
@@ -33,11 +67,25 @@ export interface Config {
   volumePreview: number;
 }
 
+const EMPTY_AUTO_PLAY: AutoPlayMap = Object.freeze({
+  LC: false,
+  HH: false,
+  LP: false,
+  SD: false,
+  HT: false,
+  BD: false,
+  LT: false,
+  FT: false,
+  CY: false,
+  RD: false,
+  LBD: false,
+});
+
 export const DEFAULT_CONFIG: Config = Object.freeze({
   scrollSpeed: 0.45,
   judgeLineY: 600,
   reverseScroll: false,
-  autoKick: false,
+  autoPlay: { ...EMPTY_AUTO_PLAY },
   volumeBgm: 1.0,
   volumeDrums: 1.0,
   volumePreview: 0.7,
@@ -89,24 +137,39 @@ export function subscribe(cb: (cfg: Config) => void): () => void {
 }
 
 function loadConfig(): Config {
-  let stored: Partial<Config> = {};
+  // `stored` uses a loose shape because the on-disk blob may predate
+  // the current schema (e.g. still carries the old boolean `autoKick`).
+  let stored: Partial<Config> & { autoKick?: boolean } = {};
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) stored = JSON.parse(raw) as Partial<Config>;
+    if (raw) stored = JSON.parse(raw) as typeof stored;
   } catch {
     /* corrupt JSON — fall through to defaults */
   }
-  const merged: Config = { ...DEFAULT_CONFIG, ...stored };
-  // One-time migration from the standalone autokick flag (commit
-  // 538681a). Once we've folded it into the new blob the legacy key
-  // is wiped so older code paths can't fight us.
-  if (!('autoKick' in stored)) {
+  const merged: Config = {
+    ...DEFAULT_CONFIG,
+    ...stored,
+    // Avoid object-spread losing AutoPlayMap keys when stored has a
+    // partial object or none at all.
+    autoPlay: { ...DEFAULT_CONFIG.autoPlay, ...(stored.autoPlay ?? {}) },
+  };
+  // Migration 1: legacy `dtxmania.autokick` standalone key (commit
+  // 538681a). Only honoured when no richer config is stored yet.
+  if (!('autoKick' in stored) && !('autoPlay' in stored)) {
     try {
-      const legacy = localStorage.getItem(LEGACY_AUTOKICK_KEY);
-      if (legacy === '1') merged.autoKick = true;
+      if (localStorage.getItem(LEGACY_AUTOKICK_KEY) === '1') {
+        merged.autoPlay.BD = true;
+        merged.autoPlay.LBD = true;
+      }
     } catch {
       /* ignore */
     }
+  }
+  // Migration 2: old stored config with the boolean `autoKick` flag
+  // (commits 9af1751 .. a9350f7). Fold into the new per-lane map.
+  if (stored.autoKick === true && !('autoPlay' in stored)) {
+    merged.autoPlay.BD = true;
+    merged.autoPlay.LBD = true;
   }
   try {
     localStorage.removeItem(LEGACY_AUTOKICK_KEY);

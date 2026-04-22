@@ -1,4 +1,4 @@
-import { getConfig, updateConfig } from './config.js';
+import { AUTO_PLAY_LANES, getConfig, updateConfig, type AutoPlayMap } from './config.js';
 
 /**
  * Desktop settings modal. Lives entirely in the DOM — no XR rendering.
@@ -79,7 +79,7 @@ class ConfigForm {
   private readonly judgeYInput: HTMLInputElement;
   private readonly judgeYVal: HTMLSpanElement;
   private readonly reverseInput: HTMLInputElement;
-  private readonly autoKickInput: HTMLInputElement;
+  private readonly autoPlayInputs: Record<keyof AutoPlayMap, HTMLInputElement>;
   private readonly bgmVolInput: HTMLInputElement;
   private readonly bgmVolVal: HTMLSpanElement;
   private readonly drumsVolInput: HTMLInputElement;
@@ -124,13 +124,26 @@ class ConfigForm {
     });
     gameplay.body.appendChild(rs.row);
 
-    // Auto-kick
-    const ak = checkboxRow('Auto-kick (BD + LBD fire automatically)');
-    this.autoKickInput = ak.input;
-    ak.input.addEventListener('change', () => {
-      updateConfig({ autoKick: ak.input.checked });
-    });
-    gameplay.body.appendChild(ak.row);
+    // Per-lane auto-play (DTXmania bAutoPlay struct — one checkbox per
+    // drum lane). Grid laid out in two columns so all 11 fit without
+    // overflowing the modal.
+    const ap = section('Auto-play (by lane)');
+    this.root.appendChild(ap.section);
+    const apGrid = document.createElement('div');
+    apGrid.className = 'config-autoplay-grid';
+    ap.body.appendChild(apGrid);
+    const apInputs: Partial<Record<keyof AutoPlayMap, HTMLInputElement>> = {};
+    for (const lane of AUTO_PLAY_LANES) {
+      const row = autoPlayCell(lane);
+      apInputs[lane] = row.input;
+      row.input.addEventListener('change', () => {
+        updateConfig({
+          autoPlay: { ...getConfig().autoPlay, [lane]: row.input.checked },
+        });
+      });
+      apGrid.appendChild(row.row);
+    }
+    this.autoPlayInputs = apInputs as Record<keyof AutoPlayMap, HTMLInputElement>;
 
     const audio = section('Audio');
     this.root.appendChild(audio.section);
@@ -173,7 +186,9 @@ class ConfigForm {
     this.judgeYInput.value = String(cfg.judgeLineY);
     this.judgeYVal.textContent = String(cfg.judgeLineY);
     this.reverseInput.checked = cfg.reverseScroll;
-    this.autoKickInput.checked = cfg.autoKick;
+    for (const lane of AUTO_PLAY_LANES) {
+      this.autoPlayInputs[lane].checked = cfg.autoPlay[lane];
+    }
     this.bgmVolInput.value = String(cfg.volumeBgm);
     this.bgmVolVal.textContent = cfg.volumeBgm.toFixed(2);
     this.drumsVolInput.value = String(cfg.volumeDrums);
@@ -181,6 +196,23 @@ class ConfigForm {
     this.previewVolInput.value = String(cfg.volumePreview);
     this.previewVolVal.textContent = cfg.volumePreview.toFixed(2);
   }
+}
+
+/** Compact "[✓] HH" cell used inside the per-lane auto-play grid. */
+function autoPlayCell(lane: keyof AutoPlayMap): {
+  row: HTMLDivElement;
+  input: HTMLInputElement;
+} {
+  const row = document.createElement('label');
+  row.className = 'config-autoplay-cell';
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  const lab = document.createElement('span');
+  lab.className = 'config-autoplay-label';
+  lab.textContent = lane;
+  row.appendChild(input);
+  row.appendChild(lab);
+  return { row: row as unknown as HTMLDivElement, input };
 }
 
 function section(label: string): { section: HTMLDivElement; body: HTMLDivElement } {

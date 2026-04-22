@@ -17,7 +17,7 @@ import {
   type SongEntry,
 } from '@dtxmania/dtx-core';
 import { AudioEngine, SampleBank } from '@dtxmania/audio-engine';
-import { KeyboardInput, Lane, type LaneHitEvent, type LaneValue } from '@dtxmania/input';
+import { KeyboardInput, type LaneHitEvent, type LaneValue } from '@dtxmania/input';
 import {
   Renderer,
   CANVAS_W,
@@ -101,11 +101,12 @@ export class Game {
    * branch; no guard for null because the callback is optional. */
   private onChartFinished: ((chartPath: string, snap: ScoreSnapshot) => void) | null = null;
   private currentChartPath: string | null = null;
-  /** If true, BD + LBD chips are fired automatically when their time comes
-   * (DTXmania-equivalent of `bAutoPlay.BD = bAutoPlay.LBD = true`). Auto-
-   * fired chips don't advance combo and are excluded from score / rank
+  /** Per-lane auto-play: keys are DTX channel numbers (Lane.BD etc.);
+   * presence in the set means Game auto-fires chips on that lane.
+   * DTXmania equivalent: each key of CConfigIni.bAutoPlay. Auto-fired
+   * chips don't advance combo and are excluded from score / rank
    * denominators via ScoreTracker.recordAuto. */
-  private autoKick = false;
+  private autoPlayLanes = new Set<LaneValue>();
   private bgmSources: AudioBufferSourceNode[] = [];
   private readonly xrControllers: XrControllers;
   private readonly vrMenu: VrMenu;
@@ -222,10 +223,11 @@ export class Game {
     this.xrControllers.setPadsTexture(skin.pads);
   }
 
-  /** Enable / disable auto-kick mid-session. Takes effect on the next tick;
-   * chips already past their playback time are not retroactively auto-fired. */
-  setAutoKick(enabled: boolean): void {
-    this.autoKick = enabled;
+  /** Replace the set of auto-firing lanes. Mid-session safe — next
+   * tick picks up the new set; chips already past their window aren't
+   * retroactively auto-fired. */
+  setAutoPlayLanes(lanes: Iterable<LaneValue>): void {
+    this.autoPlayLanes = new Set(lanes);
   }
 
   async loadAndStart(
@@ -233,7 +235,7 @@ export class Game {
     opts: {
       onRestart?: () => void;
       fs?: GameFsContext;
-      autoKick?: boolean;
+      autoPlayLanes?: Iterable<LaneValue>;
       /** Stable ID for this chart — used as the IDB key for best-of
        * records. Host supplies the scanner's `chart.chartPath`. */
       chartPath?: string;
@@ -245,7 +247,9 @@ export class Game {
     this.onRestart = opts.onRestart ?? null;
     this.onChartFinished = opts.onChartFinished ?? null;
     this.currentChartPath = opts.chartPath ?? null;
-    if (opts.autoKick !== undefined) this.autoKick = opts.autoKick;
+    if (opts.autoPlayLanes !== undefined) {
+      this.autoPlayLanes = new Set(opts.autoPlayLanes);
+    }
     // Belt-and-braces: whatever state hideVrMenu may or may not have run in,
     // a fresh chart always wants the playfield visible.
     this.renderer.setPlayfieldVisible(true);
@@ -462,8 +466,8 @@ export class Game {
     // (handleLaneHit). BGM is still auto-scheduled via scheduleBgm so the
     // music continues. Missed chips are silent — standard rhythm-game feel.
     // Exception: auto-kick fires BD + LBD chips on schedule — see
-    // autoFireBassChips below.
-    this.autoFireBassChips(songTime);
+    // autoFireLanes below.
+    this.autoFireLanes(songTime);
 
     // Miss detection: any unhit chip whose judgment window has fully passed.
     for (const p of this.playables) {
@@ -560,20 +564,22 @@ export class Game {
   }
 
   /**
-   * Fire any BD / LBD chip whose playback time has arrived and hasn't been
-   * hit yet. Mirrors DTXmania's auto-play loop in
-   * CStagePerfDrumsScreen.cs:3394-3429 (UsePerfectGhost branch), but scoped
-   * to just the two bass-drum lanes. Auto-fire plays the sample, bounces
-   * the pad, and adds a hit flash — visually identical to a player hit —
-   * but calls ScoreTracker.recordAuto (not record(PERFECT)) so combo and
-   * the rank denominator are unaffected.
+   * Fire any playable chip on an auto-play lane whose playback time
+   * has arrived. Mirrors DTXmania's auto-play loop in
+   * CStagePerfDrumsScreen.cs:3394-3429 (UsePerfectGhost branch) —
+   * plays the sample, bounces the pad, pushes a hit flash, but calls
+   * ScoreTracker.recordAuto instead of record(PERFECT) so combo and
+   * the rank denominator stay honest.
+   *
+   * `autoPlayLanes` is a Set of LaneValues (DTX channel numbers),
+   * populated from config.autoPlay via main.ts. Empty set = no-op.
    */
-  private autoFireBassChips(songTime: number): void {
-    if (!this.autoKick) return;
+  private autoFireLanes(songTime: number): void {
+    if (this.autoPlayLanes.size === 0) return;
     for (let i = 0; i < this.playables.length; i++) {
       const p = this.playables[i]!;
       if (p.hit || p.missed) continue;
-      if (p.laneValue !== Lane.BD && p.laneValue !== Lane.LBD) continue;
+      if (!this.autoPlayLanes.has(p.laneValue)) continue;
       if (songTime < p.chip.playbackTimeMs) continue;
       p.hit = true;
       this.tracker.recordAuto();
