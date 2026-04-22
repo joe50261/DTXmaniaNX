@@ -2,16 +2,16 @@
 
 TypeScript rewrite of DTXmaniaNX targeting browsers + Quest 3 via WebXR.
 
-This directory lives alongside the original C# codebase (`DTXMania/`, `FDK/`, etc.) and does not modify it. See `/root/.claude/plans/quest3-webxr-dtx-dtxc-discord-plugin-cr-swirling-crayon.md` for the full plan.
+This directory lives alongside the original C# codebase (`DTXMania/`, `FDK/`, etc.) and does not modify it.
 
 ## Layout
 
 ```
 packages/
   dtx-core/       # Pure logic: DTX parser, timing, scoring, scanner. No browser APIs.
-  audio-engine/   # Web Audio + synthesized drum kit (WAV loading is TODO)
-  input/          # Keyboard input (Gamepad / XR controllers TODO)
-  app-web/        # Vite app. Canvas-2D rhythm game prototype with bundled demo chart.
+  audio-engine/   # Web Audio + real WAV sample bank + synth fallback.
+  input/          # Keyboard + XR controllers today; Gamepad / MIDI in progress.
+  app-web/        # Vite app. Three.js renderer with CanvasTexture 2D overlay + WebXR.
 ```
 
 ## Dev
@@ -72,11 +72,12 @@ registered.
 - ✅ Timing (mid-measure BPM changes, multi-measure gaps)
 - ✅ Scoring (judgment windows + 1M-point simplified score)
 - ✅ Scanner + FS Access API backend + IndexedDB handle persistence
-- ✅ Playable Canvas 2D prototype: falling notes, keyboard hits, judgment flashes, HUD
+- ✅ Three.js renderer with 2D CanvasTexture overlay (desktop ortho + WebXR)
+- ✅ WAV sample playback via SampleBank (synth is the fallback when #WAV is unbound)
+- ✅ XR session + Touch-controller drum kit + in-headset song picker
 - ✅ PWA manifest + service worker (installable, offline shell)
-- 🚧 WAV sample playback (synth drums only for now)
-- 🚧 Three.js renderer (Canvas 2D today; upgrades to Three.js for XR)
-- 🚧 XR session + Touch controllers
+- 🚧 Gamepad API (non-XR) + MIDI drum kit input
+- 🚧 Practice mode (playback-rate slow-down + loop window)
 - 🚧 Capacitor APK packaging
 
 ## Deploy (GitHub Pages)
