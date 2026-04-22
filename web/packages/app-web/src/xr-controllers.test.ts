@@ -133,6 +133,26 @@ describe('XrControllers — input source tracking', () => {
     expect(snap1[0]).toBe(src);
   });
 
+  it('inputSourceByHand returns the hand regardless of slot index', () => {
+    // If the right controller connects into slot 0, lookups by hand
+    // must still return the right one. Guards the loop-marker /
+    // left-quit mapping in game.ts from silent inversion on runtimes
+    // that don't emit connected events in left-then-right order.
+    const { xr, gl } = makeStarted();
+    const leftSrc = fakeInputSource('left');
+    const rightSrc = fakeInputSource('right');
+    dispatchConnected(gl.controllers[0]!, rightSrc);
+    dispatchConnected(gl.controllers[1]!, leftSrc);
+    expect(xr.inputSourceByHand('left')).toBe(leftSrc);
+    expect(xr.inputSourceByHand('right')).toBe(rightSrc);
+  });
+
+  it('inputSourceByHand returns null when that hand is disconnected', () => {
+    const { xr, gl } = makeStarted();
+    dispatchConnected(gl.controllers[0]!, fakeInputSource('right'));
+    expect(xr.inputSourceByHand('left')).toBe(null);
+  });
+
   it('adds the controllers and grips to the scene (wiring sanity)', () => {
     const { scene, gl } = makeStarted();
     // Both controllers + both grips must end up parented under the scene

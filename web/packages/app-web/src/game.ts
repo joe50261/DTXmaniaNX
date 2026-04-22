@@ -1,6 +1,7 @@
 import {
   parseDtx,
   computeTiming,
+  buildMeasureStartMsIndex,
   ScoreTracker,
   classifyDeltaMs,
   computeAchievementRate,
@@ -38,10 +39,15 @@ import { XrControllers } from './xr-controllers.js';
 import { resetStateOnVrExit } from './vr-lifecycle.js';
 import {
   applyGaugeDelta,
+  resolveLoopWindow,
+  risingEdge,
   shouldEnterFinishedState,
   shouldFireResultPadHitReturn,
   shouldFireVrAutoReturn,
+  shouldLoopFire,
+  snapSongMsToMeasure,
   updateCancelEdgeState,
+  type ResolvedLoopWindow,
 } from './tick-state.js';
 import { VrMenu, type VrMenuDeps, type VrMenuPick } from './vr-menu.js';
 import type { BoxNode } from '@dtxmania/dtx-core';
@@ -102,6 +108,11 @@ export class Game {
    * meaning depends on Game's status — during play it aborts, during
    * the VR menu it's a back press handled by VrMenu itself. */
   private cancelSqueezed: boolean[] = [false, false];
+  /** Rising-edge latches for the right-controller A/B face buttons that
+   * capture loop A/B markers in VR. Independent from cancelSqueezed
+   * because a held button should neither re-fire nor block a press on
+   * the other button. Reset whenever play is not active. */
+  private loopMarkerPressed: [boolean, boolean] = [false, false];
   private judgmentFlash: JudgmentFlash | null = null;
   private hitFlashes: HitFlash[] = [];
   /** Life / skill gauge, 0..1. Filled by hits, drained by misses. Starts at 0.5 so the player has headroom. */
@@ -113,8 +124,26 @@ export class Game {
    * 'finished'. Host uses it to persist per-chart best-score records.
    * Cleared in loadAndStart and called in the tick() status-flip
    * branch; no guard for null because the callback is optional. */
-  private onChartFinished: ((chartPath: string, snap: ScoreSnapshot) => void) | null = null;
+  private onChartFinished:
+    | ((chartPath: string, snap: ScoreSnapshot, didLoop: boolean) => void)
+    | null = null;
   private currentChartPath: string | null = null;
+  /** Fires when the VR right-hand face-button captures a loop marker in
+   * the current chart. Host (main.ts) maps into `updateConfig`. Only
+   * fired during `status === 'playing'`. */
+  private onLoopMarkerCaptured: ((which: 'A' | 'B', measure: number) => void) | null = null;
+  /** Built by `loadAndStart`; cleared by `leaveSong`. Empty until a
+   * chart is loaded, which is why `setLoopWindow` treats empty as
+   * "disable loop" and doesn't error. */
+  private measureStartMs: number[] = [];
+  /** Resolved loop bounds in song ms. Null when loop is off, invalid,
+   * or no chart is loaded. */
+  private loopWindowMs: ResolvedLoopWindow | null = null;
+  /** True if the loop has seeked back at least once on the current
+   * chart. Included in the onChartFinished payload so main.ts can pass
+   * it to `isPracticeRun` — a chart whose loop fired is a practice run
+   * even after the player toggles loop off. */
+  private loopedAtLeastOnce = false;
   /** Per-lane auto-play: keys are DTX channel numbers (Lane.BD etc.);
    * presence in the set means Game auto-fires chips on that lane.
    * DTXmania equivalent: each key of CConfigIni.bAutoPlay. Auto-fired
@@ -244,6 +273,40 @@ export class Game {
     this.autoPlayLanes = new Set(lanes);
   }
 
+  /** Apply a measure-based loop window from config. Called by main.ts
+   * via `applyConfigToActive` on every config change; safe to call
+   * before a chart is loaded (no-op until `measureStartMs` is built).
+   * Invalid ranges silently disable the loop — caller doesn't need to
+   * pre-validate. */
+  setLoopWindow(
+    enabled: boolean,
+    startMeasure: number,
+    endMeasure: number | null,
+  ): void {
+    if (!this.song) {
+      this.loopWindowMs = null;
+      return;
+    }
+    this.loopWindowMs = resolveLoopWindow(
+      this.measureStartMs,
+      this.song.durationMs,
+      enabled,
+      startMeasure,
+      endMeasure,
+    );
+  }
+
+  /** Snap the current song time to the nearest measure boundary and
+   * return the measure index. `'A'` floors (start of the current
+   * measure), `'B'` ceils (start of the next). Returns null when the
+   * chart isn't playing or no measure index is built. */
+  captureLoopMarker(which: 'A' | 'B'): number | null {
+    if (this.status !== 'playing' || !this.song) return null;
+    if (this.measureStartMs.length === 0) return null;
+    const now = this.engine.songTimeMs();
+    return snapSongMsToMeasure(now, this.measureStartMs, which === 'A' ? 'floor' : 'ceil');
+  }
+
   async loadAndStart(
     dtxText: string,
     opts: {
@@ -254,12 +317,23 @@ export class Game {
        * records. Host supplies the scanner's `chart.chartPath`. */
       chartPath?: string;
       /** Fires once when the chart's status flips to 'finished'. Host
-       * persists the snapshot via mergeChartRecord → saveChartRecord. */
-      onChartFinished?: (chartPath: string, snap: ScoreSnapshot) => void;
+       * persists the snapshot via mergeChartRecord → saveChartRecord.
+       * `didLoop` is true iff the loop seeked back at least once on
+       * this run — callers feed it into `isPracticeRun` to suppress
+       * best-score writes for practice sessions. */
+      onChartFinished?: (
+        chartPath: string,
+        snap: ScoreSnapshot,
+        didLoop: boolean,
+      ) => void;
+      /** Fires when the VR right-controller face-button captures a
+       * loop marker. Host writes the measure into config. */
+      onLoopMarkerCaptured?: (which: 'A' | 'B', measure: number) => void;
     } = {}
   ): Promise<void> {
     this.onRestart = opts.onRestart ?? null;
     this.onChartFinished = opts.onChartFinished ?? null;
+    this.onLoopMarkerCaptured = opts.onLoopMarkerCaptured ?? null;
     this.currentChartPath = opts.chartPath ?? null;
     if (opts.autoPlayLanes !== undefined) {
       this.autoPlayLanes = new Set(opts.autoPlayLanes);
@@ -275,6 +349,10 @@ export class Game {
     await this.engine.resume();
 
     this.song = computeTiming(parseDtx(dtxText));
+    this.measureStartMs = buildMeasureStartMsIndex(this.song);
+    this.loopWindowMs = null;
+    this.loopedAtLeastOnce = false;
+    this.loopMarkerPressed = [false, false];
 
     // Preload every sample the chart references (BGM + drums) in one batch.
     // Missing or undecodable (e.g. .xa) samples are just absent from the map;
@@ -352,6 +430,32 @@ export class Game {
     }
   }
 
+  /** Teleport the song clock + re-arm chips whose playback time moves
+   * back behind the cursor. Called by the loop tick branch when the
+   * song time crosses the loop's end; could be reused by a future
+   * manual "seek to measure" UI.
+   *
+   * Stops BGM only — drum sample tails are short (typically < 500 ms)
+   * and letting them decay across the seek sounds more natural than
+   * an abrupt silence for hits fired just before the loop boundary.
+   * BGM must stop because re-scheduling against the seeked clock is
+   * how we realign the song track. */
+  private seekTo(songMs: number): void {
+    if (!this.song) return;
+    this.stopBgm();
+    for (const p of this.playables) {
+      if (p.chip.playbackTimeMs >= songMs) {
+        p.hit = false;
+        p.missed = false;
+      }
+    }
+    this.engine.seekSongClock(songMs);
+    this.scheduleBgm(this.song);
+    this.judgmentFlash = null;
+    this.hitFlashes.length = 0;
+    this.loopedAtLeastOnce = true;
+  }
+
   private stopBgm(): void {
     for (const src of this.bgmSources) {
       try {
@@ -377,6 +481,10 @@ export class Game {
     this.stopBgm();
     this.status = 'idle';
     this.song = null;
+    this.measureStartMs = [];
+    this.loopWindowMs = null;
+    this.loopedAtLeastOnce = false;
+    this.loopMarkerPressed = [false, false];
     this.finishedAtMs = null;
     this.finishedReturnHandled = false;
     this.onRestart();
@@ -466,34 +574,56 @@ export class Game {
   private tick(): void {
     this.xrControllers.tick();
     this.vrMenu.tick();
-    // VR mid-song quit: any of X/Y/A/B (face buttons on either Touch
-    // controller) presses while the chart is playing dumps us back to
-    // the picker. Squeeze was used previously but turned out easy to
-    // misfire while gripping the stick tightly — the face buttons need
-    // a deliberate thumb reach. Edge-detected per controller so a hold
-    // doesn't re-fire, and deliberately only active during 'playing' —
-    // VrMenu handles its own back input, and the RESULTS screen is
-    // already covered by Esc / pad-hit / 5 s auto-return.
-    const sources = this.xrControllers.currentInputSources;
-    // Index 4 = A (right) / X (left); index 5 = B / Y. Either counts.
-    const pressed0 =
-      (sources[0]?.gamepad?.buttons?.[4]?.pressed ?? false) ||
-      (sources[0]?.gamepad?.buttons?.[5]?.pressed ?? false);
-    const pressed1 =
-      (sources[1]?.gamepad?.buttons?.[4]?.pressed ?? false) ||
-      (sources[1]?.gamepad?.buttons?.[5]?.pressed ?? false);
+    // VR face-button mapping during play:
+    //   - LEFT  X (button 4) / Y (button 5) → leaveSong (panic quit)
+    //   - RIGHT A (button 4)                → capture loop A marker
+    //   - RIGHT B (button 5)                → capture loop B marker
+    // Mnemonic: right-hand sets the loop bounds, left-hand is the
+    // panic button. Previously all four buttons quit; splitting the
+    // hands gives VR players a way to set loop markers without
+    // removing a keyboard from the headset.
+    //
+    // Look up sources by `handedness`, NOT by Three.js slot index —
+    // WebXR doesn't guarantee slot 0 = left, and swapping connect
+    // order would silently invert loop-marker / quit on affected
+    // runtimes. `inputSourceByHand` returns null for trackers or
+    // disconnected hands.
+    const leftSrc = this.xrControllers.inputSourceByHand('left');
+    const rightSrc = this.xrControllers.inputSourceByHand('right');
+    const leftPressed =
+      (leftSrc?.gamepad?.buttons?.[4]?.pressed ?? false) ||
+      (leftSrc?.gamepad?.buttons?.[5]?.pressed ?? false);
     const edge = updateCancelEdgeState({
       prev: [this.cancelSqueezed[0]!, this.cancelSqueezed[1]!],
-      pressed: [pressed0, pressed1],
+      pressed: [leftPressed, false],
       active: this.status === 'playing' && this.renderer.inXR,
     });
     this.cancelSqueezed[0] = edge.next[0];
     this.cancelSqueezed[1] = edge.next[1];
     if (edge.firedBy !== null) {
-      console.info('[game] VR face-button → leaveSong');
+      console.info('[game] VR left face-button → leaveSong');
       this.leaveSong();
       return;
     }
+
+    const captureActive = this.status === 'playing' && this.renderer.inXR;
+    const rightA = captureActive && (rightSrc?.gamepad?.buttons?.[4]?.pressed ?? false);
+    const rightB = captureActive && (rightSrc?.gamepad?.buttons?.[5]?.pressed ?? false);
+    if (risingEdge(this.loopMarkerPressed[0], rightA)) {
+      const m = this.captureLoopMarker('A');
+      if (m !== null && this.onLoopMarkerCaptured) {
+        try { this.onLoopMarkerCaptured('A', m); }
+        catch (e) { console.warn('[loop] onLoopMarkerCaptured A threw', e); }
+      }
+    }
+    if (risingEdge(this.loopMarkerPressed[1], rightB)) {
+      const m = this.captureLoopMarker('B');
+      if (m !== null && this.onLoopMarkerCaptured) {
+        try { this.onLoopMarkerCaptured('B', m); }
+        catch (e) { console.warn('[loop] onLoopMarkerCaptured B threw', e); }
+      }
+    }
+    this.loopMarkerPressed = [rightA, rightB];
     if (!this.song) return;
     const songTime = this.engine.songTimeMs();
 
@@ -522,6 +652,19 @@ export class Game {
       };
     }
 
+    // Practice loop: when the chart time crosses the window's end,
+    // teleport back to start. Must run BEFORE the finished-state check
+    // so a loop ending at end-of-song keeps looping instead of racing
+    // the transition. seekTo also rebases the chips in the window
+    // (clears hit/missed) so they register again on the next pass.
+    if (
+      this.loopWindowMs &&
+      shouldLoopFire(songTime, this.loopWindowMs.end, this.status)
+    ) {
+      this.seekTo(this.loopWindowMs.start);
+      return;
+    }
+
     // Game-over check: song finished + small tail for last miss detection.
     if (shouldEnterFinishedState(songTime, this.song.durationMs, this.status)) {
       this.status = 'finished';
@@ -533,7 +676,11 @@ export class Game {
       // overwrite a real attempt's medal.
       if (this.onChartFinished && this.currentChartPath) {
         try {
-          this.onChartFinished(this.currentChartPath, this.tracker.snapshot());
+          this.onChartFinished(
+            this.currentChartPath,
+            this.tracker.snapshot(),
+            this.loopedAtLeastOnce,
+          );
         } catch (e) {
           console.warn('[result] onChartFinished threw', e);
         }

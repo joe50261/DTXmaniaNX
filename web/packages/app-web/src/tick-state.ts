@@ -138,6 +138,86 @@ export interface CancelEdgeOutput {
   firedBy: 0 | 1 | null;
 }
 
+/** Rising-edge detector for a single boolean input. Returns true on the
+ * first frame where `cur` is true and `prev` was false. Used by the
+ * per-controller loop-marker capture in VR (right-A / right-B). Held
+ * presses don't re-fire; releases re-arm. Pure for testability. */
+export function risingEdge(prev: boolean, cur: boolean): boolean {
+  return cur && !prev;
+}
+
+// ---- Practice-mode loop --------------------------------------------
+
+export interface ResolvedLoopWindow {
+  /** Inclusive song-ms of the loop start. */
+  start: number;
+  /** Exclusive song-ms of the loop end (seek back when songTime ≥ end). */
+  end: number;
+}
+
+/** Validate + snap a measure-based loop window to absolute song ms.
+ *
+ * Returns null when any of:
+ *   - loop is disabled
+ *   - measureStartMs is empty (chart not yet ready)
+ *   - the resolved window is zero-or-negative length
+ *
+ * Clamps out-of-range measure indices to the index bounds. `endMeasure
+ * = null` resolves to the sentinel (end of song). The returned `end`
+ * is further clamped to `durationMs` so seeking past song end is
+ * impossible.
+ */
+export function resolveLoopWindow(
+  measureStartMs: readonly number[],
+  durationMs: number,
+  enabled: boolean,
+  startMeasure: number,
+  endMeasure: number | null,
+): ResolvedLoopWindow | null {
+  if (!enabled) return null;
+  if (measureStartMs.length === 0) return null;
+  const maxIdx = measureStartMs.length - 1;
+  const sIdx = Math.max(0, Math.min(Math.floor(startMeasure), maxIdx));
+  const eIdx = endMeasure === null
+    ? maxIdx
+    : Math.max(0, Math.min(Math.floor(endMeasure), maxIdx));
+  const start = measureStartMs[sIdx]!;
+  const end = Math.min(measureStartMs[eIdx]!, durationMs);
+  if (end <= start) return null;
+  return { start, end };
+}
+
+/** Whether the loop's seek-back should fire this frame. Separate from
+ * `shouldEnterFinishedState` so a loop ending at song-end doesn't race
+ * the finished transition — the caller checks this FIRST. */
+export function shouldLoopFire(
+  songTimeMs: number,
+  loopEnd: number | null,
+  status: GameStatus,
+): boolean {
+  if (status !== 'playing') return false;
+  if (loopEnd === null) return false;
+  return songTimeMs >= loopEnd;
+}
+
+/** Snap a song-ms to the nearest measure boundary. `floor` picks the
+ * measure containing the time (used for loop A). `ceil` picks the next
+ * boundary after the time (used for loop B). Clamps to the index range
+ * on either end. Returns 0 for an empty index (no chart). */
+export function snapSongMsToMeasure(
+  songMs: number,
+  measureStartMs: readonly number[],
+  mode: 'floor' | 'ceil',
+): number {
+  if (measureStartMs.length === 0) return 0;
+  for (let i = 0; i < measureStartMs.length; i++) {
+    if (measureStartMs[i]! > songMs) {
+      return mode === 'floor' ? Math.max(0, i - 1) : i;
+    }
+  }
+  return measureStartMs.length - 1;
+}
+
 export function updateCancelEdgeState(i: CancelEdgeInput): CancelEdgeOutput {
   if (!i.active) {
     return { next: [false, false], firedBy: null };

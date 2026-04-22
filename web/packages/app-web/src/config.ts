@@ -93,15 +93,17 @@ export interface Config {
    * drum samples so slow-downs don't pitch down. Browsers that don't
    * support the flag ignore it silently. */
   preservePitch: boolean;
-  /** Reserved — loop UI + `game.seekTo()` are a follow-up. The flag is
-   * wired into `isPracticeRun` already so that when the runtime lands
-   * the guarding is in place; toggling this today has no gameplay
-   * effect beyond suppressing best-score writes (which is consistent
-   * with practice intent). */
+  /** When true and a chart is playing, the song clock is rebased back
+   * to `practiceLoopStartMeasure` whenever it crosses
+   * `practiceLoopEndMeasure`. Re-arms chips inside the window so they
+   * register on each pass. Feeds `isPracticeRun` so any run with the
+   * flag on (or with a loop that fired) skips best-score writes. */
   practiceLoopEnabled: boolean;
-  /** Reserved — see `practiceLoopEnabled`. 0-based measure index. */
+  /** 0-based measure index where the loop starts. Capture live via
+   * Settings → Set A / `[` key / VR right-A face button. */
   practiceLoopStartMeasure: number;
-  /** Reserved — see `practiceLoopEnabled`. null = end of song. */
+  /** 0-based measure index where the loop ends. null = end of song
+   * (useful when only A is set — loops the tail of the chart). */
   practiceLoopEndMeasure: number | null;
 }
 

@@ -5,9 +5,13 @@ import {
   gaugeDeltaFor,
   GAUGE_DELTAS,
   RESULT_PAD_HIT_DWELL_MS,
+  resolveLoopWindow,
+  risingEdge,
   shouldEnterFinishedState,
   shouldFireResultPadHitReturn,
   shouldFireVrAutoReturn,
+  shouldLoopFire,
+  snapSongMsToMeasure,
   SONG_END_TAIL_MS,
   updateCancelEdgeState,
   VR_AUTO_RETURN_DWELL_MS,
@@ -176,6 +180,111 @@ describe('shouldFireResultPadHitReturn', () => {
 
   it('RESULT_PAD_HIT_DWELL_MS is 400 — pin the dwell constant', () => {
     expect(RESULT_PAD_HIT_DWELL_MS).toBe(400);
+  });
+});
+
+describe('risingEdge — single-input edge detect for VR loop markers', () => {
+  it('false → true: fires', () => {
+    expect(risingEdge(false, true)).toBe(true);
+  });
+  it('true → true: held, no re-fire', () => {
+    expect(risingEdge(true, true)).toBe(false);
+  });
+  it('true → false: released, no fire', () => {
+    expect(risingEdge(true, false)).toBe(false);
+  });
+  it('false → false: idle, no fire', () => {
+    expect(risingEdge(false, false)).toBe(false);
+  });
+});
+
+describe('resolveLoopWindow — config → absolute song-ms bounds', () => {
+  const idx = [0, 2000, 4000, 6000, 8000]; // 4 measures + sentinel
+  const duration = 8000;
+
+  it('returns null when disabled', () => {
+    expect(resolveLoopWindow(idx, duration, false, 0, 3)).toBeNull();
+  });
+
+  it('returns null for empty index (no chart loaded)', () => {
+    expect(resolveLoopWindow([], duration, true, 0, 3)).toBeNull();
+  });
+
+  it('resolves a valid measure range to absolute ms', () => {
+    expect(resolveLoopWindow(idx, duration, true, 1, 3)).toEqual({ start: 2000, end: 6000 });
+  });
+
+  it('end = null (sentinel) resolves to end of index, clamped to durationMs', () => {
+    expect(resolveLoopWindow(idx, duration, true, 1, null)).toEqual({ start: 2000, end: 8000 });
+  });
+
+  it('clamps out-of-range start + end indices', () => {
+    expect(resolveLoopWindow(idx, duration, true, -5, 99)).toEqual({ start: 0, end: 8000 });
+  });
+
+  it('zero-length window (end ≤ start) returns null — silently disable', () => {
+    expect(resolveLoopWindow(idx, duration, true, 2, 2)).toBeNull();
+    expect(resolveLoopWindow(idx, duration, true, 3, 1)).toBeNull();
+  });
+
+  it('caps end at durationMs when the sentinel would overshoot', () => {
+    // Index sentinel at 8000, but the chart is only 7500ms long.
+    expect(resolveLoopWindow(idx, 7500, true, 0, null)).toEqual({ start: 0, end: 7500 });
+  });
+
+  it('floors fractional measure inputs', () => {
+    // Config saves integers but defend against hand-edited storage.
+    expect(resolveLoopWindow(idx, duration, true, 1.7, 3.2)).toEqual({ start: 2000, end: 6000 });
+  });
+});
+
+describe('shouldLoopFire — tick-time predicate for loop rebase', () => {
+  it('fires when songTime reaches loopEnd while playing', () => {
+    expect(shouldLoopFire(4000, 4000, 'playing')).toBe(true);
+    expect(shouldLoopFire(4001, 4000, 'playing')).toBe(true);
+  });
+
+  it('does not fire before loopEnd', () => {
+    expect(shouldLoopFire(3999, 4000, 'playing')).toBe(false);
+  });
+
+  it('does not fire when loopEnd is null (no window)', () => {
+    expect(shouldLoopFire(999999, null, 'playing')).toBe(false);
+  });
+
+  it('does not fire outside status=playing — loop respects finished/idle', () => {
+    expect(shouldLoopFire(5000, 4000, 'finished')).toBe(false);
+    expect(shouldLoopFire(5000, 4000, 'idle')).toBe(false);
+  });
+});
+
+describe('snapSongMsToMeasure', () => {
+  const idx = [0, 2000, 4000, 6000, 8000];
+
+  it('songMs = 0 (exactly on boundary 0): floor → 0, ceil → 1 (next boundary)', () => {
+    expect(snapSongMsToMeasure(0, idx, 'floor')).toBe(0);
+    expect(snapSongMsToMeasure(0, idx, 'ceil')).toBe(1);
+  });
+
+  it('exactly on a boundary: floor returns that measure, ceil returns next', () => {
+    // 4000 is the start of measure 2. floor → 2, ceil → 3 (next boundary).
+    expect(snapSongMsToMeasure(4000, idx, 'floor')).toBe(2);
+    expect(snapSongMsToMeasure(4000, idx, 'ceil')).toBe(3);
+  });
+
+  it('mid-measure: floor returns containing measure, ceil returns next', () => {
+    expect(snapSongMsToMeasure(3500, idx, 'floor')).toBe(1);
+    expect(snapSongMsToMeasure(3500, idx, 'ceil')).toBe(2);
+  });
+
+  it('past the last entry: clamps to last index', () => {
+    expect(snapSongMsToMeasure(99999, idx, 'floor')).toBe(4);
+    expect(snapSongMsToMeasure(99999, idx, 'ceil')).toBe(4);
+  });
+
+  it('empty index returns 0', () => {
+    expect(snapSongMsToMeasure(5000, [], 'floor')).toBe(0);
+    expect(snapSongMsToMeasure(5000, [], 'ceil')).toBe(0);
   });
 });
 

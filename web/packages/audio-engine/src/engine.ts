@@ -167,7 +167,7 @@ export class AudioEngine {
     const kind = options.kind ?? 'drums';
     const master = kind === 'bgm' ? this.bgmGain : this.drumsGain;
     const target = this._songStartCtxTime + songTimeMs / (1000 * this._rate);
-    const { when, offset } = computeScheduleWhen(target, this.ctx.currentTime);
+    const { when, offset } = computeScheduleWhen(target, this.ctx.currentTime, this._rate);
 
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
@@ -188,6 +188,14 @@ export class AudioEngine {
     src.addEventListener('ended', () => this.liveSources.delete(src));
     src.start(when, offset);
     return src;
+  }
+
+  /** Teleport the song clock so `songTimeMs() === songMs` immediately.
+   * No clamp — Game owns range semantics. Live sources are NOT stopped;
+   * the loop-seek caller (Game.seekTo) stops only BGM via its own
+   * `bgmSources` tracker so drum-sample tails can decay naturally. */
+  seekSongClock(songMs: number): void {
+    this._songStartCtxTime = computeSeekStart(this.ctx.currentTime, this._rate, songMs);
   }
 
   /** Per-category volume setters. Values clamp to [0, 1]; no ramp — the
@@ -238,6 +246,17 @@ export function rebaseSongStart(
   return now - (now - oldStart) * oldRate / newRate;
 }
 
+/** Compute the `_songStartCtxTime` that teleports `songTimeMs()` to
+ * `targetSongMs` when the wall clock reads `now`. Exported (pure) so
+ * the invariant is unit-testable without an AudioContext.
+ *
+ *   targetSongMs = (now - newStart) * 1000 * rate
+ *   newStart = now - targetSongMs / (1000 * rate)
+ */
+export function computeSeekStart(now: number, rate: number, targetSongMs: number): number {
+  return now - targetSongMs / (1000 * rate);
+}
+
 /** Set both `preservesPitch` and the legacy `webkitPreservesPitch` alias
  * so older Safari still respects the toggle. */
 function applyPreservesPitch(src: AudioBufferSourceNode, preserve: boolean): void {
@@ -265,16 +284,25 @@ function applyPreservesPitch(src: AudioBufferSourceNode, preserve: boolean): voi
  * and fast-forward into it by `offset`, so a late-scheduled BGM/sample
  * stays aligned with song time rather than restarting from zero.
  *
+ * `rate` is the `AudioBufferSourceNode.playbackRate` the caller is
+ * about to set on the source. It matters for the past-time branch:
+ * `src.start(when, offset)` takes BUFFER seconds, but the wall-time
+ * shortfall `(now - target)` at rate ≠ 1 does NOT equal buffer
+ * seconds. During `now - target` wall seconds a source running at
+ * `rate` consumes `(now - target) * rate` buffer seconds, so the
+ * catch-up offset into the buffer is scaled by rate. At rate=1 this
+ * is a no-op and matches the original v1 behavior.
+ *
  * Exported (rather than kept inline in scheduleBuffer) so the past-time
  * compensation rule can be unit-tested without a real AudioContext.
  */
-export function computeScheduleWhen(target: number, now: number): {
+export function computeScheduleWhen(target: number, now: number, rate: number): {
   when: number;
   offset: number;
 } {
   const past = target < now;
   return {
     when: past ? now : target,
-    offset: past ? now - target : 0,
+    offset: past ? (now - target) * rate : 0,
   };
 }

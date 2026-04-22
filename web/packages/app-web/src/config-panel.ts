@@ -1,4 +1,10 @@
-import { AUTO_PLAY_LANES, getConfig, updateConfig, type AutoPlayMap } from './config.js';
+import {
+  AUTO_PLAY_LANES,
+  getConfig,
+  subscribe,
+  updateConfig,
+  type AutoPlayMap,
+} from './config.js';
 import type { MidiPortInfo } from '@dtxmania/input';
 
 export type MidiStatus = 'pending' | 'ready' | 'unsupported' | 'denied';
@@ -8,6 +14,13 @@ export interface ConfigPanelDeps {
   onMidiPortsChanged: (
     cb: (ports: MidiPortInfo[], status: MidiStatus) => void,
   ) => () => void;
+  /** Snap the live song clock to a measure boundary and return the
+   * index. Returns null when no chart is playing. Used by the Set A /
+   * Set B buttons in the Practice section. Thin shim over
+   * `Game.captureLoopMarker`; same function is also invoked by the
+   * main.ts `[` / `]` keyboard hotkeys and the VR right-controller
+   * face buttons so all three capture paths stay consistent. */
+  captureLoopMarker?: (which: 'A' | 'B') => number | null;
 }
 
 /**
@@ -54,6 +67,15 @@ export class ConfigPanel {
 
     this.form = new ConfigForm(deps);
     this.modal.appendChild(this.form.root);
+    // Keep the loop A/B readouts live while the panel is open — the
+    // player might capture a marker via `[` / `]` hotkey or VR face
+    // button without closing the modal. Without this subscribe the
+    // panel would show stale values until the next open(). Other
+    // fields are one-way (panel → config) so they don't need this,
+    // but the refresh is cheap so we just re-pull everything.
+    subscribe(() => {
+      if (this.backdrop.style.display !== 'none') this.form.refreshFromConfig();
+    });
 
     const footer = document.createElement('div');
     footer.className = 'config-footer';
@@ -107,6 +129,10 @@ class ConfigForm {
   private readonly practiceRateInput: HTMLInputElement;
   private readonly practiceRateVal: HTMLSpanElement;
   private readonly preservePitchInput: HTMLInputElement;
+  private readonly loopEnabledInput: HTMLInputElement;
+  private readonly loopAVal: HTMLSpanElement;
+  private readonly loopBVal: HTMLSpanElement;
+  private readonly loopWarn: HTMLDivElement;
 
   constructor(deps?: ConfigPanelDeps) {
     this.root = document.createElement('div');
@@ -302,10 +328,76 @@ class ConfigForm {
     });
     practice.body.appendChild(pp.row);
 
+    // A/B loop — checkbox + Set-A / Set-B / Clear buttons. The buttons
+    // call into captureLoopMarker (live song-time snap); the same path
+    // is also bound to the `[` / `]` keys in main.ts and the VR
+    // right-controller face buttons in game.ts so all three surfaces
+    // stay consistent. We DON'T offer number inputs here — asking the
+    // player to type a measure index would be hostile; loop capture
+    // during play is the intended UX.
+    const le = checkboxRow('Enable A–B loop');
+    this.loopEnabledInput = le.input;
+    le.input.addEventListener('change', () => {
+      updateConfig({ practiceLoopEnabled: le.input.checked });
+    });
+    practice.body.appendChild(le.row);
+
+    const aRow = captureRow('A (start measure)', 'Set A');
+    this.loopAVal = aRow.value;
+    aRow.button.addEventListener('click', () => {
+      const m = deps?.captureLoopMarker?.('A');
+      if (m === undefined || m === null) return;
+      updateConfig({ practiceLoopStartMeasure: m, practiceLoopEnabled: true });
+      this.refreshFromConfig();
+    });
+    practice.body.appendChild(aRow.row);
+
+    const bRow = captureRow('B (end measure)', 'Set B');
+    this.loopBVal = bRow.value;
+    bRow.button.addEventListener('click', () => {
+      const m = deps?.captureLoopMarker?.('B');
+      if (m === undefined || m === null) return;
+      updateConfig({ practiceLoopEndMeasure: m, practiceLoopEnabled: true });
+      this.refreshFromConfig();
+    });
+    practice.body.appendChild(bRow.row);
+
+    const clearRow = document.createElement('div');
+    clearRow.className = 'config-row config-row-check';
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.textContent = 'Clear A/B';
+    clearBtn.addEventListener('click', () => {
+      updateConfig({
+        practiceLoopEnabled: false,
+        practiceLoopStartMeasure: 0,
+        practiceLoopEndMeasure: null,
+      });
+      this.refreshFromConfig();
+    });
+    clearRow.appendChild(clearBtn);
+    practice.body.appendChild(clearRow);
+
+    // Inline warning when resolveLoopWindow would reject the current
+    // range (B ≤ A). Hidden otherwise. Silent-disable without this
+    // hint confuses players ("I enabled loop but nothing happens").
+    this.loopWarn = document.createElement('div');
+    this.loopWarn.className = 'config-note config-note-warn';
+    this.loopWarn.style.display = 'none';
+    this.loopWarn.textContent = 'Range is invalid (B must be after A). Loop is disabled.';
+    practice.body.appendChild(this.loopWarn);
+
+    const loopHint = document.createElement('div');
+    loopHint.className = 'config-note';
+    loopHint.textContent =
+      'Hotkeys during play: [ = Set A, ] = Set B, \\ = toggle loop. ' +
+      'VR: right-hand A / B on Touch controllers.';
+    practice.body.appendChild(loopHint);
+
     const warn = document.createElement('div');
     warn.className = 'config-note';
     warn.textContent =
-      'Non-1× speed skips best-score writes (practice runs don\'t overwrite your medals).';
+      'Non-1× speed and A–B loop both skip best-score writes (practice runs don\'t overwrite your medals).';
     practice.body.appendChild(warn);
   }
 
@@ -374,7 +466,23 @@ class ConfigForm {
     this.practiceRateInput.value = String(cfg.practiceRate);
     this.practiceRateVal.textContent = `${cfg.practiceRate.toFixed(2)}×`;
     this.preservePitchInput.checked = cfg.preservePitch;
+    this.loopEnabledInput.checked = cfg.practiceLoopEnabled;
+    this.loopAVal.textContent = formatMeasure(cfg.practiceLoopStartMeasure);
+    this.loopBVal.textContent =
+      cfg.practiceLoopEndMeasure === null
+        ? '— end of song —'
+        : formatMeasure(cfg.practiceLoopEndMeasure);
+    const invalid =
+      cfg.practiceLoopEndMeasure !== null &&
+      cfg.practiceLoopEndMeasure <= cfg.practiceLoopStartMeasure;
+    this.loopWarn.style.display = invalid ? '' : 'none';
   }
+}
+
+/** Human-facing measure label. Measure 0 shown as "0 (start)" so the
+ * player understands it's the very beginning; otherwise just the index. */
+function formatMeasure(m: number): string {
+  return m === 0 ? '0 (start)' : String(m);
 }
 
 /** Compact "[✓] HH" cell used inside the per-lane auto-play grid. */
@@ -429,6 +537,31 @@ function sliderRow(
   row.appendChild(input);
   row.appendChild(value);
   return { row: row as unknown as HTMLDivElement, input, value };
+}
+
+function captureRow(
+  label: string,
+  buttonLabel: string,
+): {
+  row: HTMLDivElement;
+  value: HTMLSpanElement;
+  button: HTMLButtonElement;
+} {
+  const row = document.createElement('div');
+  row.className = 'config-row config-row-readout';
+  const lab = document.createElement('span');
+  lab.className = 'config-label';
+  lab.textContent = label;
+  const value = document.createElement('span');
+  value.className = 'config-val';
+  value.textContent = '— none —';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = buttonLabel;
+  row.appendChild(lab);
+  row.appendChild(value);
+  row.appendChild(button);
+  return { row, value, button };
 }
 
 function checkboxRow(label: string): {

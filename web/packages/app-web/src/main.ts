@@ -131,6 +131,61 @@ window.addEventListener('keydown', (e) => {
   openSearch();
 });
 
+/** Commit an A/B loop marker capture and surface a HUD toast. Shared
+ * by the keyboard hotkeys and the VR face-button path so the feedback
+ * is identical across input surfaces. Warns when the resulting window
+ * is invalid (B ≤ A) — the `resolveLoopWindow` helper silently
+ * disables the loop in that case, and without this hint the player
+ * wouldn't know why nothing loops. */
+function commitLoopCapture(which: 'A' | 'B', measure: number): void {
+  if (which === 'A') {
+    updateConfig({ practiceLoopStartMeasure: measure, practiceLoopEnabled: true });
+  } else {
+    updateConfig({ practiceLoopEndMeasure: measure, practiceLoopEnabled: true });
+  }
+  const cfg = getConfig();
+  const end = cfg.practiceLoopEndMeasure;
+  // Invalid if end is explicitly set and lies at or before start. null
+  // end means "end of song" which is always > start ≥ 0, so not invalid.
+  const invalid = end !== null && end <= cfg.practiceLoopStartMeasure;
+  if (invalid) {
+    showToast(
+      `Loop ${which}: measure ${measure} — invalid (A=${cfg.practiceLoopStartMeasure}, B=${end})`,
+      2600,
+    );
+  } else {
+    showToast(`Loop ${which}: measure ${measure}`);
+  }
+}
+
+// Practice-loop hotkeys. `[` captures A (floor-to-measure), `]` captures
+// B (ceil-to-measure), `\` toggles loop on/off. Only fire while a chart
+// is playing; focus-in-text guards mirror the `/` handler so typing in
+// the search box or Settings inputs doesn't hijack. The Set A/B buttons
+// in Settings call the same `captureLoopMarker` path.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== '[' && e.key !== ']' && e.key !== '\\') return;
+  const target = e.target as HTMLElement | null;
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+  if (!activeGame?.hasChart) return;
+  if (e.key === '[') {
+    const m = activeGame.captureLoopMarker('A');
+    if (m === null) return;
+    commitLoopCapture('A', m);
+    e.preventDefault();
+  } else if (e.key === ']') {
+    const m = activeGame.captureLoopMarker('B');
+    if (m === null) return;
+    commitLoopCapture('B', m);
+    e.preventDefault();
+  } else if (e.key === '\\') {
+    const next = !getConfig().practiceLoopEnabled;
+    updateConfig({ practiceLoopEnabled: next });
+    showToast(`Loop ${next ? 'on' : 'off'}`);
+    e.preventDefault();
+  }
+});
+
 function openSearch(): void {
   searchBox.classList.add('visible');
   searchBox.value = songWheel.getSearchQuery();
@@ -394,6 +449,7 @@ const configPanel = new ConfigPanel({
     cb(midiPorts, midiStatus);
     return () => midiPortsListeners.delete(cb);
   },
+  captureLoopMarker: (which) => activeGame?.captureLoopMarker(which) ?? null,
 });
 configBtn.addEventListener('click', () => configPanel.open());
 
@@ -414,6 +470,11 @@ const applyConfigToActive = (cfg: ReturnType<typeof getConfig>): void => {
   activeGame.audio.setPreviewVolume(cfg.volumePreview);
   activeGame.audio.setRate(cfg.practiceRate);
   activeGame.audio.setPreservePitch(cfg.preservePitch);
+  activeGame.setLoopWindow(
+    cfg.practiceLoopEnabled,
+    cfg.practiceLoopStartMeasure,
+    cfg.practiceLoopEndMeasure,
+  );
 };
 subscribe(applyConfigToActive);
 // Separate subscription for input-plumbing toggles — they don't need an
@@ -709,8 +770,12 @@ async function launchGame(
     ...(chart
       ? {
           chartPath: chart.chartPath,
-          onChartFinished: (chartPath: string, snap: ScoreSnapshot) => {
-            if (isPracticeRun(getConfig())) {
+          onChartFinished: (
+            chartPath: string,
+            snap: ScoreSnapshot,
+            didLoop: boolean,
+          ) => {
+            if (isPracticeRun(getConfig(), didLoop)) {
               console.info('[result] practice run — skipping best-score write');
               return;
             }
@@ -718,6 +783,14 @@ async function launchGame(
           },
         }
       : {}),
+    onLoopMarkerCaptured: (which, measure) => {
+      // VR right-controller face button fired captureLoopMarker and
+      // already resolved the measure via snapSongMsToMeasure; delegate
+      // the config write + HUD toast to commitLoopCapture so feedback
+      // is identical across all three capture paths (keyboard / modal
+      // / VR).
+      commitLoopCapture(which, measure);
+    },
     autoPlayLanes: autoPlayToLanes(getConfig().autoPlay),
   };
   if (fs) {
@@ -854,6 +927,23 @@ function run(fn: () => Promise<void>): void {
 
 function setStatus(text: string): void {
   statusEl.textContent = text;
+}
+
+const toastEl = document.getElementById('hud-toast') as HTMLDivElement;
+let toastTimer: number | null = null;
+/** Mid-play feedback toast. Routes through a dedicated DOM element
+ * because the main `#status` lives inside `#overlay` (display:none
+ * during play), so `setStatus` alone isn't visible while the player
+ * holds a keyboard shortcut or presses a VR face button. */
+function showToast(text: string, durationMs = 1800): void {
+  if (!toastEl) return;
+  toastEl.textContent = text;
+  toastEl.classList.add('visible');
+  if (toastTimer !== null) window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => {
+    toastEl.classList.remove('visible');
+    toastTimer = null;
+  }, durationMs);
 }
 
 function registerServiceWorker(): void {
