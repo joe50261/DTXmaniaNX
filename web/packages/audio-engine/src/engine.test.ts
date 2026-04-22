@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { clampRate, clampVolume, computeScheduleWhen, rebaseSongStart } from './engine.js';
+import {
+  clampRate,
+  clampVolume,
+  computeScheduleWhen,
+  computeSeekStart,
+  rebaseSongStart,
+} from './engine.js';
 
 /**
  * These tests cover the two pure seams of AudioEngine: volume clamping
@@ -136,5 +142,33 @@ describe('rebaseSongStart — rate-change continuity', () => {
     const newStart = rebaseSongStart(4, 0, 0.5, 1.0);
     expect(songMs(4, newStart, 1.0)).toBeCloseTo(2000, 9);
     expect(songMs(4.001, newStart, 1.0)).toBeCloseTo(2001, 9);
+  });
+});
+
+describe('computeSeekStart — seek teleport invariant', () => {
+  const songMs = (now: number, start: number, rate: number): number =>
+    (now - start) * 1000 * rate;
+
+  it('after seek, songTimeMs(now) == targetSongMs (rate = 1)', () => {
+    const now = 5.25;
+    for (const target of [0, 500, 12345, -100]) {
+      const newStart = computeSeekStart(now, 1.0, target);
+      expect(songMs(now, newStart, 1.0)).toBeCloseTo(target, 6);
+    }
+  });
+
+  it('respects the practice rate: higher rate ⇒ smaller ctx delta for same target', () => {
+    const now = 10;
+    const targetSongMs = 4000;
+    const slow = computeSeekStart(now, 0.5, targetSongMs);
+    const fast = computeSeekStart(now, 2.0, targetSongMs);
+    expect(now - slow).toBeCloseTo(8.0, 9);
+    expect(now - fast).toBeCloseTo(2.0, 9);
+    expect(songMs(now, slow, 0.5)).toBeCloseTo(targetSongMs, 6);
+    expect(songMs(now, fast, 2.0)).toBeCloseTo(targetSongMs, 6);
+  });
+
+  it('seeking to 0 yields newStart === now (ctx reads exactly at song start)', () => {
+    expect(computeSeekStart(42, 1.0, 0)).toBe(42);
   });
 });

@@ -78,6 +78,6 @@ function controlRank(channel: number): number {
   return 2;
 }
 
-function measureDurationMs(bpm: number): number {
+export function measureDurationMs(bpm: number): number {
   return (60 / bpm) * 4 * 1000;
 }

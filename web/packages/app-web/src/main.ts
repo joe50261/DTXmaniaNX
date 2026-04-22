@@ -131,6 +131,36 @@ window.addEventListener('keydown', (e) => {
   openSearch();
 });
 
+// Practice-loop hotkeys. `[` captures A (floor-to-measure), `]` captures
+// B (ceil-to-measure), `\` toggles loop on/off. Only fire while a chart
+// is playing; focus-in-text guards mirror the `/` handler so typing in
+// the search box or Settings inputs doesn't hijack. The Set A/B buttons
+// in Settings call the same `captureLoopMarker` path.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== '[' && e.key !== ']' && e.key !== '\\') return;
+  const target = e.target as HTMLElement | null;
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+  if (!activeGame?.hasChart) return;
+  if (e.key === '[') {
+    const m = activeGame.captureLoopMarker('A');
+    if (m === null) return;
+    updateConfig({ practiceLoopStartMeasure: m, practiceLoopEnabled: true });
+    setStatus(`Loop A: measure ${m}`);
+    e.preventDefault();
+  } else if (e.key === ']') {
+    const m = activeGame.captureLoopMarker('B');
+    if (m === null) return;
+    updateConfig({ practiceLoopEndMeasure: m, practiceLoopEnabled: true });
+    setStatus(`Loop B: measure ${m}`);
+    e.preventDefault();
+  } else if (e.key === '\\') {
+    const next = !getConfig().practiceLoopEnabled;
+    updateConfig({ practiceLoopEnabled: next });
+    setStatus(`Loop ${next ? 'on' : 'off'}`);
+    e.preventDefault();
+  }
+});
+
 function openSearch(): void {
   searchBox.classList.add('visible');
   searchBox.value = songWheel.getSearchQuery();
@@ -394,6 +424,7 @@ const configPanel = new ConfigPanel({
     cb(midiPorts, midiStatus);
     return () => midiPortsListeners.delete(cb);
   },
+  captureLoopMarker: (which) => activeGame?.captureLoopMarker(which) ?? null,
 });
 configBtn.addEventListener('click', () => configPanel.open());
 
@@ -414,6 +445,11 @@ const applyConfigToActive = (cfg: ReturnType<typeof getConfig>): void => {
   activeGame.audio.setPreviewVolume(cfg.volumePreview);
   activeGame.audio.setRate(cfg.practiceRate);
   activeGame.audio.setPreservePitch(cfg.preservePitch);
+  activeGame.setLoopWindow(
+    cfg.practiceLoopEnabled,
+    cfg.practiceLoopStartMeasure,
+    cfg.practiceLoopEndMeasure,
+  );
 };
 subscribe(applyConfigToActive);
 // Separate subscription for input-plumbing toggles — they don't need an
@@ -709,8 +745,12 @@ async function launchGame(
     ...(chart
       ? {
           chartPath: chart.chartPath,
-          onChartFinished: (chartPath: string, snap: ScoreSnapshot) => {
-            if (isPracticeRun(getConfig())) {
+          onChartFinished: (
+            chartPath: string,
+            snap: ScoreSnapshot,
+            didLoop: boolean,
+          ) => {
+            if (isPracticeRun(getConfig(), didLoop)) {
               console.info('[result] practice run — skipping best-score write');
               return;
             }
@@ -718,6 +758,19 @@ async function launchGame(
           },
         }
       : {}),
+    onLoopMarkerCaptured: (which, measure) => {
+      // VR right-controller face button fired captureLoopMarker and
+      // already resolved the measure via snapSongMsToMeasure; we only
+      // need to commit it to config + surface a toast so the player
+      // knows the press registered. Auto-enabling the loop on any
+      // capture matches the keyboard `[` / `]` path below.
+      if (which === 'A') {
+        updateConfig({ practiceLoopStartMeasure: measure, practiceLoopEnabled: true });
+      } else {
+        updateConfig({ practiceLoopEndMeasure: measure, practiceLoopEnabled: true });
+      }
+      setStatus(`Loop ${which}: measure ${measure}`);
+    },
     autoPlayLanes: autoPlayToLanes(getConfig().autoPlay),
   };
   if (fs) {

@@ -190,6 +190,27 @@ export class AudioEngine {
     return src;
   }
 
+  /** Teleport the song clock so `songTimeMs() === songMs` immediately.
+   * No clamp — Game owns range semantics. Live sources are NOT stopped;
+   * callers that want "seek and re-schedule" should call
+   * `stopAllLiveSources` first. */
+  seekSongClock(songMs: number): void {
+    this._songStartCtxTime = computeSeekStart(this.ctx.currentTime, this._rate, songMs);
+  }
+
+  /** Stop every live BGM/sample source and drop the set. Swallow errors
+   * from sources that haven't started yet or have already ended. */
+  stopAllLiveSources(): void {
+    for (const src of this.liveSources) {
+      try {
+        src.stop();
+      } catch {
+        /* not-yet-started or already ended */
+      }
+    }
+    this.liveSources.clear();
+  }
+
   /** Per-category volume setters. Values clamp to [0, 1]; no ramp — the
    * Settings UI already debounces via input events so we don't need
    * extra smoothing here. */
@@ -236,6 +257,17 @@ export function rebaseSongStart(
   newRate: number,
 ): number {
   return now - (now - oldStart) * oldRate / newRate;
+}
+
+/** Compute the `_songStartCtxTime` that teleports `songTimeMs()` to
+ * `targetSongMs` when the wall clock reads `now`. Exported (pure) so
+ * the invariant is unit-testable without an AudioContext.
+ *
+ *   targetSongMs = (now - newStart) * 1000 * rate
+ *   newStart = now - targetSongMs / (1000 * rate)
+ */
+export function computeSeekStart(now: number, rate: number, targetSongMs: number): number {
+  return now - targetSongMs / (1000 * rate);
 }
 
 /** Set both `preservesPitch` and the legacy `webkitPreservesPitch` alias
