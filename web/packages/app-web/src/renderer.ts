@@ -4,6 +4,7 @@ import { LANE_LAYOUT, channelToLane, type LaneSpec } from './lane-layout.js';
 import { PAD_ATLAS, PAD_SIZE, padRect } from './pad-atlas.js';
 import { CHIP_ATLAS_Y, CHIP_ATLAS_H, chipRect } from './chip-atlas.js';
 import { JUDGE_ROWS, JUDGE_SPRITE_W, JUDGE_SPRITE_H } from './judge-atlas.js';
+import { linearFadeIn, linearFadeOut, padBounceOffset } from './renderer-math.js';
 import type { JudgmentKind, Rank } from '@dtxmania/dtx-core';
 import type { LaneValue } from '@dtxmania/input';
 
@@ -410,22 +411,12 @@ export class Renderer {
       if (hitAt === undefined) {
         mesh.position.y = baseY;
       } else {
-        const age = now - hitAt;
-        const t = Math.max(0, Math.min(1, age / bounceDurMs));
-        // Ease: down fast, spring back.
-        const offset = t < 0.35 ? -bounceAmount * (t / 0.35) : -bounceAmount * (1 - (t - 0.35) / 0.65);
-        mesh.position.y = baseY + Math.max(-bounceAmount, Math.min(0, offset));
+        mesh.position.y = baseY + padBounceOffset(now - hitAt, bounceDurMs, bounceAmount);
       }
       const flush = this.flushMeshes[i];
       if (flush) {
         const mat = flush.material as THREE.MeshBasicMaterial;
-        if (hitAt === undefined) {
-          mat.opacity = 0;
-        } else {
-          const age = now - hitAt;
-          const t = Math.max(0, Math.min(1, age / flushDurMs));
-          mat.opacity = (1 - t) * 0.9;
-        }
+        mat.opacity = hitAt === undefined ? 0 : linearFadeOut(now - hitAt, flushDurMs) * 0.9;
       }
     }
   }
@@ -510,7 +501,7 @@ export class Renderer {
       if (flash.lane !== 0x13 /* BD */ && flash.lane !== 0x1c /* LBD */) continue;
       const age = state.songTimeMs - flash.spawnedMs;
       if (age < 0 || age > life) continue;
-      const alpha = (1 - age / life) * 0.55;
+      const alpha = linearFadeOut(age, life) * 0.55;
       ctx.fillStyle = `rgba(239, 68, 68, ${alpha})`;
       ctx.fillRect(x, y, w, barH);
     }
@@ -615,7 +606,7 @@ export class Renderer {
       const age = state.songTimeMs - flash.spawnedMs;
       const life = 200;
       if (age < 0 || age > life) continue;
-      const alpha = 1 - age / life;
+      const alpha = linearFadeOut(age, life);
       const lane = LANE_LAYOUT.find((l) => l.lane === flash.lane);
       if (!lane) continue;
       ctx.globalAlpha = alpha * 0.8;
@@ -643,9 +634,7 @@ export class Renderer {
       ctx.textAlign = 'left';
       ctx.fillText(state.titleLine, 20, 30);
 
-      const progress = state.songLengthMs > 0
-        ? Math.max(0, Math.min(1, state.songTimeMs / state.songLengthMs))
-        : 0;
+      const progress = linearFadeIn(state.songTimeMs, state.songLengthMs);
       ctx.fillStyle = '#1f2937';
       ctx.fillRect(20, 50, 200, 6);
       ctx.fillStyle = '#60a5fa';
@@ -683,7 +672,7 @@ export class Renderer {
     const ctx = this.ctx;
     const now = performance.now();
     const age = state.finishedAtMs !== null ? now - state.finishedAtMs : 0;
-    const alpha = Math.max(0, Math.min(1, age / 400));
+    const alpha = linearFadeIn(age, 400);
     ctx.save();
     ctx.globalAlpha = alpha;
 
@@ -789,8 +778,8 @@ export class Renderer {
     if (age < 0 || age > life) return;
     const lane = LANE_LAYOUT.find((l) => l.lane === state.judgmentFlash!.lane);
     if (!lane) return;
-    const alpha = 1 - age / life;
-    const floatUp = (age / life) * 20;
+    const alpha = linearFadeOut(age, life);
+    const floatUp = linearFadeIn(age, life) * 20;
     const y = this.judgeLineY + 36 - floatUp;
 
     const judgment = state.judgmentFlash.judgment;
