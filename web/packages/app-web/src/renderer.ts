@@ -9,8 +9,13 @@ import type { LaneValue } from '@dtxmania/input';
 
 export const CANVAS_W = 1280;
 export const CANVAS_H = 720;
-export const JUDGE_LINE_Y = 600;
-export const PX_PER_MS = 0.45;
+/** Default judgment line y. Renderer carries a mutable instance field
+ * so the Settings panel can move it live; this constant is just the
+ * initial value. */
+export const DEFAULT_JUDGE_LINE_Y = 600;
+/** Default chip scroll speed (px / ms). Same story — overridable at
+ * runtime via `Renderer.setScrollSpeed`. */
+export const DEFAULT_SCROLL_SPEED = 0.45;
 export const CHIP_H = 14;
 
 function truncate(s: string, max: number): string {
@@ -127,6 +132,14 @@ export class Renderer {
   private padLanes: LaneValue[] = [];
   /** Most recent pad-hit timestamps submitted by Game, used for animation. */
   private lastPadHitMs = new Map<LaneValue, number>();
+  /** Chip scroll speed (px / ms). Settable via the Settings panel —
+   * read every frame in drawChips. */
+  private scrollSpeed = DEFAULT_SCROLL_SPEED;
+  /** Y position of the judgment line on the HUD canvas. Pad meshes are
+   * recomputed when this changes so the 3D pads track the visual line. */
+  private judgeLineY = DEFAULT_JUDGE_LINE_Y;
+  /** False = chips fall top→bottom (DTX default). True = chips rise. */
+  private reverseScroll = false;
   /** HTMLImageElement of the chips atlas used by 2D drawImage per frame. */
   private chipsImage: HTMLImageElement | null = null;
   /** ScreenPlay judge strings 1.png — one row per judgment. */
@@ -268,7 +281,7 @@ export class Renderer {
         });
         const mesh = new THREE.Mesh(new THREE.PlaneGeometry(PAD_SIZE, PAD_SIZE), mat);
         const centerX = spec.x + spec.width / 2;
-        const baseY = -(JUDGE_LINE_Y - CANVAS_H / 2);
+        const baseY = -(this.judgeLineY - CANVAS_H / 2);
         mesh.position.set(centerX - CANVAS_W / 2, baseY, 0.5);
         mesh.renderOrder = 2;
         this.playfield.add(mesh);
@@ -317,6 +330,36 @@ export class Renderer {
    */
   setPlayfieldVisible(visible: boolean): void {
     this.playfield.visible = visible;
+  }
+
+  /** Live setter for chip scroll speed. Cheap — read each frame in
+   * drawChips. */
+  setScrollSpeed(v: number): void {
+    this.scrollSpeed = v;
+  }
+
+  /** Live setter for the judgment line. The pad meshes are pinned to
+   * this line in 3D, so we recompute their baseY + reset position on
+   * every change so the visual line and the physical pads track
+   * together. Bounce animation works off baseY so it falls through. */
+  setJudgeLineY(y: number): void {
+    if (this.judgeLineY === y) return;
+    this.judgeLineY = y;
+    const baseY = -(y - CANVAS_H / 2);
+    for (let i = 0; i < this.padMeshes.length; i++) {
+      this.padBaseY[i] = baseY;
+      const mesh = this.padMeshes[i]!;
+      mesh.position.y = baseY;
+      const flush = this.flushMeshes[i];
+      if (flush) flush.position.y = baseY;
+    }
+  }
+
+  /** Live setter for chip scroll direction. drawChips uses it; pad
+   * meshes don't move (they sit on the judgment line either way — the
+   * player still hits them at the same physical spot). */
+  setReverseScroll(v: boolean): void {
+    this.reverseScroll = v;
   }
 
   /** Submit new game state for the next frame's HUD paint. */
@@ -419,20 +462,55 @@ export class Renderer {
     this.drawLanes();
     this.drawJudgmentLine();
     this.drawChips(state);
+    this.drawPedalFlash(state);   // wide red bar — sits behind per-lane radial
     this.drawHitFlashes(state);
     this.drawHUD(state);
     this.drawJudgmentFlash(state);
     ctx.restore();
   }
 
+  /**
+   * BD + LBD strikes paint a full-width red horizontal bar across the
+   * entire drum region at the judgment line, on top of the per-lane
+   * radial flash. Mirrors the canonical DTXmania "腳腳" effect — every
+   * kick punctuates the whole playfield, not just its column.
+   *
+   * Reuses state.hitFlashes (which already records lane + spawnedMs
+   * for every drum strike including kicks) so no new state plumbing.
+   */
+  private drawPedalFlash(state: RenderState): void {
+    const ctx = this.ctx;
+    const life = 200;
+    const first = LANE_LAYOUT[0]!;
+    const last = LANE_LAYOUT[LANE_LAYOUT.length - 1]!;
+    const x = first.x - 8;
+    const w = last.x + last.width - first.x + 16;
+    const barH = 36;
+    const y = this.judgeLineY - barH / 2;
+    for (const flash of state.hitFlashes) {
+      // Only kick lanes contribute to the wide bar.
+      if (flash.lane !== 0x13 /* BD */ && flash.lane !== 0x1c /* LBD */) continue;
+      const age = state.songTimeMs - flash.spawnedMs;
+      if (age < 0 || age > life) continue;
+      const alpha = (1 - age / life) * 0.55;
+      ctx.fillStyle = `rgba(239, 68, 68, ${alpha})`;
+      ctx.fillRect(x, y, w, barH);
+    }
+  }
+
   private drawLanes(): void {
     const ctx = this.ctx;
+    // Lane fill always spans from the label row (y=40) to the judgment
+    // line. In reverse mode that band is below the chip flow direction,
+    // which is what the player wants — the playable area stays visually
+    // anchored to the judgment line either way.
+    const judge = this.judgeLineY;
     for (const lane of LANE_LAYOUT) {
       ctx.fillStyle = 'rgba(255,255,255,0.04)';
-      ctx.fillRect(lane.x, 40, lane.width, JUDGE_LINE_Y - 40);
+      ctx.fillRect(lane.x, 40, lane.width, judge - 40);
       ctx.strokeStyle = 'rgba(255,255,255,0.12)';
       ctx.lineWidth = 1;
-      ctx.strokeRect(lane.x + 0.5, 40.5, lane.width - 1, JUDGE_LINE_Y - 40);
+      ctx.strokeRect(lane.x + 0.5, 40.5, lane.width - 1, judge - 40);
 
       ctx.fillStyle = lane.color;
       ctx.font = 'bold 14px ui-monospace, monospace';
@@ -447,21 +525,31 @@ export class Renderer {
     ctx.globalAlpha = 0.85;
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(LANE_LAYOUT[0]!.x, JUDGE_LINE_Y);
+    ctx.moveTo(LANE_LAYOUT[0]!.x, this.judgeLineY);
     const last = LANE_LAYOUT[LANE_LAYOUT.length - 1]!;
-    ctx.lineTo(last.x + last.width, JUDGE_LINE_Y);
+    ctx.lineTo(last.x + last.width, this.judgeLineY);
     ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
   private drawChips(state: RenderState): void {
     const now = state.songTimeMs;
+    const judge = this.judgeLineY;
+    const speed = this.scrollSpeed;
+    const reverse = this.reverseScroll;
     for (const chip of state.chips) {
       const lane = channelToLane(chip.channel);
       if (!lane) continue;
-      const y = JUDGE_LINE_Y - (chip.playbackTimeMs - now) * PX_PER_MS;
+      const dt = chip.playbackTimeMs - now;
+      // Normal: future chips above (smaller y), past chips below.
+      // Reverse: future chips below (larger y), past chips above.
+      const y = reverse ? judge + dt * speed : judge - dt * speed;
       if (y < -20 || y > CANVAS_H + 20) continue;
-      const alpha = y > JUDGE_LINE_Y + 50 ? 0.2 : 1;
+      // "Already past the judgment line" = dim the chip so the player
+      // can see they missed but the chip's still nearby. The half-line
+      // check direction depends on scroll direction.
+      const past = reverse ? y < judge - 50 : y > judge + 50;
+      const alpha = past ? 0.2 : 1;
       this.fillChip(lane, y, alpha);
     }
   }
@@ -514,13 +602,13 @@ export class Renderer {
       if (!lane) continue;
       ctx.globalAlpha = alpha * 0.8;
       const grad = ctx.createRadialGradient(
-        lane.x + lane.width / 2, JUDGE_LINE_Y, 0,
-        lane.x + lane.width / 2, JUDGE_LINE_Y, 60
+        lane.x + lane.width / 2, this.judgeLineY, 0,
+        lane.x + lane.width / 2, this.judgeLineY, 60
       );
       grad.addColorStop(0, lane.color);
       grad.addColorStop(1, 'transparent');
       ctx.fillStyle = grad;
-      ctx.fillRect(lane.x - 20, JUDGE_LINE_Y - 60, lane.width + 40, 120);
+      ctx.fillRect(lane.x - 20, this.judgeLineY - 60, lane.width + 40, 120);
       ctx.globalAlpha = 1;
     }
   }
@@ -553,11 +641,11 @@ export class Renderer {
       ctx.fillStyle = state.combo >= 10 ? '#fbbf24' : '#9ca3af';
       ctx.font = 'bold 64px ui-monospace, monospace';
       ctx.textAlign = 'center';
-      ctx.fillText(state.combo > 0 ? `${state.combo}` : '', CANVAS_W / 2, JUDGE_LINE_Y - 90);
+      ctx.fillText(state.combo > 0 ? `${state.combo}` : '', CANVAS_W / 2, this.judgeLineY - 90);
       if (state.combo > 0) {
         ctx.fillStyle = '#6b7280';
         ctx.font = 'bold 20px ui-monospace, monospace';
-        ctx.fillText('COMBO', CANVAS_W / 2, JUDGE_LINE_Y - 60);
+        ctx.fillText('COMBO', CANVAS_W / 2, this.judgeLineY - 60);
       }
 
       ctx.fillStyle = '#4b5563';
@@ -685,7 +773,7 @@ export class Renderer {
     if (!lane) return;
     const alpha = 1 - age / life;
     const floatUp = (age / life) * 20;
-    const y = JUDGE_LINE_Y + 36 - floatUp;
+    const y = this.judgeLineY + 36 - floatUp;
 
     const judgment = state.judgmentFlash.judgment;
     const row = judgment !== undefined ? JUDGE_ROWS[judgment] : undefined;
