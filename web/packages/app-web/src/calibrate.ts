@@ -16,6 +16,50 @@ import type { AudioEngine } from '@dtxmania/audio-engine';
  * The routine is UI-only; it knows nothing about the game state. The caller
  * is responsible for persisting the returned number.
  */
+/**
+ * Pure math core of the calibration routine: given the scheduled beat times
+ * (AudioContext seconds) and the player's recorded press times, return the
+ * median press-minus-beat delta in ms. Exported so the algorithm can be
+ * unit-tested without driving a real AudioContext. See `runCalibration` for
+ * the UI shell.
+ *
+ * Rules:
+ *  - Each press matches to its *nearest* beat (skipping the first `warmup`
+ *    warm-up beats, which exist to settle latency / input driver state).
+ *  - Presses further than 300 ms from any non-warmup beat are discarded as
+ *    strays (fat fingers, ignoring a beat and pressing on the next one).
+ *  - Need at least 3 survivors; otherwise the result is too noisy to trust
+ *    and we return null so the caller keeps the previous offset.
+ *  - Median is used instead of mean so a single outlier that squeaks under
+ *    the 300 ms cutoff can't shift the result by much.
+ */
+export function computeOffset(
+  beatTimes: number[],
+  presses: { audioTime: number }[],
+  warmup: number
+): number | null {
+  const deltas: number[] = [];
+  const active = beatTimes.slice(warmup);
+  for (const press of presses) {
+    let best = Number.POSITIVE_INFINITY;
+    let bestAbs = Number.POSITIVE_INFINITY;
+    for (const beat of active) {
+      const d = press.audioTime - beat;
+      if (Math.abs(d) < bestAbs) {
+        bestAbs = Math.abs(d);
+        best = d;
+      }
+    }
+    if (Math.abs(best) <= 0.3) deltas.push(best * 1000);
+  }
+  if (deltas.length < 3) return null;
+  deltas.sort((a, b) => a - b);
+  const mid = Math.floor(deltas.length / 2);
+  return deltas.length % 2 === 0
+    ? (deltas[mid - 1]! + deltas[mid]!) / 2
+    : deltas[mid]!;
+}
+
 export const AUDIO_OFFSET_LS_KEY = 'dtxmania-audio-offset-ms';
 
 export interface CalibrateOptions {
@@ -191,30 +235,6 @@ export function saveAudioOffsetMs(ms: number): void {
   } catch {
     /* ignore — private mode / disabled storage */
   }
-}
-
-function computeOffset(beatTimes: number[], presses: PressEvent[], warmup: number): number | null {
-  const deltas: number[] = [];
-  // Match each press to the nearest beat, skipping warm-up beats.
-  const active = beatTimes.slice(warmup);
-  for (const press of presses) {
-    let best = Number.POSITIVE_INFINITY;
-    let bestAbs = Number.POSITIVE_INFINITY;
-    for (const beat of active) {
-      const d = press.audioTime - beat;
-      if (Math.abs(d) < bestAbs) {
-        bestAbs = Math.abs(d);
-        best = d;
-      }
-    }
-    if (Math.abs(best) <= 0.3) deltas.push(best * 1000);
-  }
-  if (deltas.length < 3) return null;
-  deltas.sort((a, b) => a - b);
-  const mid = Math.floor(deltas.length / 2);
-  return deltas.length % 2 === 0
-    ? (deltas[mid - 1]! + deltas[mid]!) / 2
-    : deltas[mid]!;
 }
 
 /** Short noise burst — cheaper than decoding a click.wav for two routines. */
