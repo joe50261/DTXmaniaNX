@@ -1,0 +1,38 @@
+import type { Song } from '@dtxmania/dtx-core';
+
+/**
+ * Pure state helper for the VR-session-end cleanup path. Keeping this
+ * separate from Game.enterXR's callback lets us regression-test the
+ * "finished → idle reset" rule without standing up a Three.js
+ * WebGLRenderer + WebXR session.
+ *
+ * The concrete bug this guards against: exiting VR while the RESULTS
+ * screen was up left `status` pinned at 'finished'. On the next
+ * enterXR, `finishedReturnHandled` was already latched from the prior
+ * session, so none of the return-to-menu paths would fire — the
+ * player would be stuck staring at stale results with no way out.
+ * Nulling `song` as well makes main.ts's post-enter handler see
+ * `hasChart === false` and auto-open the VR menu, matching a fresh
+ * boot.
+ */
+export type VrExitGameStatus = 'idle' | 'playing' | 'finished';
+
+export interface VrExitState {
+  status: VrExitGameStatus;
+  song: Song | null;
+  finishedAtMs: number | null;
+  finishedReturnHandled: boolean;
+}
+
+/** Returns the state Game should adopt after XR session end. If the
+ * session ended mid-play or before a play started, nothing changes. If
+ * it ended on the RESULTS screen, everything resets. */
+export function resetStateOnVrExit(state: VrExitState): VrExitState {
+  if (state.status !== 'finished') return state;
+  return {
+    status: 'idle',
+    song: null,
+    finishedAtMs: null,
+    finishedReturnHandled: false,
+  };
+}

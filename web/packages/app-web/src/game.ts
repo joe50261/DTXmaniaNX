@@ -30,6 +30,7 @@ import { applyAutoFire } from './autofire.js';
 import { detectMisses, matchLaneHit } from './matcher.js';
 import { channelToLane, LANE_LAYOUT, laneSpec } from './lane-layout.js';
 import { XrControllers } from './xr-controllers.js';
+import { resetStateOnVrExit } from './vr-lifecycle.js';
 import { VrMenu, type VrMenuDeps, type VrMenuPick } from './vr-menu.js';
 import type { BoxNode } from '@dtxmania/dtx-core';
 import { loadAudioOffsetMs } from './calibrate.js';
@@ -151,17 +152,17 @@ export class Game {
       // leave it invisible — user sees an empty VR scene.
       this.renderer.setPlayfieldVisible(true);
       // If the player exited VR while the result screen was up, clear the
-      // finished state. Otherwise status stays 'finished', the return
-      // latch is already tripped from the prior session's onRestart, and
-      // re-entering VR shows stale RESULTS with no way out. Nulling song
-      // makes hasChart false → main.ts's enter-VR handler auto-opens the
-      // song menu on the next entry, same as a fresh boot.
-      if (this.status === 'finished') {
-        this.status = 'idle';
-        this.song = null;
-        this.finishedAtMs = null;
-        this.finishedReturnHandled = false;
-      }
+      // finished state (see resetStateOnVrExit for the full why).
+      const reset = resetStateOnVrExit({
+        status: this.status,
+        song: this.song,
+        finishedAtMs: this.finishedAtMs,
+        finishedReturnHandled: this.finishedReturnHandled,
+      });
+      this.status = reset.status;
+      this.song = reset.song;
+      this.finishedAtMs = reset.finishedAtMs;
+      this.finishedReturnHandled = reset.finishedReturnHandled;
       onEnded();
     });
     this.xrControllers.start();
