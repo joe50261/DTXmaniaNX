@@ -93,13 +93,15 @@ export interface Config {
    * drum samples so slow-downs don't pitch down. Browsers that don't
    * support the flag ignore it silently. */
   preservePitch: boolean;
-  /** Loop the window [loopStart, loopEnd] in practice mode. When true
-   * and the chart reaches loopEnd, seek back to loopStart. Also
-   * suppresses best-score writes. */
+  /** Reserved — loop UI + `game.seekTo()` are a follow-up. The flag is
+   * wired into `isPracticeRun` already so that when the runtime lands
+   * the guarding is in place; toggling this today has no gameplay
+   * effect beyond suppressing best-score writes (which is consistent
+   * with practice intent). */
   practiceLoopEnabled: boolean;
-  /** 0-based measure index for loop start; clamped to [0, lastMeasure]. */
+  /** Reserved — see `practiceLoopEnabled`. 0-based measure index. */
   practiceLoopStartMeasure: number;
-  /** 0-based measure index for loop end; null = end of song. */
+  /** Reserved — see `practiceLoopEnabled`. null = end of song. */
   practiceLoopEndMeasure: number | null;
 }
 

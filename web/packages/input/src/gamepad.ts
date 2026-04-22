@@ -70,6 +70,14 @@ export class GamepadInput {
   /** Per-gamepad-index button-pressed snapshot from the previous frame,
    * for rising-edge detection. */
   private readonly prevPressed = new Map<number, boolean[]>();
+  /** True while the gate was active on the previous tick. Drives a
+   * one-frame re-arm pass on gate release so a button held across XR
+   * enter/exit doesn't fire a phantom hit on the first non-XR frame. */
+  private wasGated = false;
+  /** One-shot warn latch per gamepad index whose `mapping !== 'standard'`
+   * — we deliver events anyway (the default map may still be usable) but
+   * the player should know their pad doesn't match the documented layout. */
+  private readonly nonStandardWarned = new Set<number>();
   private rafId: number | null = null;
 
   constructor(options: GamepadInputOptions = {}) {
@@ -112,10 +120,30 @@ export class GamepadInput {
   _tick(now: number, pads: readonly (Gamepad | null)[]): void {
     if (this.isGated()) {
       this.prevPressed.clear();
+      this.wasGated = true;
+      return;
+    }
+    if (this.wasGated) {
+      // Re-arm: seed prevPressed from the current snapshot without
+      // firing events. Without this, a button held through the gate
+      // (XR session exit with a thumb still on A) would look like a
+      // rising edge on the first post-gate frame.
+      this.wasGated = false;
+      for (const pad of pads) {
+        if (!pad) continue;
+        this.prevPressed.set(pad.index, snapshotButtons(pad));
+      }
       return;
     }
     for (const pad of pads) {
       if (!pad) continue;
+      if (pad.mapping !== 'standard' && !this.nonStandardWarned.has(pad.index)) {
+        this.nonStandardWarned.add(pad.index);
+        console.warn(
+          `[gamepad] pad ${pad.index} "${pad.id}" has mapping="${pad.mapping}"; ` +
+            `default button map assumes Standard layout and may mis-route.`,
+        );
+      }
       const prev = this.prevPressed.get(pad.index) ?? [];
       const next: boolean[] = [];
       for (let i = 0; i < pad.buttons.length; i++) {
@@ -149,4 +177,16 @@ export class GamepadInput {
     if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') return [];
     return Array.from(navigator.getGamepads());
   }
+}
+
+/** Snapshot a Gamepad's button-pressed booleans in the same shape prevPressed
+ * stores. Separate from the main loop so the re-arm path can reuse the
+ * threshold + safe-indexing logic. */
+function snapshotButtons(pad: Gamepad): boolean[] {
+  const out: boolean[] = [];
+  for (let i = 0; i < pad.buttons.length; i++) {
+    const btn = pad.buttons[i];
+    out[i] = btn ? btn.pressed || btn.value > BUTTON_PRESSED_THRESHOLD : false;
+  }
+  return out;
 }

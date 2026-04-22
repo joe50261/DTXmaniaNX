@@ -105,7 +105,7 @@ describe('GamepadInput._tick — edge detection', () => {
     expect(menuHits.map((m) => m.action)).toEqual(['cancel', 'up', 'confirm']);
   });
 
-  it('isGated=true suppresses all events and drops held-state cache', () => {
+  it('isGated=true suppresses all events, and gate-release re-arms without firing', () => {
     let gated = false;
     const gp = new GamepadInput({ isGated: () => gated });
     const hits: LaneHitEvent[] = [];
@@ -121,14 +121,38 @@ describe('GamepadInput._tick — edge detection', () => {
     gp._tick(32, [releasedPad(16, [0])]);
     expect(hits).toHaveLength(1);
 
-    // Gate off with A still held. Because gate cleared the cache, A looks
-    // like a fresh edge again — this matches keyboard behaviour after a
-    // focus loss, where the browser stops reporting repeat keys. Document
-    // the behaviour so a regression flips the test, not silently fires a
-    // phantom hit.
+    // Gate off with A still held. First non-gated tick is the re-arm
+    // pass: it seeds prevPressed from the snapshot WITHOUT firing, so
+    // a button held across XR enter/exit stays silent.
     gated = false;
     gp._tick(48, [releasedPad(16, [0])]);
+    expect(hits).toHaveLength(1);
+
+    // Next tick: still held → no repeat.
+    gp._tick(64, [releasedPad(16, [0])]);
+    expect(hits).toHaveLength(1);
+
+    // Release + re-press → new edge.
+    gp._tick(80, [releasedPad(16)]);
+    gp._tick(96, [releasedPad(16, [0])]);
     expect(hits).toHaveLength(2);
+  });
+
+  it('gate-release re-arm: a button pressed only DURING gating fires on first post-gate press', () => {
+    // If the button was NOT held while gated and the user presses it
+    // AFTER gate release, that's a fresh edge — not a re-arm.
+    let gated = false;
+    const gp = new GamepadInput({ isGated: () => gated });
+    const hits: LaneHitEvent[] = [];
+    gp.onLaneHit((e) => hits.push(e));
+
+    gp._tick(0, [releasedPad(16)]);
+    gated = true;
+    gp._tick(16, [releasedPad(16)]); // gated, nothing held
+    gated = false;
+    gp._tick(32, [releasedPad(16)]); // re-arm pass, nothing held → seeds false
+    gp._tick(48, [releasedPad(16, [0])]);
+    expect(hits.map((h) => h.lane)).toEqual([Lane.BD]);
   });
 
   it('tracks separate edge state per gamepad.index', () => {

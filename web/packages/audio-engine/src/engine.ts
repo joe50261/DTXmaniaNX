@@ -13,11 +13,14 @@ import { DrumSynth, type DrumVoice } from './synth.js';
  *
  * Time model:
  *   - `ctx.currentTime` is seconds since the context was created (or resumed).
- *   - Callers work in *song ms* (chart-coordinate, not wall-clock).
+ *   - Callers work in *song ms* (chart-coordinate, not wall-clock):
  *     `songTimeMs() = (ctx.currentTime - songStart) * 1000 * rate`. At
- *     rate = 1 that's identity; at rate = 0.5 it advances at half wall speed.
- *   - When you start a song, pick a small lead-in (e.g. 200ms) and set
- *     `songStartCtxTime = ctx.currentTime + 0.2`.
+ *     rate = 1 chart-ms advances 1:1 with wall-ms; at rate = 0.5 chart-ms
+ *     advances at half wall speed so a 3-minute song plays for 6 wall-minutes.
+ *   - `scheduleDrum` / `scheduleBuffer` divide by rate when mapping chart-ms
+ *     to ctx seconds, so both sides of the equation stay consistent.
+ *   - Start a song by picking a small lead-in (e.g. 200 ms) via
+ *     `startSongClock(200)`.
  *
  * Practice-rate model: `setRate(r)` scales playback of every live
  * AudioBufferSourceNode (BGM + WAV drum samples) and rebases the song

@@ -421,6 +421,14 @@ subscribe(applyConfigToActive);
 subscribe((cfg) => {
   if (cfg.gamepadEnabled) gamepadInput.attach();
   else gamepadInput.detach();
+  // Lazy-init MIDI if the user flips the toggle ON after boot (e.g.
+  // enabled it in Settings having booted with it off, or denied the
+  // browser prompt initially and wants to retry — a reload would also
+  // work but this is less surprising). Idempotent thanks to initMidi's
+  // own early-return.
+  if (cfg.midiEnabled && !midiInput && midiStatus === 'pending') {
+    void initMidi();
+  }
   if (midiInput) {
     if (cfg.midiEnabled) midiInput.attach();
     else midiInput.detach();
