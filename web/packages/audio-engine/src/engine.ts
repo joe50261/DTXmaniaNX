@@ -104,9 +104,7 @@ export class AudioEngine {
     const kind = options.kind ?? 'drums';
     const master = kind === 'bgm' ? this.bgmGain : this.drumsGain;
     const target = this._songStartCtxTime + songTimeMs / 1000;
-    const now = this.ctx.currentTime;
-    const when = target < now ? now : target;
-    const offset = target < now ? now - target : 0;
+    const { when, offset } = computeScheduleWhen(target, this.ctx.currentTime);
 
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
@@ -139,7 +137,30 @@ export class AudioEngine {
   }
 }
 
-function clampVolume(v: number): number {
+/** Clamp a user-supplied volume to [0, 1]. NaN → 1 (silent-fallback to
+ * unity) rather than 0 so a misbehaving UI slider can't accidentally
+ * mute the category without the user noticing. */
+export function clampVolume(v: number): number {
   if (Number.isNaN(v)) return 1;
   return Math.max(0, Math.min(1, v));
+}
+
+/** Decide the (absolute-ctx) start time and the source-offset a buffer
+ * should use when scheduled at `target` relative to a clock whose now
+ * is `now`. If target is already in the past we start the source now
+ * and fast-forward into it by `offset`, so a late-scheduled BGM/sample
+ * stays aligned with song time rather than restarting from zero.
+ *
+ * Exported (rather than kept inline in scheduleBuffer) so the past-time
+ * compensation rule can be unit-tested without a real AudioContext.
+ */
+export function computeScheduleWhen(target: number, now: number): {
+  when: number;
+  offset: number;
+} {
+  const past = target < now;
+  return {
+    when: past ? now : target,
+    offset: past ? now - target : 0,
+  };
 }
