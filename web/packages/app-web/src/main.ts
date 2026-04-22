@@ -48,7 +48,6 @@ const demoBtn = requireEl<HTMLButtonElement>('start-demo');
 const forgetBtn = requireEl<HTMLButtonElement>('forget-folder');
 const rescanBtn = requireEl<HTMLButtonElement>('rescan-folder');
 const calibrateBtn = requireEl<HTMLButtonElement>('calibrate');
-const autoKickBtn = requireEl<HTMLButtonElement>('toggle-autokick');
 const configBtn = requireEl<HTMLButtonElement>('config-btn');
 const xrBtn = requireEl<HTMLButtonElement>('enter-xr');
 const wheelEl = requireEl<HTMLDivElement>('song-wheel');
@@ -285,25 +284,14 @@ refreshCalibrateLabel();
   if (qs === '1' || qs === '0') updateConfig({ autoKick: qs === '1' });
 }
 
-// Overlay's "Auto-kick: ON/OFF" button stays as a quick toggle; it's a
-// proxy onto config now, so the modal checkbox and this button mirror
-// each other live via subscribe().
-function refreshAutoKickLabel(): void {
-  autoKickBtn.textContent = `Auto-kick: ${getConfig().autoKick ? 'ON' : 'OFF'}`;
-}
-autoKickBtn.addEventListener('click', () => {
-  updateConfig({ autoKick: !getConfig().autoKick });
-});
-refreshAutoKickLabel();
-
 const configPanel = new ConfigPanel();
 configBtn.addEventListener('click', () => configPanel.open());
 
 // Live config → Game / Renderer. The renderer reads scrollSpeed /
 // judgeLineY / reverseScroll fields per frame, so a slider drag
-// updates the falling chips and judgment line in real time.
+// updates the falling chips and judgment line in real time. Auto-kick
+// is the only flag the Game itself consumes (BD / LBD auto-fire path).
 const applyConfigToActive = (cfg: ReturnType<typeof getConfig>): void => {
-  refreshAutoKickLabel();
   if (!activeGame) return;
   activeGame.setAutoKick(cfg.autoKick);
   activeGame.display.setScrollSpeed(cfg.scrollSpeed);
