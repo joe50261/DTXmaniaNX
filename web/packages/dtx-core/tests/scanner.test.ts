@@ -470,3 +470,193 @@ describe('explicit box markers (dtxfiles. + box.def)', () => {
     expect(box.explicit).toBe(true);
   });
 });
+
+describe('integration: compound library trees', () => {
+  it('realistic tree mixing dtxfiles. + box.def + set.def + bare .dtx + lone root song', async () => {
+    // Reflects what a real Songs/ folder looks like when a player has
+    // authored packs (dtxfiles. prefix, box.def metadata), bought a set.def
+    // pack, dragged in a lone chart, and stuffed a stray .dtx at the root.
+    const fs = makeFs({
+      // Explicit dtxfiles. pack with box.def overriding the title; contains
+      // two standalone dtx *and* a subfolder with a set.def pack.
+      'Songs/dtxfiles.Rock/box.def': '#TITLE Rock Anthems\n#FONTCOLOR #FF2244',
+      'Songs/dtxfiles.Rock/riff1.dtx': '#TITLE Riff One',
+      'Songs/dtxfiles.Rock/riff2.dtx': '#TITLE Riff Two',
+      'Songs/dtxfiles.Rock/Ballads/set.def': [
+        '#TITLE Slow Burn',
+        '#L1FILE easy.dtx',
+        '#L2FILE hard.dtx',
+      ].join('\n'),
+      'Songs/dtxfiles.Rock/Ballads/easy.dtx': '#TITLE ignored',
+      'Songs/dtxfiles.Rock/Ballads/hard.dtx': '#TITLE ignored',
+      // Explicit box wrapping a plain single-song folder that would
+      // normally hoist. The inner Pack hoists; the outer dtxfiles.Pop
+      // survives because it is explicit.
+      'Songs/dtxfiles.Pop/Pack/set.def': '#TITLE Pop Hit\n#L1FILE m.dtx',
+      'Songs/dtxfiles.Pop/Pack/m.dtx': '',
+      // Plain folder promoted to explicit by box.def alone (no prefix).
+      'Songs/Jazz/box.def': '#TITLE Smooth Jazz',
+      'Songs/Jazz/a.dtx': '#TITLE Coffeehouse',
+      'Songs/Jazz/b.dtx': '#TITLE Lounge',
+      // Bare chart at the root. Should appear as a SongNode directly
+      // under root, *not* inside any box.
+      'Songs/stray.dtx': '#TITLE Stray',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+
+    // -- Top-level inventory (order-independent for stability) ------------
+    const byType = <T extends 'box' | 'song'>(t: T): LibraryNodeOf<T>[] =>
+      index.root.children.filter((c): c is LibraryNodeOf<T> => c.type === t);
+    const rootBoxes = byType('box');
+    const rootSongs = byType('song');
+    // Names: dtxfiles.Rock gets "Rock Anthems" from box.def; dtxfiles.Pop
+    // has no box.def so the prefix is stripped to "Pop"; Jazz gets
+    // "Smooth Jazz" from its box.def.
+    expect(rootBoxes.map((b) => b.name).sort()).toEqual(
+      ['Pop', 'Rock Anthems', 'Smooth Jazz'].sort()
+    );
+    // With parseMeta:false the .dtx #TITLE header is ignored; single-dtx
+    // songs get the filename stem as title.
+    expect(rootSongs.map((s) => s.entry.title)).toEqual(['stray']);
+
+    // -- Rock Anthems box --------------------------------------------------
+    const rock = rootBoxes.find((b) => b.name === 'Rock Anthems')!;
+    expect(rock.explicit).toBe(true);
+    expect(rock.fontColor).toBe('#FF2244');
+    // Expect: two standalone songs + one hoisted set.def song (Slow Burn);
+    // "Ballads" is a plain folder with one song → hoists away.
+    const rockSongs = rock.children
+      .filter((c): c is LibraryNodeOf<'song'> => c.type === 'song')
+      .map((s) => s.entry.title)
+      .sort();
+    // riff1 / riff2 come from filename stems (parseMeta off); "Slow Burn"
+    // is the set.def #TITLE — unaffected by parseMeta.
+    expect(rockSongs).toEqual(['Slow Burn', 'riff1', 'riff2'].sort());
+    expect(rock.children.every((c) => c.parent === rock)).toBe(true);
+
+    // -- dtxfiles.Pop box --------------------------------------------------
+    const pop = rootBoxes.find((b) => b.name === 'Pop')!;
+    expect(pop.explicit).toBe(true);
+    // Pack folder hoisted away; the set.def's "Pop Hit" song lives
+    // directly under Pop now.
+    expect(pop.children).toHaveLength(1);
+    const popOnly = pop.children[0]!;
+    expect(popOnly.type).toBe('song');
+    if (popOnly.type !== 'song') throw new Error('song expected');
+    expect(popOnly.entry.title).toBe('Pop Hit');
+    expect(popOnly.parent).toBe(pop);
+
+    // -- Smooth Jazz box ---------------------------------------------------
+    const jazz = rootBoxes.find((b) => b.name === 'Smooth Jazz')!;
+    expect(jazz.explicit).toBe(true);
+    expect(jazz.children).toHaveLength(2);
+
+    // -- Flat songs list parity -------------------------------------------
+    // Jazz's a.dtx / b.dtx → stems "a"/"b"; rock's riffs → stems; set.def
+    // entries keep their authored titles.
+    expect(index.songs.map((s) => s.title).sort()).toEqual(
+      ['Pop Hit', 'Slow Burn', 'a', 'b', 'riff1', 'riff2', 'stray'].sort()
+    );
+  });
+
+  it('empty box.def folder (no .dtx) is still pruned — explicit does not resurrect empty boxes', async () => {
+    // An author might create box.def before adding charts. Until the
+    // folder actually has content the scanner drops it so the wheel
+    // doesn't carry a dead row.
+    const fs = makeFs({
+      'Songs/Placeholder/box.def': '#TITLE Coming Soon',
+      'Songs/Real/a.dtx': '#TITLE A',
+      'Songs/Real/b.dtx': '#TITLE B',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    const names = index.root.children
+      .filter((c): c is LibraryNodeOf<'box'> => c.type === 'box')
+      .map((b) => b.name);
+    expect(names).toEqual(['Real']);
+  });
+
+  it('box.def + set.def in the same folder: box metadata applies, set.def groups charts', async () => {
+    const fs = makeFs({
+      'Songs/dtxfiles.Pack/box.def': [
+        '#TITLE Custom Pack',
+        '#FONTCOLOR #33CC99',
+        '#COMMENT Hand-picked',
+      ].join('\n'),
+      'Songs/dtxfiles.Pack/set.def': [
+        '#TITLE The Headliner',
+        '#L1FILE bsc.dtx',
+        '#L2FILE adv.dtx',
+        '#L3FILE ext.dtx',
+      ].join('\n'),
+      'Songs/dtxfiles.Pack/bsc.dtx': '',
+      'Songs/dtxfiles.Pack/adv.dtx': '',
+      'Songs/dtxfiles.Pack/ext.dtx': '',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    // Box survives because explicit; the set.def gave it exactly one song.
+    expect(index.root.children).toHaveLength(1);
+    const pack = index.root.children[0];
+    if (!pack || pack.type !== 'box') throw new Error('box expected');
+    expect(pack.name).toBe('Custom Pack');
+    expect(pack.fontColor).toBe('#33CC99');
+    expect(pack.comment).toBe('Hand-picked');
+    expect(pack.explicit).toBe(true);
+    expect(pack.children).toHaveLength(1);
+    const song = pack.children[0];
+    if (!song || song.type !== 'song') throw new Error('song expected');
+    expect(song.entry.title).toBe('The Headliner');
+    expect(song.entry.fromSetDef).toBe(true);
+    expect(song.entry.charts.map((c) => c.slot)).toEqual([0, 1, 2]);
+  });
+
+  it('plain single-child wrapper containing an explicit box hoists only itself, not the inner explicit box', async () => {
+    // PlainOuter has 1 child (dtxfiles.Inner). PlainOuter is not explicit,
+    // so it collapses into root; Inner is explicit with 1 song and must
+    // survive its own single-child hoist. Final tree: root → Inner → only.
+    const fs = makeFs({
+      'Songs/PlainOuter/dtxfiles.Inner/only.dtx': '#TITLE Just One',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    expect(index.root.children).toHaveLength(1);
+    const inner = index.root.children[0];
+    if (!inner || inner.type !== 'box') throw new Error('box expected');
+    expect(inner.name).toBe('Inner');
+    expect(inner.explicit).toBe(true);
+    expect(inner.parent).toBe(index.root);
+    expect(inner.children).toHaveLength(1);
+    const song = inner.children[0];
+    if (!song || song.type !== 'song') throw new Error('song expected');
+    // parseMeta:false so title is the filename stem, not the #TITLE header.
+    expect(song.entry.title).toBe('only');
+    expect(song.parent).toBe(inner);
+  });
+
+  it('malformed (ASCII-only garbage) box.def still parses, folder still shows up — resilience', async () => {
+    // parseBoxDef is directive-by-directive and skips anything it doesn't
+    // understand, so a garbage box.def produces an empty meta object
+    // rather than throwing. The folder should still appear, with the
+    // default (folder-name) title.
+    const fs = makeFs({
+      'Songs/Weird/box.def': 'this is not a box def file\n!!!\nrandom: stuff\n',
+      'Songs/Weird/a.dtx': '#TITLE A',
+      'Songs/Weird/b.dtx': '#TITLE B',
+    });
+    const index = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    expect(index.root.children).toHaveLength(1);
+    const box = index.root.children[0];
+    if (!box || box.type !== 'box') throw new Error('box expected');
+    // box.def parse succeeded (lenient) → explicit is set even though
+    // the file had no usable directives. Title defaults to folder name.
+    expect(box.explicit).toBe(true);
+    expect(box.name).toBe('Weird');
+    expect(box.fontColor).toBeUndefined();
+    expect(box.children).toHaveLength(2);
+    expect(index.errors).toHaveLength(0);
+  });
+});
+
+// Helper: narrow a LibraryNode union to one branch at a type level.
+type LibraryNodeOf<T extends 'box' | 'song'> = Extract<
+  import('../src/scanner/scanner.js').LibraryNode,
+  { type: T }
+>;
