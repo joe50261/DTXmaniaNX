@@ -147,7 +147,13 @@ export function subscribe(cb: (cfg: Config) => void): () => void {
   return () => listeners.delete(cb);
 }
 
-function loadConfig(): Config {
+/**
+ * Read the persisted config blob off localStorage, applying any
+ * legacy-key migrations. Exported so tests can verify migration
+ * behaviour in isolation — production calls this exactly once at
+ * module import time to seed `current`.
+ */
+export function loadConfig(): Config {
   // `stored` uses a loose shape because the on-disk blob may predate
   // the current schema (e.g. still carries the old boolean `autoKick`).
   let stored: Partial<Config> & { autoKick?: boolean } = {};

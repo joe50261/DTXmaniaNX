@@ -27,6 +27,7 @@ import {
   type HitFlash,
   type SkinTextures,
 } from './renderer.js';
+import { applyAutoFire } from './autofire.js';
 import { channelToLane, LANE_LAYOUT, laneSpec } from './lane-layout.js';
 import { XrControllers } from './xr-controllers.js';
 import { VrMenu, type VrMenuDeps, type VrMenuPick } from './vr-menu.js';
@@ -575,17 +576,20 @@ export class Game {
    * populated from config.autoPlay via main.ts. Empty set = no-op.
    */
   private autoFireLanes(songTime: number): void {
-    if (this.autoPlayLanes.size === 0) return;
-    for (let i = 0; i < this.playables.length; i++) {
-      const p = this.playables[i]!;
-      if (p.hit || p.missed) continue;
-      if (!this.autoPlayLanes.has(p.laneValue)) continue;
-      if (songTime < p.chip.playbackTimeMs) continue;
-      p.hit = true;
+    // Decision is a pure function in autofire.ts so it can be unit-
+    // tested without spinning up a Game. PlayableChip already has the
+    // (chip, laneValue, hit, missed) shape the helper expects —
+    // PlayableChip's `state` is itself so we treat each record as
+    // both candidate + state container.
+    // PlayableChip is structurally a superset of AutoFireCandidate
+    // (adds `buffer`), so it passes straight through.
+    const events = applyAutoFire(this.playables, this.autoPlayLanes, songTime);
+    for (const ev of events) {
+      const p = this.playables[ev.idx]!;
       this.tracker.recordAuto();
       this.playChipSample(p, songTime, 1);
-      this.lastPadHitMs.set(p.laneValue, performance.now());
-      this.hitFlashes.push({ lane: p.laneValue, spawnedMs: songTime });
+      this.lastPadHitMs.set(ev.lane, performance.now());
+      this.hitFlashes.push({ lane: ev.lane, spawnedMs: songTime });
     }
   }
 
