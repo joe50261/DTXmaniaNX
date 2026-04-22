@@ -383,7 +383,6 @@ class ConfigForm {
     // hint confuses players ("I enabled loop but nothing happens").
     this.loopWarn = document.createElement('div');
     this.loopWarn.className = 'config-note config-note-warn';
-    this.loopWarn.style.color = '#fbbf24';
     this.loopWarn.style.display = 'none';
     this.loopWarn.textContent = 'Range is invalid (B must be after A). Loop is disabled.';
     practice.body.appendChild(this.loopWarn);
