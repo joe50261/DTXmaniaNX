@@ -47,9 +47,20 @@ function tx<T>(
       new Promise<T>((resolve, reject) => {
         const transaction = db.transaction(store, mode);
         const request = fn(transaction.objectStore(store));
-        transaction.oncomplete = () => resolve(request.result);
-        transaction.onerror = () => reject(transaction.error);
-        transaction.onabort = () => reject(transaction.error);
+        // Close the connection once the txn settles so we don't accumulate
+        // open handles (and so tests can delete the DB between cases).
+        transaction.oncomplete = () => {
+          db.close();
+          resolve(request.result);
+        };
+        transaction.onerror = () => {
+          db.close();
+          reject(transaction.error);
+        };
+        transaction.onabort = () => {
+          db.close();
+          reject(transaction.error);
+        };
       })
   );
 }
@@ -127,9 +138,18 @@ export async function loadAllChartRecords(): Promise<Map<string, ChartRecord>> {
       }
       cursor.continue();
     };
-    transaction.oncomplete = () => resolve(out);
-    transaction.onerror = () => reject(transaction.error);
-    transaction.onabort = () => reject(transaction.error);
+    transaction.oncomplete = () => {
+      db.close();
+      resolve(out);
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error);
+    };
+    transaction.onabort = () => {
+      db.close();
+      reject(transaction.error);
+    };
   });
 }
 
