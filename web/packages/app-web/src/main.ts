@@ -21,7 +21,8 @@ import {
 import { Game, type GameFsContext } from './game.js';
 import { SongWheel } from './song-wheel.js';
 import { ConfigPanel } from './config-panel.js';
-import { getConfig, subscribe, updateConfig } from './config.js';
+import { getConfig, subscribe, updateConfig, type AutoPlayMap } from './config.js';
+import { Lane, type LaneValue } from '@dtxmania/input';
 import { PreviewPlayer } from '@dtxmania/audio-engine';
 import { HandleFileSystemBackend } from './fs/handle-backend.js';
 import {
@@ -39,6 +40,27 @@ import { loadSkin } from './skin.js';
 import type { SkinTextures } from './renderer.js';
 import { loadAudioOffsetMs, runCalibration, saveAudioOffsetMs } from './calibrate.js';
 import { AudioEngine } from '@dtxmania/audio-engine';
+
+/**
+ * Translate the config's per-name AutoPlayMap into the numeric LaneValue
+ * set the Game loop consumes. Encapsulated here (not in config.ts) so
+ * the config module stays dependency-free of @dtxmania/input.
+ */
+function autoPlayToLanes(map: AutoPlayMap): Iterable<LaneValue> {
+  const out: LaneValue[] = [];
+  if (map.LC) out.push(Lane.LC);
+  if (map.HH) out.push(Lane.HH);
+  if (map.LP) out.push(Lane.LP);
+  if (map.SD) out.push(Lane.SD);
+  if (map.HT) out.push(Lane.HT);
+  if (map.BD) out.push(Lane.BD);
+  if (map.LT) out.push(Lane.LT);
+  if (map.FT) out.push(Lane.FT);
+  if (map.CY) out.push(Lane.CY);
+  if (map.RD) out.push(Lane.RD);
+  if (map.LBD) out.push(Lane.LBD);
+  return out;
+}
 
 const canvas = requireEl<HTMLCanvasElement>('game');
 const overlay = requireEl<HTMLDivElement>('overlay');
@@ -144,7 +166,7 @@ try {
   boot.display.setScrollSpeed(cfg0.scrollSpeed);
   boot.display.setJudgeLineY(cfg0.judgeLineY);
   boot.display.setReverseScroll(cfg0.reverseScroll);
-  boot.setAutoKick(cfg0.autoKick);
+  boot.setAutoPlayLanes(autoPlayToLanes(cfg0.autoPlay));
   boot.audio.setBgmVolume(cfg0.volumeBgm);
   boot.audio.setDrumsVolume(cfg0.volumeDrums);
   boot.audio.setPreviewVolume(cfg0.volumePreview);
@@ -292,7 +314,16 @@ refreshCalibrateLabel();
 // the right value at boot.
 {
   const qs = new URLSearchParams(window.location.search).get('autokick');
-  if (qs === '1' || qs === '0') updateConfig({ autoKick: qs === '1' });
+  if (qs === '1' || qs === '0') {
+    // Preserve the legacy "autokick" URL param: it only ever meant
+    // "BD + LBD on/off", so we project it onto exactly those lanes
+    // without touching the other 9. Merge-on-write so a later
+    // Settings edit can still set a different subset.
+    const cur = getConfig().autoPlay;
+    updateConfig({
+      autoPlay: { ...cur, BD: qs === '1', LBD: qs === '1' },
+    });
+  }
 }
 
 const configPanel = new ConfigPanel();
@@ -304,7 +335,7 @@ configBtn.addEventListener('click', () => configPanel.open());
 // is the only flag the Game itself consumes (BD / LBD auto-fire path).
 const applyConfigToActive = (cfg: ReturnType<typeof getConfig>): void => {
   if (!activeGame) return;
-  activeGame.setAutoKick(cfg.autoKick);
+  activeGame.setAutoPlayLanes(autoPlayToLanes(cfg.autoPlay));
   activeGame.display.setScrollSpeed(cfg.scrollSpeed);
   activeGame.display.setJudgeLineY(cfg.judgeLineY);
   activeGame.display.setReverseScroll(cfg.reverseScroll);
@@ -576,7 +607,7 @@ async function launchGame(
           },
         }
       : {}),
-    autoKick: getConfig().autoKick,
+    autoPlayLanes: autoPlayToLanes(getConfig().autoPlay),
   };
   if (fs) {
     setStatus('Loading samples…');
