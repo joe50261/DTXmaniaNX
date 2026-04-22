@@ -1,0 +1,145 @@
+import * as THREE from 'three';
+import { describe, expect, it } from 'vitest';
+import { XrControllers } from './xr-controllers.js';
+
+/**
+ * These tests don't touch Three.js's WebXR wiring — no WebGLRenderer, no
+ * XRSession, no GL context. We only exercise the `connected` /
+ * `disconnected` event branch, which is pure event bookkeeping on
+ * Three.js Object3D (EventDispatcher). That branch is responsible for
+ * matching the right XRInputSource to the right hand; getting it wrong
+ * meant a left-hand strike rumbled the right controller (see the class
+ * doc comment on `inputSources`).
+ */
+
+interface FakeWebGL {
+  xr: {
+    getController: (i: number) => THREE.Object3D;
+    getControllerGrip: (i: number) => THREE.Object3D;
+    getSession: () => null;
+  };
+  controllers: THREE.Object3D[];
+  grips: THREE.Object3D[];
+}
+
+function makeFakeWebGL(): FakeWebGL {
+  const controllers = [new THREE.Object3D(), new THREE.Object3D()];
+  const grips = [new THREE.Object3D(), new THREE.Object3D()];
+  return {
+    xr: {
+      getController: (i) => controllers[i]!,
+      getControllerGrip: (i) => grips[i]!,
+      getSession: () => null,
+    },
+    controllers,
+    grips,
+  };
+}
+
+function fakeInputSource(handedness: 'left' | 'right'): XRInputSource {
+  return { handedness } as unknown as XRInputSource;
+}
+
+/** Three.js EventDispatcher accepts arbitrary-shape event objects as long
+ * as they carry a `type` string. The `data` field mirrors what Quest
+ * Browser actually delivers with the XRInputSource. We go through `any`
+ * because Three.js's Object3DEventMap is a closed union that doesn't
+ * include the XR-specific `connected` / `disconnected` types. */
+type LooseDispatcher = { dispatchEvent(e: { type: string; data?: unknown }): void };
+function dispatchConnected(target: THREE.Object3D, data: XRInputSource): void {
+  (target as unknown as LooseDispatcher).dispatchEvent({ type: 'connected', data });
+}
+function dispatchDisconnected(target: THREE.Object3D, data: XRInputSource): void {
+  (target as unknown as LooseDispatcher).dispatchEvent({ type: 'disconnected', data });
+}
+
+function makeStarted(): { xr: XrControllers; gl: FakeWebGL; scene: THREE.Scene } {
+  const gl = makeFakeWebGL();
+  const scene = new THREE.Scene();
+  const xr = new XrControllers(
+    gl as unknown as THREE.WebGLRenderer,
+    scene,
+  );
+  xr.start();
+  return { xr, gl, scene };
+}
+
+describe('XrControllers — input source tracking', () => {
+  it('starts with both slots null (no controllers connected yet)', () => {
+    const { xr } = makeStarted();
+    expect(Array.from(xr.currentInputSources)).toEqual([null, null]);
+  });
+
+  it('captures the XRInputSource on `connected` into the slot matching the controller index', () => {
+    const { xr, gl } = makeStarted();
+    const leftSrc = fakeInputSource('left');
+    dispatchConnected(gl.controllers[0]!, leftSrc);
+    expect(xr.currentInputSources[0]).toBe(leftSrc);
+    expect(xr.currentInputSources[1]).toBe(null);
+  });
+
+  it('handles both controllers independently — left does not bleed into right', () => {
+    // Ordering-independence is the whole reason this listener exists
+    // (see class doc). Reverse-order connect to catch accidental shared-
+    // index bugs.
+    const { xr, gl } = makeStarted();
+    const leftSrc = fakeInputSource('left');
+    const rightSrc = fakeInputSource('right');
+    dispatchConnected(gl.controllers[1]!, rightSrc);
+    dispatchConnected(gl.controllers[0]!, leftSrc);
+    expect(xr.currentInputSources[0]).toBe(leftSrc);
+    expect(xr.currentInputSources[1]).toBe(rightSrc);
+  });
+
+  it('clears the slot on `disconnected` (Quest user powers off one controller)', () => {
+    const { xr, gl } = makeStarted();
+    const rightSrc = fakeInputSource('right');
+    dispatchConnected(gl.controllers[1]!, rightSrc);
+    expect(xr.currentInputSources[1]).toBe(rightSrc);
+    dispatchDisconnected(gl.controllers[1]!, rightSrc);
+    expect(xr.currentInputSources[1]).toBe(null);
+    // Other slot untouched.
+    expect(xr.currentInputSources[0]).toBe(null);
+  });
+
+  it('supports reconnection (controller drops out and comes back) without wedging the slot', () => {
+    const { xr, gl } = makeStarted();
+    const a = fakeInputSource('left');
+    const b = fakeInputSource('left');
+    dispatchConnected(gl.controllers[0]!, a);
+    dispatchDisconnected(gl.controllers[0]!, a);
+    dispatchConnected(gl.controllers[0]!, b);
+    expect(xr.currentInputSources[0]).toBe(b);
+  });
+
+  it('ignores `connected` payloads that lack the `data` field — defensive', () => {
+    // Some WebXR polyfills fire events with no `data`. The handler
+    // guards on `if (data)`; without that, the slot would get `undefined`
+    // and the downstream haptic code would crash trying to read
+    // `.gamepad.hapticActuators` off undefined.
+    const { xr, gl } = makeStarted();
+    (gl.controllers[0]! as unknown as LooseDispatcher).dispatchEvent({ type: 'connected' });
+    expect(xr.currentInputSources[0]).toBe(null);
+  });
+
+  it('`currentInputSources` getter returns a live view (changes reflect without re-calling start)', () => {
+    const { xr, gl } = makeStarted();
+    const snap1 = xr.currentInputSources;
+    const src = fakeInputSource('right');
+    dispatchConnected(gl.controllers[0]!, src);
+    // Same underlying array → the earlier reference reflects the new
+    // state. Callers (Game's cancel-squeeze poller) rely on this so
+    // they can cache the array once and read live state per tick.
+    expect(snap1[0]).toBe(src);
+  });
+
+  it('adds the controllers and grips to the scene (wiring sanity)', () => {
+    const { scene, gl } = makeStarted();
+    // Both controllers + both grips must end up parented under the scene
+    // so Three.js moves them to match the headset pose.
+    expect(scene.children).toContain(gl.controllers[0]);
+    expect(scene.children).toContain(gl.controllers[1]);
+    expect(scene.children).toContain(gl.grips[0]);
+    expect(scene.children).toContain(gl.grips[1]);
+  });
+});
