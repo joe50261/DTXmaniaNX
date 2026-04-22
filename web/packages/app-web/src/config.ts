@@ -25,6 +25,12 @@ export interface Config {
   reverseScroll: boolean;
   /** Auto-fire BD + LBD chips. Future: per-lane split. */
   autoKick: boolean;
+  /** Master volumes per audio category, 0..1. BGM and drums default to
+   * 1; preview defaults to 0.7 so song-select clips don't blast over
+   * an active chart. */
+  volumeBgm: number;
+  volumeDrums: number;
+  volumePreview: number;
 }
 
 export const DEFAULT_CONFIG: Config = Object.freeze({
@@ -32,6 +38,9 @@ export const DEFAULT_CONFIG: Config = Object.freeze({
   judgeLineY: 600,
   reverseScroll: false,
   autoKick: false,
+  volumeBgm: 1.0,
+  volumeDrums: 1.0,
+  volumePreview: 0.7,
 });
 
 const STORAGE_KEY = 'dtxmania.config';

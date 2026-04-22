@@ -206,6 +206,12 @@ export class Game {
     return this.engine.ctx;
   }
 
+  /** Expose the AudioEngine so main.ts can apply volume settings and
+   * wire the PreviewPlayer to the shared previewGain. */
+  get audio(): AudioEngine {
+    return this.engine;
+  }
+
   /**
    * Inject skin textures after construction. Lets main.ts build the Game
    * eagerly (so Enter-VR stays on a synchronous gesture path) and apply
@@ -390,7 +396,13 @@ export class Game {
       const def = song.wavTable.get(chip.wavId);
       const volume = def ? def.volume / 100 : 1;
       const pan = def ? def.pan / 100 : 0;
-      const src = this.engine.scheduleBuffer(buffer, chip.playbackTimeMs, { volume, pan });
+      // BGM routes through the engine's bgmGain master so Settings →
+      // BGM volume applies without per-chip tweaking.
+      const src = this.engine.scheduleBuffer(buffer, chip.playbackTimeMs, {
+        volume,
+        pan,
+        kind: 'bgm',
+      });
       this.bgmSources.push(src);
     }
   }

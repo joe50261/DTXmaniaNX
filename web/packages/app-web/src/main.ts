@@ -145,6 +145,9 @@ try {
   boot.display.setJudgeLineY(cfg0.judgeLineY);
   boot.display.setReverseScroll(cfg0.reverseScroll);
   boot.setAutoKick(cfg0.autoKick);
+  boot.audio.setBgmVolume(cfg0.volumeBgm);
+  boot.audio.setDrumsVolume(cfg0.volumeDrums);
+  boot.audio.setPreviewVolume(cfg0.volumePreview);
 } catch (e) {
   // WebGL unavailable — page still usable for non-game actions if any.
   console.warn('Game init failed', e);
@@ -155,10 +158,16 @@ try {
 // bite. The loader closes over `library` so switching folders picks up
 // the new backend automatically.
 const previewPlayer: PreviewPlayer | null = activeGame
-  ? new PreviewPlayer(activeGame.audioContext, async (path) => {
-      if (!library) throw new Error('no library loaded');
-      return library.backend.readFile(path);
-    })
+  ? new PreviewPlayer(
+      activeGame.audioContext,
+      async (path) => {
+        if (!library) throw new Error('no library loaded');
+        return library.backend.readFile(path);
+      },
+      // Route through the engine's preview master so Settings → Preview
+      // volume governs loudness without any per-play volume tweaks.
+      activeGame.audio.previewGain
+    )
   : null;
 
 /** Cancels an outstanding 600 ms preview-start timer. DTXmania's canonical
@@ -183,7 +192,9 @@ function schedulePreview(song: SongEntry | null): void {
   const path = joinPath(song.folderPath, song.preview);
   pendingPreviewTimer = window.setTimeout(() => {
     pendingPreviewTimer = null;
-    void previewPlayer.play(path, 0.7);
+    // Per-play gain full-open; preview master (engine.previewGain,
+    // driven by config.volumePreview) governs the actual loudness.
+    void previewPlayer.play(path, 1);
   }, 600);
 }
 
@@ -297,6 +308,9 @@ const applyConfigToActive = (cfg: ReturnType<typeof getConfig>): void => {
   activeGame.display.setScrollSpeed(cfg.scrollSpeed);
   activeGame.display.setJudgeLineY(cfg.judgeLineY);
   activeGame.display.setReverseScroll(cfg.reverseScroll);
+  activeGame.audio.setBgmVolume(cfg.volumeBgm);
+  activeGame.audio.setDrumsVolume(cfg.volumeDrums);
+  activeGame.audio.setPreviewVolume(cfg.volumePreview);
 };
 subscribe(applyConfigToActive);
 

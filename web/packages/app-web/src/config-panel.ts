@@ -80,6 +80,12 @@ class ConfigForm {
   private readonly judgeYVal: HTMLSpanElement;
   private readonly reverseInput: HTMLInputElement;
   private readonly autoKickInput: HTMLInputElement;
+  private readonly bgmVolInput: HTMLInputElement;
+  private readonly bgmVolVal: HTMLSpanElement;
+  private readonly drumsVolInput: HTMLInputElement;
+  private readonly drumsVolVal: HTMLSpanElement;
+  private readonly previewVolInput: HTMLInputElement;
+  private readonly previewVolVal: HTMLSpanElement;
 
   constructor() {
     this.root = document.createElement('div');
@@ -118,13 +124,46 @@ class ConfigForm {
     });
     gameplay.body.appendChild(rs.row);
 
-    // Auto-kick (mirrors the overlay quick-toggle button)
+    // Auto-kick
     const ak = checkboxRow('Auto-kick (BD + LBD fire automatically)');
     this.autoKickInput = ak.input;
     ak.input.addEventListener('change', () => {
       updateConfig({ autoKick: ak.input.checked });
     });
     gameplay.body.appendChild(ak.row);
+
+    const audio = section('Audio');
+    this.root.appendChild(audio.section);
+
+    const bgm = sliderRow('BGM volume', '0', '1', '0.05');
+    this.bgmVolInput = bgm.input;
+    this.bgmVolVal = bgm.value;
+    bgm.input.addEventListener('input', () => {
+      const v = parseFloat(bgm.input.value);
+      bgm.value.textContent = v.toFixed(2);
+      updateConfig({ volumeBgm: v });
+    });
+    audio.body.appendChild(bgm.row);
+
+    const drums = sliderRow('Drums volume', '0', '1', '0.05');
+    this.drumsVolInput = drums.input;
+    this.drumsVolVal = drums.value;
+    drums.input.addEventListener('input', () => {
+      const v = parseFloat(drums.input.value);
+      drums.value.textContent = v.toFixed(2);
+      updateConfig({ volumeDrums: v });
+    });
+    audio.body.appendChild(drums.row);
+
+    const prev = sliderRow('Preview volume', '0', '1', '0.05');
+    this.previewVolInput = prev.input;
+    this.previewVolVal = prev.value;
+    prev.input.addEventListener('input', () => {
+      const v = parseFloat(prev.input.value);
+      prev.value.textContent = v.toFixed(2);
+      updateConfig({ volumePreview: v });
+    });
+    audio.body.appendChild(prev.row);
   }
 
   refreshFromConfig(): void {
@@ -135,6 +174,12 @@ class ConfigForm {
     this.judgeYVal.textContent = String(cfg.judgeLineY);
     this.reverseInput.checked = cfg.reverseScroll;
     this.autoKickInput.checked = cfg.autoKick;
+    this.bgmVolInput.value = String(cfg.volumeBgm);
+    this.bgmVolVal.textContent = cfg.volumeBgm.toFixed(2);
+    this.drumsVolInput.value = String(cfg.volumeDrums);
+    this.drumsVolVal.textContent = cfg.volumeDrums.toFixed(2);
+    this.previewVolInput.value = String(cfg.volumePreview);
+    this.previewVolVal.textContent = cfg.volumePreview.toFixed(2);
   }
 }
 
