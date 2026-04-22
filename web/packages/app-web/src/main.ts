@@ -20,6 +20,8 @@ import {
 } from '@dtxmania/dtx-core';
 import { Game, type GameFsContext } from './game.js';
 import { SongWheel } from './song-wheel.js';
+import { ConfigPanel } from './config-panel.js';
+import { getConfig, subscribe, updateConfig } from './config.js';
 import { PreviewPlayer } from '@dtxmania/audio-engine';
 import { HandleFileSystemBackend } from './fs/handle-backend.js';
 import {
@@ -47,6 +49,7 @@ const forgetBtn = requireEl<HTMLButtonElement>('forget-folder');
 const rescanBtn = requireEl<HTMLButtonElement>('rescan-folder');
 const calibrateBtn = requireEl<HTMLButtonElement>('calibrate');
 const autoKickBtn = requireEl<HTMLButtonElement>('toggle-autokick');
+const configBtn = requireEl<HTMLButtonElement>('config-btn');
 const xrBtn = requireEl<HTMLButtonElement>('enter-xr');
 const wheelEl = requireEl<HTMLDivElement>('song-wheel');
 const statusPanelEl = requireEl<HTMLDivElement>('status-panel');
@@ -135,6 +138,14 @@ try {
   skinPromise
     .then((skin) => boot.applySkin(skin))
     .catch((e) => console.warn('skin load failed', e));
+  // Push the persisted user settings into the freshly-built renderer so
+  // the first frame already reflects scrollSpeed / judgeLineY /
+  // reverseScroll. Subsequent updates ride the subscribe channel.
+  const cfg0 = getConfig();
+  boot.display.setScrollSpeed(cfg0.scrollSpeed);
+  boot.display.setJudgeLineY(cfg0.judgeLineY);
+  boot.display.setReverseScroll(cfg0.reverseScroll);
+  boot.setAutoKick(cfg0.autoKick);
 } catch (e) {
   // WebGL unavailable — page still usable for non-game actions if any.
   console.warn('Game init failed', e);
@@ -266,30 +277,40 @@ calibrateBtn.addEventListener('click', () =>
 
 refreshCalibrateLabel();
 
-// Auto-kick (DTXmania bAutoPlay.BD + bAutoPlay.LBD equivalent). Persist via
-// localStorage; URL param ?autokick=1 / 0 lets users lock a state without
-// touching the UI (handy for demos / recordings). The stored state wins
-// over the default OFF when the URL param isn't present.
-const AUTOKICK_KEY = 'dtxmania.autokick';
+// URL param ?autokick=1/0 still works for demo / recording links — write
+// it into the new config blob before the first read so subscribers see
+// the right value at boot.
 {
   const qs = new URLSearchParams(window.location.search).get('autokick');
-  if (qs === '1') localStorage.setItem(AUTOKICK_KEY, '1');
-  else if (qs === '0') localStorage.removeItem(AUTOKICK_KEY);
+  if (qs === '1' || qs === '0') updateConfig({ autoKick: qs === '1' });
 }
-function isAutoKickEnabled(): boolean {
-  return localStorage.getItem(AUTOKICK_KEY) === '1';
-}
+
+// Overlay's "Auto-kick: ON/OFF" button stays as a quick toggle; it's a
+// proxy onto config now, so the modal checkbox and this button mirror
+// each other live via subscribe().
 function refreshAutoKickLabel(): void {
-  autoKickBtn.textContent = `Auto-kick: ${isAutoKickEnabled() ? 'ON' : 'OFF'}`;
+  autoKickBtn.textContent = `Auto-kick: ${getConfig().autoKick ? 'ON' : 'OFF'}`;
 }
 autoKickBtn.addEventListener('click', () => {
-  const next = !isAutoKickEnabled();
-  if (next) localStorage.setItem(AUTOKICK_KEY, '1');
-  else localStorage.removeItem(AUTOKICK_KEY);
-  refreshAutoKickLabel();
-  activeGame?.setAutoKick(next);
+  updateConfig({ autoKick: !getConfig().autoKick });
 });
 refreshAutoKickLabel();
+
+const configPanel = new ConfigPanel();
+configBtn.addEventListener('click', () => configPanel.open());
+
+// Live config → Game / Renderer. The renderer reads scrollSpeed /
+// judgeLineY / reverseScroll fields per frame, so a slider drag
+// updates the falling chips and judgment line in real time.
+const applyConfigToActive = (cfg: ReturnType<typeof getConfig>): void => {
+  refreshAutoKickLabel();
+  if (!activeGame) return;
+  activeGame.setAutoKick(cfg.autoKick);
+  activeGame.display.setScrollSpeed(cfg.scrollSpeed);
+  activeGame.display.setJudgeLineY(cfg.judgeLineY);
+  activeGame.display.setReverseScroll(cfg.reverseScroll);
+};
+subscribe(applyConfigToActive);
 
 void init();
 
@@ -553,7 +574,7 @@ async function launchGame(
           },
         }
       : {}),
-    autoKick: isAutoKickEnabled(),
+    autoKick: getConfig().autoKick,
   };
   if (fs) {
     setStatus('Loading samples…');
