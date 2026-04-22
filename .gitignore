@@ -196,3 +196,8 @@ ModelManifest.xml
 実行時フォルダ/dtxmanialog.txt
 実行時フォルダ/songlist.db
 実行時フォルダ/songs.db
+
+# Playwright e2e
+test-results/
+playwright-report/
+playwright/.cache/
