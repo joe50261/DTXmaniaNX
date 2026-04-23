@@ -66,13 +66,18 @@ const STATUS_W = PANEL_W_PX - STATUS_X - 40;
 const EXIT_W = 200;
 const EXIT_H = 50;
 const EXIT_X = PANEL_W_PX - 40 - EXIT_W;
-const EXIT_Y = PANEL_H_PX - 70;
+const EXIT_Y = PANEL_H_PX - 16 - EXIT_H;
 
 const UTIL_BTN_W = 180;
 const UTIL_BTN_H = 36;
-const UTIL_BTN_Y = PANEL_H_PX - 60;
+// Utility row sits on the same baseline as the Exit VR button so the
+// bottom strip reads as one control bar. Hint text is painted ABOVE
+// this row (see paintFooter) — the previous layout put hint text and
+// buttons at the same y, covering the text with the button rectangles.
+const UTIL_BTN_Y = PANEL_H_PX - 16 - EXIT_H + (EXIT_H - UTIL_BTN_H) / 2;
 const CONFIG_BTN_X = 40;
 const CALIB_BTN_X = CONFIG_BTN_X + UTIL_BTN_W + 16;
+const FOOTER_HINT_Y = UTIL_BTN_Y - 14;
 
 interface ButtonHit {
   /** Canvas rectangle. */
@@ -771,7 +776,7 @@ export class VrMenu {
     ctx.fillText(
       'Stick: ↕ browse  · ↔ difficulty    ·    Trigger: play / enter    ·    Squeeze: back',
       40,
-      PANEL_H_PX - 40
+      FOOTER_HINT_Y
     );
 
     // Exit VR
@@ -781,7 +786,7 @@ export class VrMenu {
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 16px ui-monospace, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('Exit VR', EXIT_X + EXIT_W / 2, EXIT_Y + 32);
+    ctx.fillText('Exit VR', EXIT_X + EXIT_W / 2, EXIT_Y + EXIT_H / 2 + 6);
     this.hits.push({ x: EXIT_X, y: EXIT_Y, w: EXIT_W, h: EXIT_H, action: { kind: 'exit' } });
 
     // Utility row: Settings + Calibrate. Each is drawn only if a handler
@@ -813,7 +818,7 @@ export class VrMenu {
     ctx.fillStyle = '#cbd5e1';
     ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(label, x + UTIL_BTN_W / 2, UTIL_BTN_Y + 23);
+    ctx.fillText(label, x + UTIL_BTN_W / 2, UTIL_BTN_Y + UTIL_BTN_H / 2 + 5);
     this.hits.push({
       x,
       y: UTIL_BTN_Y,

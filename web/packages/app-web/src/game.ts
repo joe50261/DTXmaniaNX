@@ -390,9 +390,35 @@ export class Game {
     if (opts.autoPlayLanes !== undefined) {
       this.autoPlayLanes = new Set(opts.autoPlayLanes);
     }
+    // Wipe render-visible state BEFORE any async work. loadAndStart
+    // awaits engine.resume() and (in VR) a multi-hundred-ms sample
+    // preload; the renderer.onFrame tick keeps firing during those
+    // awaits. Without this reset, tick() would paint the PREVIOUS
+    // chart's chips + result overlay into the VR panel texture for the
+    // entire preload window — the "leftover" that players see after
+    // confirming a song in the VR menu. Only once this.song is nulled
+    // does tick() take the `if (!this.song) return;` early exit, which
+    // is what we want until the new chart is ready.
+    this.song = null;
+    this.playables = [];
+    this.tracker = new ScoreTracker(0);
+    this.status = 'idle';
+    this.finishedAtMs = null;
+    this.finishedReturnHandled = false;
+    this.judgmentFlash = null;
+    this.hitFlashes = [];
+    this.measureStartMs = [];
+    this.loopWindowMs = null;
+    this.loopedAtLeastOnce = false;
+    this.loopMarkerPressed = [false, false];
     // Belt-and-braces: whatever state hideVrMenu may or may not have run in,
     // a fresh chart always wants the playfield visible.
     this.renderer.setPlayfieldVisible(true);
+    // Paint one idle frame so the HUD canvas (which the VR playfield
+    // panel samples from) is cleared before the next tick bails out on
+    // `if (!this.song) return;`. Otherwise the last painted frame from
+    // the finished chart stays on the texture for the preload duration.
+    this.renderer.clearHud();
     this.stopBgm();
     this.sampleByWavId.clear();
     this.lastBufferByLane.clear();
@@ -400,26 +426,30 @@ export class Game {
     this.gauge = 0.5;
     await this.engine.resume();
 
-    this.song = computeTiming(parseDtx(dtxText));
-    this.measureStartMs = buildMeasureStartMsIndex(this.song);
-    this.loopWindowMs = null;
-    this.loopedAtLeastOnce = false;
-    this.loopMarkerPressed = [false, false];
+    // Build the new Song into a local until every async step finishes.
+    // Assigning to `this.song` too early would unblock tick()'s
+    // `if (!this.song) return;` guard while the clock is still stale
+    // and status is still 'idle' — chips would pop in visibly before
+    // the countdown starts. Staging everything locally keeps tick()
+    // bailing until all setup is atomic.
+    const song = computeTiming(parseDtx(dtxText));
+    const measureStartMs = buildMeasureStartMsIndex(song);
 
     // Preload every sample the chart references (BGM + drums) in one batch.
     // Missing or undecodable (e.g. .xa) samples are just absent from the map;
     // the drum scheduler falls through to the synth voice for those chips.
+    let sampleByWavId = new Map<number, AudioBuffer>();
     if (opts.fs) {
-      this.sampleByWavId = await this.preloadSamples(this.song, opts.fs);
+      sampleByWavId = await this.preloadSamples(song, opts.fs);
     }
 
-    this.playables = this.song.chips
+    const playables = song.chips
       .filter((c) => LANE_CHANNELS.has(c.channel))
       .map<PlayableChip | null>((chip) => {
         const lane = channelToLane(chip.channel);
         if (!lane) return null;
         const buffer =
-          chip.wavId !== undefined ? this.sampleByWavId.get(chip.wavId) ?? null : null;
+          chip.wavId !== undefined ? sampleByWavId.get(chip.wavId) ?? null : null;
         return {
           chip,
           laneValue: lane.lane,
@@ -432,20 +462,24 @@ export class Game {
 
     // Seed per-lane default sample from the first chip on each lane that has
     // a preloaded buffer. Playables are already sorted by playbackTimeMs.
-    for (const p of this.playables) {
+    for (const p of playables) {
       if (!p.buffer || p.chip.wavId === undefined) continue;
       if (this.lastBufferByLane.has(p.laneValue)) continue;
       this.lastBufferByLane.set(p.laneValue, { buffer: p.buffer, wavId: p.chip.wavId });
     }
 
-    this.tracker = new ScoreTracker(this.playables.length);
-
+    // Atomic flip — after this point tick() sees a fully-consistent
+    // chart state (song, playables, tracker, song clock) and can render
+    // safely.
+    this.sampleByWavId = sampleByWavId;
+    this.song = song;
+    this.measureStartMs = measureStartMs;
+    this.playables = playables;
+    this.tracker = new ScoreTracker(playables.length);
     this.status = 'playing';
-    this.finishedAtMs = null;
-    this.finishedReturnHandled = false;
     this.engine.startSongClock(COUNTDOWN_MS);
 
-    this.scheduleBgm(this.song);
+    this.scheduleBgm(song);
   }
 
   stop(): void {

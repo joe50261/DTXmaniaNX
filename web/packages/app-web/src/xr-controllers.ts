@@ -379,8 +379,11 @@ export class XrControllers {
     return out;
   }
 
-  private pulseHaptic(_session: XRSession, controllerIdx: number): void {
-    const src = this.inputSources[controllerIdx];
+  private pulseHaptic(session: XRSession, controllerIdx: number): void {
+    const src = resolveHapticSource(
+      session.inputSources,
+      this.inputSources[controllerIdx] ?? null,
+    );
     if (!src?.gamepad) return;
     const actuators = (src.gamepad as Gamepad & { hapticActuators?: GamepadHapticActuator[] })
       .hapticActuators;
@@ -430,6 +433,38 @@ export class XrControllers {
     // XR session is active, so there's no stale-dispatch risk. Clearing
     // it here would break re-enter-VR — start() doesn't re-subscribe.
   }
+}
+
+/**
+ * Pick the XRInputSource whose haptic actuator should be pulsed when
+ * the given slot detected a hit. The slot's tracked handedness is the
+ * source of truth — we then look up the *live* input source in
+ * `session.inputSources` with that handedness so we're pulsing the
+ * hand that's actually connected right now, not a stale slot cache.
+ *
+ * This guards against a specific Quest-browser behaviour we've seen in
+ * the field: on a brief controller reconnect the runtime fires a new
+ * `connected` event but re-seats the device into the *other* slot,
+ * leaving the original slot's cached XRInputSource pointing at a now-
+ * disconnected gamepad. Pulsing that cached actuator was firing the
+ * wrong hand (specifically "right stick hit → left controller buzzes"
+ * — see the bug report that prompted this helper). Falling back to the
+ * cached slot source only when handedness lookup finds nothing keeps
+ * single-controller + test paths working.
+ *
+ * Returns null when the slot has no tracked hand (e.g. a hand-tracking
+ * `handedness === 'none'` entry) — callers skip the pulse in that case.
+ */
+export function resolveHapticSource(
+  liveInputSources: Iterable<XRInputSource>,
+  slotSrc: XRInputSource | null,
+): XRInputSource | null {
+  const hand = slotSrc?.handedness;
+  if (hand !== 'left' && hand !== 'right') return null;
+  for (const s of liveInputSources) {
+    if (s.handedness === hand) return s;
+  }
+  return slotSrc;
 }
 
 function laneLabel(lane: LaneValue): string {

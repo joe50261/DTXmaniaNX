@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { XrControllers } from './xr-controllers.js';
+import { XrControllers, resolveHapticSource } from './xr-controllers.js';
 
 /**
  * These tests don't touch Three.js's WebXR wiring — no WebGLRenderer, no
@@ -151,6 +151,51 @@ describe('XrControllers — input source tracking', () => {
     const { xr, gl } = makeStarted();
     dispatchConnected(gl.controllers[0]!, fakeInputSource('right'));
     expect(xr.inputSourceByHand('left')).toBe(null);
+  });
+
+  it('resolveHapticSource prefers the live source with matching handedness over the cached slot entry', () => {
+    // Scenario: a brief right-controller disconnect/reconnect re-seats
+    // it into slot 0, so the live session has a NEW right input source
+    // while the cached slot-1 entry still points at the stale (now-
+    // disconnected) right source. Pulsing the cached entry would go to
+    // a dead gamepad — resolveHapticSource must pick the live one.
+    const staleRight = { handedness: 'right' } as unknown as XRInputSource;
+    const liveRight = { handedness: 'right' } as unknown as XRInputSource;
+    const liveLeft = { handedness: 'left' } as unknown as XRInputSource;
+    const liveSources: XRInputSource[] = [liveRight, liveLeft];
+    expect(resolveHapticSource(liveSources, staleRight)).toBe(liveRight);
+  });
+
+  it('resolveHapticSource falls back to the cached slot source when the live list has no matching hand', () => {
+    // Guards the single-controller case (only right hand connected;
+    // left slot cached but the live list contains only right). For a
+    // right-slot pulse the live right source is returned; for a
+    // would-be left pulse with no left in the live list, we fall back
+    // to the cached left so test harnesses without live iteration
+    // still pulse something sane.
+    const cachedLeft = { handedness: 'left' } as unknown as XRInputSource;
+    const liveRight = { handedness: 'right' } as unknown as XRInputSource;
+    expect(resolveHapticSource([liveRight], cachedLeft)).toBe(cachedLeft);
+  });
+
+  it('resolveHapticSource returns null for slots with no tracked hand', () => {
+    // handedness='none' (trackers, some hand-tracking entries) has no
+    // actuator we want to pulse. Callers skip the pulse on null.
+    const trackerSrc = { handedness: 'none' } as unknown as XRInputSource;
+    expect(resolveHapticSource([trackerSrc], trackerSrc)).toBe(null);
+    expect(resolveHapticSource([], null)).toBe(null);
+  });
+
+  it('resolveHapticSource picks the correctly-handed source even if live list is reordered', () => {
+    // The class doc comment flags this specifically — slot index ≠
+    // session.inputSources order on all runtimes. Handedness is the
+    // only authoritative key.
+    const cachedRight = { handedness: 'right' } as unknown as XRInputSource;
+    const liveLeft = { handedness: 'left' } as unknown as XRInputSource;
+    const liveRight = { handedness: 'right' } as unknown as XRInputSource;
+    // Left first in the live list; the cached slot is 'right'. Must
+    // still return the right-handed live source, not the first entry.
+    expect(resolveHapticSource([liveLeft, liveRight], cachedRight)).toBe(liveRight);
   });
 
   it('adds the controllers and grips to the scene (wiring sanity)', () => {
