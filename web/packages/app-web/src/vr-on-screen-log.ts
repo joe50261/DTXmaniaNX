@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {
   formatLogEntry,
+  getLog,
   LOG_LEVEL_COLOR,
   subscribeLog,
   type LogEntry,
@@ -75,6 +76,12 @@ export class VrOnScreenLog {
     this.shown = true;
     this.mesh.visible = true;
     if (!this.scene.children.includes(this.mesh)) this.scene.add(this.mesh);
+    // Seed from the current ring buffer before the first paint —
+    // `subscribeLog` doesn't replay, so without this the panel would
+    // render blank on VR entry even if console lines were already
+    // captured pre-session. The DOM view does the same in
+    // `installOnScreenLog()`.
+    this.latest = getLog();
     this.unsubLog = subscribeLog((entries) => {
       this.latest = entries;
       this.paint();
