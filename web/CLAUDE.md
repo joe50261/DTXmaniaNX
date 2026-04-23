@@ -61,11 +61,41 @@ the two *will* drift and you'll be chasing subtle bugs six weeks later.
 
 ## Test the model, not the view
 
-Pure model functions (`song-wheel-model.ts`, `hud-toast.ts`, `tick-state.ts`,
-`vr-menu-input.ts`) get full unit-test coverage. View code (DOM wiring, Canvas
-paint calls, Three.js scene construction) is validated by the dev build plus
-the Playwright e2e pass, not by jsdom unit tests — mocking `CanvasTexture` or
-DOM hierarchies brittle-ly is not worth it.
+Testing policy — every change ships with coverage. Pick the cheapest
+realistic test that catches the specific regression; mock only when
+it's demonstrably cheaper than the alternative and doesn't re-implement
+the code under test.
+
+- **Pure model functions** (`song-wheel-model.ts`, `hud-toast.ts`,
+  `tick-state.ts`, `vr-menu-input.ts`, `vr-lifecycle.ts`, …) → **unit
+  tests** (`*.test.ts` via `vitest`). Full branch coverage expected;
+  no DOM / canvas / Three.js dependencies, so they're cheap.
+- **Pure geometry / layout constants** exported from view modules
+  (`VR_MENU_FOOTER`, `VR_CONFIG_LAYOUT`) → **unit tests** that pin the
+  geometric invariants (non-overlap, in-bounds).
+- **Canvas-2D panel code** (VR menu, VR config, VR calibrate — paint
+  to a plain `HTMLCanvasElement` that's then wrapped into a
+  `THREE.CanvasTexture`) → **unit tests with a fake Three.js
+  renderer**. The canvas itself is real happy-dom; `webgl.xr.getController`
+  and friends are stubbed the way `xr-controllers.test.ts` does it.
+  You can exercise paint → inspect the class's `hits` array →
+  simulate a click by calling the action — no WebGL context needed.
+- **Three.js scene construction + WebGL render** → **Playwright e2e**
+  against `pnpm preview`. Use this when the regression depends on real
+  browser text metrics, image decoding, or GL state. Don't reinvent
+  the renderer in jsdom.
+- **WebXR flows** (controller poses, session lifecycle) → the
+  pose-resolution decision goes in a pure helper (see
+  `resolveHapticSource`, `emptyChartState`) that IS unit-testable; the
+  wiring around it is covered by the fake-renderer canvas tests above
+  or Chrome's WebXR Device Emulator in a future e2e pass.
+
+Anti-patterns to avoid: hand-rolling a `measureText` polyfill to make
+happy-dom match Chromium layout, mocking `THREE.Mesh` field-by-field
+so a test can assert on internal state, or writing a test whose
+assertions are satisfied by any implementation that compiles. If the
+mock is longer than the code it's testing, do it in Playwright
+instead.
 
 ## Branch expectations
 

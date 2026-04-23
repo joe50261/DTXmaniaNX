@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { resetStateOnVrExit, type VrExitState } from './vr-lifecycle.js';
+import {
+  emptyChartState,
+  resetStateOnVrExit,
+  type VrExitState,
+} from './vr-lifecycle.js';
 import type { Song } from '@dtxmania/dtx-core';
 
 /** Minimal Song stub; resetStateOnVrExit never inspects its fields. */
@@ -72,5 +76,68 @@ describe('resetStateOnVrExit', () => {
       finishedReturnHandled: true,
     });
     expect(after.finishedReturnHandled).toBe(false);
+  });
+});
+
+describe('emptyChartState — loadAndStart entry-point reset', () => {
+  // The bug this guards against: loadAndStart awaits engine.resume()
+  // and then preloadSamples(); during those awaits the per-frame tick
+  // keeps rendering whatever `this.song` + `this.status` currently
+  // point at, which without a reset is the PREVIOUS chart. Players
+  // picking a song from the VR menu saw the last chart's chips or its
+  // RESULTS overlay bleed through while samples preloaded. Each field
+  // below has a specific screen symptom if it leaks from the prior
+  // run, so the test enumerates them rather than relying on a single
+  // `toEqual` that would mask a regression adding a new field.
+
+  it('song is null — the only gate that makes tick() early-return during preload', () => {
+    // `if (!this.song) return;` in tick() is what suppresses rendering
+    // while preloadSamples runs. Any non-null song here breaks the
+    // whole fix.
+    expect(emptyChartState().song).toBeNull();
+  });
+
+  it("status is 'idle' — clears a stale 'finished' so the RESULTS overlay doesn't paint", () => {
+    expect(emptyChartState().status).toBe('idle');
+  });
+
+  it('finishedReturnHandled is false so the next chart can auto-return / pad-skip from its own RESULTS', () => {
+    // Mirrors the resetStateOnVrExit latch clear — same failure mode
+    // (player stuck on RESULTS forever) if it leaks true.
+    expect(emptyChartState().finishedReturnHandled).toBe(false);
+  });
+
+  it('visual flash fields (judgmentFlash, hitFlashes) are cleared — 400ms afterglow would paint on top of idle panel', () => {
+    const s = emptyChartState();
+    expect(s.judgmentFlash).toBeNull();
+    expect(s.hitFlashes).toEqual([]);
+  });
+
+  it('playables + measureStartMs start empty so renderer has nothing to iterate over', () => {
+    const s = emptyChartState();
+    expect(s.playables).toEqual([]);
+    expect(s.measureStartMs).toEqual([]);
+  });
+
+  it('loop state is cleared so a previous chart\'s A/B window cannot fire on the new chart', () => {
+    // A leaked loopedAtLeastOnce would flip onChartFinished into
+    // practice-mode, silently suppressing the new chart's best-score
+    // write. loopMarkerPressed leaking 'true' would make the rising-
+    // edge detector miss the first press on the new chart.
+    const s = emptyChartState();
+    expect(s.loopedAtLeastOnce).toBe(false);
+    expect(s.loopMarkerPressed).toEqual([false, false]);
+  });
+
+  it('returns a fresh object each call (no shared mutable arrays)', () => {
+    // Game writes into the returned arrays (e.g. hitFlashes.push). A
+    // shared module-level constant would be mutated across chart
+    // reloads and leak the first run's flashes into the second.
+    const a = emptyChartState();
+    const b = emptyChartState();
+    expect(a).not.toBe(b);
+    expect(a.hitFlashes).not.toBe(b.hitFlashes);
+    expect(a.playables).not.toBe(b.playables);
+    expect(a.loopMarkerPressed).not.toBe(b.loopMarkerPressed);
   });
 });

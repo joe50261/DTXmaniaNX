@@ -1,8 +1,11 @@
 import * as THREE from 'three';
 import {
+  AUTO_PLAY_LANES,
   getConfig,
   subscribe,
+  toggleAutoPlayLane,
   updateConfig,
+  type AutoPlayMap,
   type Config,
 } from './config.js';
 
@@ -25,17 +28,79 @@ import {
  */
 
 const PANEL_W_PX = 1024;
-const PANEL_H_PX = 768;
+// 1024×1120 (world ≈1.6m × 1.75m) fits Audio + Gameplay + Auto-play
+// (11-lane grid) + Practice + Diagnostics without overflow. The
+// previous 1024×768 clipped the last section and left no room for the
+// auto-play toggles; players reported having to leave VR to enable
+// auto-kick.
+const PANEL_H_PX = 1120;
 const PANEL_WORLD_W = 1.6;
 const PANEL_WORLD_H = (PANEL_WORLD_W * PANEL_H_PX) / PANEL_W_PX;
-const PANEL_POS = new THREE.Vector3(0, 1.45, -1.5);
+const PANEL_POS = new THREE.Vector3(0, 1.55, -1.5);
 
-const ROW_H = 50;
-const SECTION_GAP = 14;
-const SECTION_TITLE_H = 34;
+const ROW_H = 44;
+const SECTION_GAP = 12;
+const SECTION_TITLE_H = 32;
 const STEP_W = 56;
-const STEP_H = 40;
+const STEP_H = 36;
 const TOGGLE_W = 100;
+
+/** Footer strip where the "Back" button + hint text live. Everything
+ * above must fit in `PANEL_H_PX - FOOTER_H` so content doesn't hide
+ * behind the footer. */
+const FOOTER_H = 90;
+const FOOTER_TOP = PANEL_H_PX - FOOTER_H;
+
+/** Exported layout so the "Back button doesn't sit on top of the hint
+ * text" invariant and the "content never overflows into the footer
+ * strip" invariant can be asserted independently of the canvas paint.
+ * Mirrors VR_MENU_FOOTER's role for the song-picker panel. */
+export const VR_CONFIG_LAYOUT = Object.freeze({
+  PANEL_W_PX,
+  PANEL_H_PX,
+  ROW_H,
+  SECTION_GAP,
+  SECTION_TITLE_H,
+  FOOTER_H,
+  FOOTER_TOP,
+  BACK_BTN_W: 220,
+  BACK_BTN_H: 40,
+  /** 13px text with hints on lines 1 and 2 of the footer strip. */
+  HINT_LINE_1_Y: FOOTER_TOP + 22,
+  HINT_LINE_2_Y: FOOTER_TOP + 42,
+});
+
+/** Friendly names for auto-play lane toggles. The DOM panel shows the
+ * raw lane codes (HH, SD, BD, …) which assumes the player already knows
+ * DTXmania's lane abbreviations; the VR panel spells them out because
+ * there's no tooltip / manual to fall back on inside the headset.
+ * Exported for the unit-test spec so label drift (e.g. rename "Bass
+ * (Kick)" → "Kick") stays a one-place change. */
+export const AUTO_PLAY_LABELS: Readonly<Record<keyof AutoPlayMap, string>> =
+  Object.freeze({
+    LC: 'L.Crash',
+    HH: 'Hi-Hat',
+    LP: 'L.Pedal',
+    SD: 'Snare',
+    HT: 'Hi Tom',
+    BD: 'Bass (Kick)',
+    LT: 'Low Tom',
+    FT: 'Floor Tom',
+    CY: 'Crash',
+    RD: 'Ride',
+    LBD: 'Left Bass',
+  });
+
+/** Footer hint strings, exported so geometry tests can compute their
+ * expected widths from `.length` instead of hand-estimating character
+ * counts. Kept here (not inside paintFooter) so any edit to the
+ * wording automatically re-runs the geometry invariants. */
+export const VR_CONFIG_FOOTER_HINTS = Object.freeze({
+  line1:
+    'Hit the − / + buttons to step a slider. Toggles flip on click. Changes persist instantly.',
+  line2:
+    'Loop A / B capture lives on the right controller face buttons during play.',
+});
 
 interface ButtonHit {
   x: number;
@@ -153,6 +218,29 @@ export class VrConfig {
     this.paint();
   }
 
+  /** Test-only: trigger the action of whichever button's hit-rect
+   * contains (px, py) on the panel canvas. Returns true when a rect
+   * was matched. This is what `tick()` does on a trigger-press once
+   * the laser-ray hit point is projected into panel UV space; exposing
+   * it directly lets vitest drive click behaviour without building a
+   * whole XR raycaster + XRSession pose fixture. */
+  __testClickAt(px: number, py: number): boolean {
+    for (const h of this.hits) {
+      if (px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h) {
+        h.action();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Test-only: snapshot of the current button hit-rects for assertion.
+   * Length varies with which sections `paint()` rendered this frame
+   * (e.g. `paintLoopRange` adds no hits on a valid range). */
+  __testHits(): ReadonlyArray<{ x: number; y: number; w: number; h: number }> {
+    return this.hits.map(({ x, y, w, h }) => ({ x, y, w, h }));
+  }
+
   hide(): void {
     this.shown = false;
     this.mesh.visible = false;
@@ -245,7 +333,7 @@ export class VrConfig {
     ctx.fillText('Settings', PANEL_W_PX / 2, 52);
 
     const cfg = getConfig();
-    let y = 90;
+    let y = 84;
 
     y = this.paintSection('Audio', y);
     y = this.paintSlider(y, 'BGM volume', cfg.volumeBgm, 0, 1, 0.05, 2, (v) =>
@@ -263,12 +351,27 @@ export class VrConfig {
     y = this.paintSlider(y, 'Scroll speed', cfg.scrollSpeed, 0.3, 1.5, 0.05, 2, (v) =>
       updateConfig({ scrollSpeed: v })
     );
+    y = this.paintSlider(
+      y,
+      'Judgment line Y',
+      cfg.judgeLineY,
+      450,
+      620,
+      5,
+      0,
+      (v) => updateConfig({ judgeLineY: v }),
+      (v) => `${Math.round(v)} px`
+    );
     y = this.paintToggle(y, 'Reverse scroll (chips rise)', cfg.reverseScroll, (v) =>
       updateConfig({ reverseScroll: v })
     );
     y = this.paintToggle(y, 'FAST / SLOW indicator', cfg.showFastSlow, (v) =>
       updateConfig({ showFastSlow: v })
     );
+
+    y += SECTION_GAP;
+    y = this.paintSection('Auto-play (per lane)', y);
+    y = this.paintAutoPlayGrid(y, cfg.autoPlay);
 
     y += SECTION_GAP;
     y = this.paintSection('Practice', y);
@@ -300,26 +403,30 @@ export class VrConfig {
       updateConfig({ vrLogEnabled: v })
     );
 
-    // Footer hints
+    // Footer strip — sits below the content region at a fixed Y so its
+    // back button + hints don't overlap whatever the last section paints.
+    this.paintFooter();
+
+    this.texture.needsUpdate = true;
+  }
+
+  private paintFooter(): void {
+    const ctx = this.ctx;
+    // Divider above the footer so the back button reads as its own strip.
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(40, FOOTER_TOP);
+    ctx.lineTo(PANEL_W_PX - 40, FOOTER_TOP);
+    ctx.stroke();
+
     ctx.fillStyle = '#64748b';
     ctx.font = '13px ui-monospace, monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(
-      'Hit the − / + buttons to step a slider. Toggles flip on click. ' +
-        'Changes persist instantly.',
-      40,
-      PANEL_H_PX - 82
-    );
-    ctx.fillText(
-      'Loop A / B capture lives on the right controller face buttons during play.',
-      40,
-      PANEL_H_PX - 62
-    );
+    ctx.fillText(VR_CONFIG_FOOTER_HINTS.line1, 40, FOOTER_TOP + 22);
+    ctx.fillText(VR_CONFIG_FOOTER_HINTS.line2, 40, FOOTER_TOP + 42);
 
-    // Back / Close button
     this.drawBack();
-
-    this.texture.needsUpdate = true;
   }
 
   private paintSection(title: string, y: number): number {
@@ -408,6 +515,70 @@ export class VrConfig {
     return y + ROW_H;
   }
 
+  /** Per-lane auto-play grid — mirrors the DOM panel's "Auto-play (by
+   * lane)" section. Each cell is a labelled toggle (full lane name +
+   * short code) so players don't need to memorise DTXmania's
+   * abbreviations. 4-column layout so all 11 lanes fit in 3 rows.
+   * "Auto-kick" = BD + LBD both on, which is the most common use of
+   * this feature. */
+  private paintAutoPlayGrid(y: number, map: AutoPlayMap): number {
+    const ctx = this.ctx;
+    const cols = 4;
+    const cellGap = 8;
+    const gridLeft = 60;
+    const gridRight = PANEL_W_PX - 40;
+    const cellW = Math.floor((gridRight - gridLeft - cellGap * (cols - 1)) / cols);
+    const cellH = 36;
+    const rows = Math.ceil(AUTO_PLAY_LANES.length / cols);
+
+    for (let i = 0; i < AUTO_PLAY_LANES.length; i++) {
+      const lane = AUTO_PLAY_LANES[i]!;
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const cx = gridLeft + col * (cellW + cellGap);
+      const cy = y + row * (cellH + cellGap);
+      const value = map[lane];
+      const idx = this.hits.length;
+      ctx.fillStyle = value ? '#16a34a' : '#1e293b';
+      ctx.fillRect(cx, cy, cellW, cellH);
+      ctx.strokeStyle =
+        this.hoveredIdx === idx ? '#fbbf24' : value ? '#22c55e' : '#475569';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(cx + 1, cy + 1, cellW - 2, cellH - 2);
+      // Two-line label: full name (big) + short code (muted). The short
+      // code matches the DOM panel's abbreviations so players who know
+      // them aren't relearning the mapping.
+      ctx.fillStyle = '#f1f5f9';
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(AUTO_PLAY_LABELS[lane], cx + 10, cy + 16);
+      ctx.fillStyle = value ? '#dcfce7' : '#94a3b8';
+      ctx.font = '11px ui-monospace, monospace';
+      ctx.fillText(`${lane} · ${value ? 'ON' : 'OFF'}`, cx + 10, cy + 30);
+      this.hits.push({
+        x: cx,
+        y: cy,
+        w: cellW,
+        h: cellH,
+        action: () =>
+          updateConfig({ autoPlay: toggleAutoPlayLane(map, lane) }),
+      });
+    }
+    // Hint line under the grid: quick "kick only" shortcut explanation
+    // so players who only want auto-kick (the common case) know which
+    // two cells to tap.
+    const gridBottom = y + rows * cellH + (rows - 1) * cellGap;
+    ctx.fillStyle = '#64748b';
+    ctx.font = '12px ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(
+      'Classic "auto-kick": enable Bass (BD) + Left Bass (LBD).',
+      60,
+      gridBottom + 16
+    );
+    return gridBottom + 24;
+  }
+
   private paintLoopRange(y: number, cfg: Config): number {
     const ctx = this.ctx;
     ctx.fillStyle = '#64748b';
@@ -453,10 +624,13 @@ export class VrConfig {
 
   private drawBack(): void {
     const ctx = this.ctx;
-    const w = 220;
-    const h = 56;
-    const x = PANEL_W_PX / 2 - w / 2;
-    const y = PANEL_H_PX - 40 - h;
+    const w = VR_CONFIG_LAYOUT.BACK_BTN_W;
+    const h = VR_CONFIG_LAYOUT.BACK_BTN_H;
+    // Right-aligned inside the footer strip so it sits next to the hint
+    // text instead of floating over it. Hint text is left-aligned from
+    // x=40; leaving ~24 px gutter at the right edge.
+    const x = PANEL_W_PX - 40 - w;
+    const y = FOOTER_TOP + FOOTER_H / 2 - h / 2;
     const idx = this.hits.length;
     ctx.fillStyle = '#3355ff';
     ctx.fillRect(x, y, w, h);
@@ -464,9 +638,9 @@ export class VrConfig {
     ctx.lineWidth = 2;
     ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 18px ui-monospace, monospace';
+    ctx.font = 'bold 16px ui-monospace, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('Back to menu', x + w / 2, y + h / 2 + 6);
+    ctx.fillText('Back to menu', x + w / 2, y + h / 2 + 5);
     this.hits.push({
       x,
       y,

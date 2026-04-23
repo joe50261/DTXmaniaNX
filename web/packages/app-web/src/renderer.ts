@@ -391,6 +391,16 @@ export class Renderer {
     this.hudTexture.needsUpdate = true;
   }
 
+  /** Wipe the HUD canvas to transparent and flag the texture for upload.
+   * Used by Game.loadAndStart to drop the previous chart's chips +
+   * result overlay the instant a new chart is confirmed — otherwise the
+   * tick()'s `if (!this.song) return;` early-exit would leave the
+   * texture frozen on the old frame during the sample preload. */
+  clearHud(): void {
+    this.ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    this.hudTexture.needsUpdate = true;
+  }
+
   private renderFrame(): void {
     this.animatePadHits();
     const cam = this.xrSession ? this.webgl.xr.getCamera() : this.orthoCamera;

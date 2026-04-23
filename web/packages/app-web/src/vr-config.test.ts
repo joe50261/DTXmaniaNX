@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { roundToStep } from './vr-config.js';
+import {
+  roundToStep,
+  VR_CONFIG_FOOTER_HINTS,
+  VR_CONFIG_LAYOUT,
+} from './vr-config.js';
 
 /**
  * `roundToStep` is the float-drift guard that keeps repeated `−` / `+`
@@ -38,5 +42,79 @@ describe('roundToStep — slider step snap', () => {
   it('handles negative values symmetrically', () => {
     expect(roundToStep(-0.47, 0.05)).toBeCloseTo(-0.45, 10);
     expect(roundToStep(-0.48, 0.05)).toBeCloseTo(-0.5, 10);
+  });
+});
+
+describe('VR_CONFIG_LAYOUT — footer geometry invariants', () => {
+  // The "Back to menu" button and the two hint-text lines all live in
+  // the same footer strip. In the previous layout the back button was
+  // centered at the bottom and happened to paint over the hint text,
+  // which was unreadable in VR. These tests pin the geometry so a
+  // careless tweak (resize back button, reposition hints) that would
+  // reintroduce the overlap fails in CI.
+
+  const {
+    PANEL_W_PX,
+    PANEL_H_PX,
+    FOOTER_H,
+    FOOTER_TOP,
+    BACK_BTN_W,
+    BACK_BTN_H,
+    HINT_LINE_1_Y,
+    HINT_LINE_2_Y,
+  } = VR_CONFIG_LAYOUT;
+
+  it('footer strip sits at the bottom of the panel', () => {
+    expect(FOOTER_TOP + FOOTER_H).toBe(PANEL_H_PX);
+    expect(FOOTER_H).toBeGreaterThan(0);
+  });
+
+  it('back button fits entirely inside the footer strip', () => {
+    const backX = PANEL_W_PX - 40 - BACK_BTN_W;
+    const backY = FOOTER_TOP + FOOTER_H / 2 - BACK_BTN_H / 2;
+    expect(backY).toBeGreaterThanOrEqual(FOOTER_TOP);
+    expect(backY + BACK_BTN_H).toBeLessThanOrEqual(PANEL_H_PX);
+    // Right edge has a ≥16 px breathing margin inside the panel.
+    expect(backX + BACK_BTN_W).toBeLessThanOrEqual(PANEL_W_PX - 16);
+  });
+
+  it('hint lines and the back button share the footer y-band (x-separation is the only thing preventing overlap)', () => {
+    // Both hint lines sit inside the back button's vertical range by
+    // design — the back button is centered in the footer strip and
+    // the hints are painted in the same strip. What keeps them
+    // visually separated is the x-axis: hints left-aligned from
+    // x=40, back button right-aligned (see the x-separation test
+    // below). This test pins the y-overlap as intentional so that a
+    // future refactor that tries to "fix" it by stacking them above
+    // the button without widening the footer doesn't silently push
+    // the button off-panel.
+    const backY = FOOTER_TOP + FOOTER_H / 2 - BACK_BTN_H / 2;
+    const textTop1 = HINT_LINE_1_Y - 10;
+    const textBot1 = HINT_LINE_1_Y + 3;
+    const textTop2 = HINT_LINE_2_Y - 10;
+    const textBot2 = HINT_LINE_2_Y + 3;
+    const hint1Overlaps = textBot1 >= backY && textTop1 <= backY + BACK_BTN_H;
+    const hint2Overlaps = textBot2 >= backY && textTop2 <= backY + BACK_BTN_H;
+    expect({ hint1Overlaps, hint2Overlaps }).toEqual({
+      hint1Overlaps: true,
+      hint2Overlaps: true,
+    });
+  });
+
+  it('back button x is right of the longer hint line so the two never overlap horizontally', () => {
+    // Computed from the actual exported hint string rather than a
+    // hand-estimated character count — if the wording shortens, the
+    // expected right edge shrinks with it and the assertion stays
+    // honest. `ui-monospace` 13px renders at ~7.2 px per glyph on
+    // both macOS and Chromium (empirically measured); using the
+    // longer of the two hints as the worst case.
+    const longer =
+      VR_CONFIG_FOOTER_HINTS.line1.length >= VR_CONFIG_FOOTER_HINTS.line2.length
+        ? VR_CONFIG_FOOTER_HINTS.line1
+        : VR_CONFIG_FOOTER_HINTS.line2;
+    const MONOSPACE_13PX_EM = 7.2;
+    const hintRightEdge = 40 + longer.length * MONOSPACE_13PX_EM;
+    const backX = PANEL_W_PX - 40 - BACK_BTN_W;
+    expect(backX).toBeGreaterThan(hintRightEdge);
   });
 });
