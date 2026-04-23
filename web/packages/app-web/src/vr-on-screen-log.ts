@@ -103,6 +103,15 @@ export class VrOnScreenLog {
     this.texture.dispose();
   }
 
+  /** Test-only — the last set of entries the panel would render. Used
+   * by `vr-on-screen-log.test.ts` to guard the show()-time seed, the
+   * subtle bug fixed in `a3fac0f` where `show()` called `paint()` with
+   * `latest` still at the initial `[]` and thus rendered blank on
+   * first reveal if console output had already accumulated. */
+  peekForTest(): readonly LogEntry[] {
+    return this.latest;
+  }
+
   private paint(): void {
     const ctx = this.ctx;
     ctx.fillStyle = 'rgba(10, 15, 24, 0.88)';

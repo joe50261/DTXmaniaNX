@@ -72,6 +72,12 @@ export class VrConfig {
   private onClose: (() => void) | null = null;
   private hits: ButtonHit[] = [];
   private hoveredIdx = -1;
+  /** Coalesce paint calls within a single tick. A trigger-click inside
+   * `tick()` runs the button's `action()` → `updateConfig()` → the
+   * subscribe listener, hover-change, and the explicit post-action
+   * paint — without this flag, one frame could upload the CanvasTexture
+   * 2–3 times. Matches VrCalibrate's pattern. */
+  private dirty = true;
 
   private unsubConfig: (() => void) | null = null;
 
@@ -137,10 +143,13 @@ export class VrConfig {
     this.mesh.visible = true;
     for (const l of this.lasers) l.visible = true;
     // Repaint on any config change (hotkey-driven loop capture, desktop
-    // DOM panel touching the same settings, etc.). Unsubscribed in hide.
+    // DOM panel touching the same settings, etc.). Flag dirty; the next
+    // tick coalesces into a single paint even if multiple state changes
+    // fire back-to-back. Unsubscribed in hide.
     this.unsubConfig = subscribe(() => {
-      if (this.shown) this.paint();
+      if (this.shown) this.dirty = true;
     });
+    this.dirty = true;
     this.paint();
   }
 
@@ -203,14 +212,21 @@ export class VrConfig {
       const src = this.inputSources[i];
       const pressed = src?.gamepad?.buttons[0]?.pressed ?? false;
       if (pressed && !this.wasPressed[i] && hitIdx >= 0) {
+        // action() often calls updateConfig(), whose subscribe listener
+        // sets this.dirty — so a single paint at tick's tail covers it.
         this.hits[hitIdx]!.action();
-        this.paint();
+        this.dirty = true;
       }
       this.wasPressed[i] = pressed;
     }
 
     if (hovered !== this.hoveredIdx) {
       this.hoveredIdx = hovered;
+      this.dirty = true;
+    }
+
+    if (this.dirty) {
+      this.dirty = false;
       this.paint();
     }
   }
@@ -467,7 +483,8 @@ function clamp(v: number, lo: number, hi: number): number {
 
 /** Snap to the slider's step boundary so repeated +/- presses don't
  * drift off a round value due to float error (0.05 + 0.05 ≠ 0.1 in IEEE
- * 754). Rounds to the nearest multiple of `step`. */
-function roundToStep(v: number, step: number): number {
+ * 754). Rounds to the nearest multiple of `step`. Exported so the
+ * invariant can be asserted independently of the VR view. */
+export function roundToStep(v: number, step: number): number {
   return Math.round(v / step) * step;
 }

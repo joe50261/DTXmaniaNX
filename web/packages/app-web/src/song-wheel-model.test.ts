@@ -15,6 +15,7 @@ import {
   lampTier,
   pickRandomSongIn,
   rowTitle,
+  SORT_MODES,
 } from './song-wheel-model.js';
 
 /**
@@ -60,6 +61,15 @@ function makeBox(
 function songNode(parent: BoxNode, song: SongEntry): SongNode {
   return { type: 'song', entry: song, parent };
 }
+
+describe('SORT_MODES — advancement order', () => {
+  // The desktop SongWheel `cycleSortMode` button steps through this
+  // tuple in order; changing the order shuffles the player's muscle
+  // memory, so pin it down.
+  it('steps title → artist → bpm → level', () => {
+    expect([...SORT_MODES]).toEqual(['title', 'artist', 'bpm', 'level']);
+  });
+});
 
 describe('cycleFocus — index wrap arithmetic', () => {
   it('wraps forward past the end', () => {

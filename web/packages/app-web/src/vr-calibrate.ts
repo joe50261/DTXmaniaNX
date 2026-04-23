@@ -374,14 +374,17 @@ export class VrCalibrate {
     switch (this.phase) {
       case 'idle':
         this.paintIdle();
-        return;
+        break;
       case 'collecting':
         this.paintCollecting();
-        return;
+        break;
       case 'review':
         this.paintReview();
-        return;
+        break;
     }
+    // Single-site texture upload so sub-paint methods don't each have
+    // to remember to flip needsUpdate.
+    this.texture.needsUpdate = true;
   }
 
   private paintIdle(): void {
@@ -406,8 +409,6 @@ export class VrCalibrate {
       primary: true,
     });
     this.drawButton('Cancel', 40, PANEL_H_PX - 70, 120, 40, { action: 'cancel' });
-
-    this.texture.needsUpdate = true;
   }
 
   private paintCollecting(): void {
@@ -434,14 +435,15 @@ export class VrCalibrate {
       PANEL_W_PX / 2,
       PANEL_H_PX - 40
     );
-    this.texture.needsUpdate = true;
   }
 
   private paintReview(): void {
     const ctx = this.ctx;
-    const r = this.result;
+    // `finishCollection` always sets `this.result` before flipping the
+    // phase to 'review', so `r` is guaranteed non-null when this paints.
+    const r = this.result!;
 
-    if (!r || r.offset === null) {
+    if (r.offset === null) {
       // Too few usable presses — explain + offer Retry.
       ctx.fillStyle = '#f87171';
       ctx.font = 'bold 22px ui-monospace, monospace';
@@ -452,7 +454,7 @@ export class VrCalibrate {
       wrapText(
         ctx,
         `Need at least 3 presses within 300 ms of a beat. ` +
-          `Got ${r?.usablePresses ?? 0}. Try again, pulling the trigger ` +
+          `Got ${r.usablePresses}. Try again, pulling the trigger ` +
           `on every flash.`,
         PANEL_W_PX / 2,
         190,
@@ -497,7 +499,6 @@ export class VrCalibrate {
       });
       this.drawButton('Cancel', 40, PANEL_H_PX - 70, 120, 40, { action: 'cancel' });
     }
-    this.texture.needsUpdate = true;
   }
 
   private paintBeatDot(flashing: boolean): void {
