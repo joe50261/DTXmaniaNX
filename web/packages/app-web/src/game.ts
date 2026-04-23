@@ -36,7 +36,7 @@ import { applyAutoFire } from './autofire.js';
 import { detectMisses, matchLaneHit } from './matcher.js';
 import { channelToLane, LANE_LAYOUT, laneSpec } from './lane-layout.js';
 import { XrControllers } from './xr-controllers.js';
-import { resetStateOnVrExit } from './vr-lifecycle.js';
+import { emptyChartState, resetStateOnVrExit } from './vr-lifecycle.js';
 import {
   applyGaugeDelta,
   resolveLoopWindow,
@@ -390,27 +390,25 @@ export class Game {
     if (opts.autoPlayLanes !== undefined) {
       this.autoPlayLanes = new Set(opts.autoPlayLanes);
     }
-    // Wipe render-visible state BEFORE any async work. loadAndStart
-    // awaits engine.resume() and (in VR) a multi-hundred-ms sample
-    // preload; the renderer.onFrame tick keeps firing during those
-    // awaits. Without this reset, tick() would paint the PREVIOUS
-    // chart's chips + result overlay into the VR panel texture for the
-    // entire preload window — the "leftover" that players see after
-    // confirming a song in the VR menu. Only once this.song is nulled
-    // does tick() take the `if (!this.song) return;` early exit, which
-    // is what we want until the new chart is ready.
-    this.song = null;
-    this.playables = [];
+    // Wipe render-visible state BEFORE any async work. See
+    // `emptyChartState` for the full why — tl;dr without this reset
+    // the renderer.onFrame tick paints the PREVIOUS chart's chips +
+    // result overlay into the VR panel texture for the entire preload
+    // window. Pure helper so the invariant can be unit-tested without
+    // standing up an AudioEngine.
+    const empty = emptyChartState();
+    this.song = empty.song;
+    this.status = empty.status;
+    this.finishedAtMs = empty.finishedAtMs;
+    this.finishedReturnHandled = empty.finishedReturnHandled;
+    this.judgmentFlash = empty.judgmentFlash as JudgmentFlash | null;
+    this.hitFlashes = [...(empty.hitFlashes as HitFlash[])];
+    this.playables = [...(empty.playables as PlayableChip[])];
+    this.measureStartMs = [...empty.measureStartMs];
+    this.loopedAtLeastOnce = empty.loopedAtLeastOnce;
+    this.loopMarkerPressed = [...empty.loopMarkerPressed];
     this.tracker = new ScoreTracker(0);
-    this.status = 'idle';
-    this.finishedAtMs = null;
-    this.finishedReturnHandled = false;
-    this.judgmentFlash = null;
-    this.hitFlashes = [];
-    this.measureStartMs = [];
     this.loopWindowMs = null;
-    this.loopedAtLeastOnce = false;
-    this.loopMarkerPressed = [false, false];
     // Belt-and-braces: whatever state hideVrMenu may or may not have run in,
     // a fresh chart always wants the playfield visible.
     this.renderer.setPlayfieldVisible(true);

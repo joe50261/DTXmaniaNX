@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { DEFAULT_CONFIG, isPracticeRun, loadConfig } from './config.js';
+import {
+  DEFAULT_CONFIG,
+  isPracticeRun,
+  loadConfig,
+  setAutoKick,
+  toggleAutoPlayLane,
+} from './config.js';
 
 /**
  * happy-dom gives us a real-ish localStorage out of the box; clear it
@@ -155,5 +161,59 @@ describe('isPracticeRun — best-score gate', () => {
     // Loop toggled off by end-of-song but looped at least once → still
     // practice. Mirrors C# "any PlaySpeed / warp" gate semantics.
     expect(isPracticeRun(DEFAULT_CONFIG, true)).toBe(true);
+  });
+});
+
+describe('toggleAutoPlayLane — per-lane flip helper', () => {
+  // VR auto-play grid + DOM config panel both drive their cell onclick
+  // through this helper, so a regression here breaks both UIs at once.
+
+  it('flips false → true for a single lane, leaves others untouched', () => {
+    const before = { ...DEFAULT_CONFIG.autoPlay };
+    const after = toggleAutoPlayLane(before, 'BD');
+    expect(after.BD).toBe(true);
+    expect(after.LBD).toBe(false);
+    expect(after.HH).toBe(false);
+  });
+
+  it('flips true → false symmetrically', () => {
+    const before = { ...DEFAULT_CONFIG.autoPlay, HH: true };
+    const after = toggleAutoPlayLane(before, 'HH');
+    expect(after.HH).toBe(false);
+    expect(after.BD).toBe(false);
+  });
+
+  it('returns a fresh object — never mutates the input map', () => {
+    // updateConfig replaces the whole blob, so in-place mutation would
+    // quietly break the subscribe() change-detection in config.ts that
+    // relies on reference equality to skip redundant broadcasts.
+    const before = { ...DEFAULT_CONFIG.autoPlay };
+    const after = toggleAutoPlayLane(before, 'CY');
+    expect(after).not.toBe(before);
+    expect(before.CY).toBe(false); // input untouched
+  });
+});
+
+describe('setAutoKick — BD+LBD preset', () => {
+  it('turns both kick lanes on together', () => {
+    const after = setAutoKick({ ...DEFAULT_CONFIG.autoPlay }, true);
+    expect(after.BD).toBe(true);
+    expect(after.LBD).toBe(true);
+  });
+
+  it('turns both kick lanes off together', () => {
+    const before = { ...DEFAULT_CONFIG.autoPlay, BD: true, LBD: true };
+    const after = setAutoKick(before, false);
+    expect(after.BD).toBe(false);
+    expect(after.LBD).toBe(false);
+  });
+
+  it('does not touch the other 9 lanes', () => {
+    const before = { ...DEFAULT_CONFIG.autoPlay, HH: true, SD: true };
+    const after = setAutoKick(before, true);
+    expect(after.HH).toBe(true);
+    expect(after.SD).toBe(true);
+    expect(after.LC).toBe(false);
+    expect(after.CY).toBe(false);
   });
 });

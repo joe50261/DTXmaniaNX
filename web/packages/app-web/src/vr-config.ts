@@ -3,6 +3,7 @@ import {
   AUTO_PLAY_LANES,
   getConfig,
   subscribe,
+  toggleAutoPlayLane,
   updateConfig,
   type AutoPlayMap,
   type Config,
@@ -49,6 +50,25 @@ const TOGGLE_W = 100;
  * behind the footer. */
 const FOOTER_H = 90;
 const FOOTER_TOP = PANEL_H_PX - FOOTER_H;
+
+/** Exported layout so the "Back button doesn't sit on top of the hint
+ * text" invariant and the "content never overflows into the footer
+ * strip" invariant can be asserted independently of the canvas paint.
+ * Mirrors VR_MENU_FOOTER's role for the song-picker panel. */
+export const VR_CONFIG_LAYOUT = Object.freeze({
+  PANEL_W_PX,
+  PANEL_H_PX,
+  ROW_H,
+  SECTION_GAP,
+  SECTION_TITLE_H,
+  FOOTER_H,
+  FOOTER_TOP,
+  BACK_BTN_W: 220,
+  BACK_BTN_H: 40,
+  /** 13px text with hints on lines 1 and 2 of the footer strip. */
+  HINT_LINE_1_Y: FOOTER_TOP + 22,
+  HINT_LINE_2_Y: FOOTER_TOP + 42,
+});
 
 /** Friendly names for auto-play lane toggles. The DOM panel shows the
  * raw lane codes (HH, SD, BD, …) which assumes the player already knows
@@ -512,7 +532,7 @@ export class VrConfig {
         w: cellW,
         h: cellH,
         action: () =>
-          updateConfig({ autoPlay: { ...map, [lane]: !value } }),
+          updateConfig({ autoPlay: toggleAutoPlayLane(map, lane) }),
       });
     }
     // Hint line under the grid: quick "kick only" shortcut explanation
@@ -575,8 +595,8 @@ export class VrConfig {
 
   private drawBack(): void {
     const ctx = this.ctx;
-    const w = 220;
-    const h = 40;
+    const w = VR_CONFIG_LAYOUT.BACK_BTN_W;
+    const h = VR_CONFIG_LAYOUT.BACK_BTN_H;
     // Right-aligned inside the footer strip so it sits next to the hint
     // text instead of floating over it. Hint text is left-aligned from
     // x=40; leaving ~24 px gutter at the right edge.

@@ -61,11 +61,31 @@ the two *will* drift and you'll be chasing subtle bugs six weeks later.
 
 ## Test the model, not the view
 
-Pure model functions (`song-wheel-model.ts`, `hud-toast.ts`, `tick-state.ts`,
-`vr-menu-input.ts`) get full unit-test coverage. View code (DOM wiring, Canvas
-paint calls, Three.js scene construction) is validated by the dev build plus
-the Playwright e2e pass, not by jsdom unit tests — mocking `CanvasTexture` or
-DOM hierarchies brittle-ly is not worth it.
+Testing policy — every change ships with coverage, but the *kind* of test
+depends on what the change touches:
+
+- **Pure model functions** (`song-wheel-model.ts`, `hud-toast.ts`,
+  `tick-state.ts`, `vr-menu-input.ts`, `vr-lifecycle.ts`, …) → **unit
+  tests** (`*.test.ts` via `vitest`). Full branch coverage is expected;
+  these helpers have no DOM / canvas / Three.js dependencies, so they're
+  cheap to exercise.
+- **Pure geometry / layout constants** exported from view modules (e.g.
+  `VR_MENU_FOOTER`, `VR_CONFIG_LAYOUT`) → **unit tests** that pin the
+  geometric invariants (non-overlap, in-bounds). Cheap, catches
+  regressions that would otherwise only show inside a headset.
+- **View code** — DOM wiring, Canvas 2D paint calls, Three.js scene
+  construction, XR controller pose handling → **Playwright e2e** in
+  `tests/e2e/*.spec.ts`, running against `pnpm preview` (dev build).
+  Do NOT try to unit-test these with happy-dom + mocked
+  `CanvasTexture`; jsdom-style mocks for a WebGL-backed renderer
+  are brittle and the test either passes by accident or re-implements
+  the production code.
+
+If a view-only change is genuinely untestable end-to-end (e.g. XR-only
+panels that need a headset), extract the decision logic into a pure
+helper that IS testable, and let the view become a thin wrapper around
+it. See `emptyChartState` + `resetStateOnVrExit` in `vr-lifecycle.ts`
+for the pattern.
 
 ## Branch expectations
 

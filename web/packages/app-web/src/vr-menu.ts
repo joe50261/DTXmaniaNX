@@ -63,21 +63,40 @@ const STATUS_X = COVER_X;
 const STATUS_Y = COVER_Y + COVER_SIZE + 16;
 const STATUS_W = PANEL_W_PX - STATUS_X - 40;
 
-const EXIT_W = 200;
-const EXIT_H = 50;
-const EXIT_X = PANEL_W_PX - 40 - EXIT_W;
-const EXIT_Y = PANEL_H_PX - 16 - EXIT_H;
+/** Footer layout — exported so the "hint text doesn't sit under the
+ * button rectangle" invariant can be asserted without a canvas. The
+ * regression the constants guard against is visible in the repo's bug
+ * reports: the Settings / Calibrate / Exit VR buttons were painted on
+ * top of the control-hint line, making it unreadable in VR. */
+export const VR_MENU_FOOTER = Object.freeze({
+  PANEL_W_PX,
+  PANEL_H_PX,
+  EXIT_W: 200,
+  EXIT_H: 50,
+  UTIL_BTN_W: 180,
+  UTIL_BTN_H: 36,
+  /** Baseline of the 13-px hint text (canvas fillText y = baseline). */
+  hintBaselineY: (): number => VR_MENU_FOOTER.UTIL_BTN_Y - 14,
+  /** 16 px margin below the button rectangle to the bottom edge. */
+  EXIT_Y: PANEL_H_PX - 16 - 50,
+  UTIL_BTN_Y: PANEL_H_PX - 16 - 50 + (50 - 36) / 2,
+});
 
-const UTIL_BTN_W = 180;
-const UTIL_BTN_H = 36;
+const EXIT_W = VR_MENU_FOOTER.EXIT_W;
+const EXIT_H = VR_MENU_FOOTER.EXIT_H;
+const EXIT_X = PANEL_W_PX - 40 - EXIT_W;
+const EXIT_Y = VR_MENU_FOOTER.EXIT_Y;
+
+const UTIL_BTN_W = VR_MENU_FOOTER.UTIL_BTN_W;
+const UTIL_BTN_H = VR_MENU_FOOTER.UTIL_BTN_H;
 // Utility row sits on the same baseline as the Exit VR button so the
 // bottom strip reads as one control bar. Hint text is painted ABOVE
 // this row (see paintFooter) — the previous layout put hint text and
 // buttons at the same y, covering the text with the button rectangles.
-const UTIL_BTN_Y = PANEL_H_PX - 16 - EXIT_H + (EXIT_H - UTIL_BTN_H) / 2;
+const UTIL_BTN_Y = VR_MENU_FOOTER.UTIL_BTN_Y;
 const CONFIG_BTN_X = 40;
 const CALIB_BTN_X = CONFIG_BTN_X + UTIL_BTN_W + 16;
-const FOOTER_HINT_Y = UTIL_BTN_Y - 14;
+const FOOTER_HINT_Y = VR_MENU_FOOTER.hintBaselineY();
 
 interface ButtonHit {
   /** Canvas rectangle. */

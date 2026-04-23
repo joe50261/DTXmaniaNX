@@ -44,6 +44,32 @@ export const AUTO_PLAY_LANES: readonly (keyof AutoPlayMap)[] = [
   'LBD',
 ];
 
+/**
+ * Return a new `AutoPlayMap` with a single lane flipped. Pure so every
+ * auto-play UI (desktop DOM grid, VR canvas grid, hypothetical
+ * remote-control surface) calls into the same lane-flip contract
+ * instead of re-implementing the spread+override dance inline. Used
+ * by `vr-config.ts`'s per-lane cell and the DOM `config-panel.ts`.
+ *
+ * Never mutates the input map — callers pass the result to
+ * `updateConfig` which replaces the whole object. */
+export function toggleAutoPlayLane(
+  map: AutoPlayMap,
+  lane: keyof AutoPlayMap,
+): AutoPlayMap {
+  return { ...map, [lane]: !map[lane] };
+}
+
+/**
+ * Convenience: set both kick lanes (BD + LBD) to the same value.
+ * "Auto-kick" is the most common auto-play preset — DTXmania even
+ * had a dedicated `autoKick` boolean pre-refactor — so the VR panel
+ * shows a hint pointing at this helper for players who don't want to
+ * tap individual lane cells. */
+export function setAutoKick(map: AutoPlayMap, on: boolean): AutoPlayMap {
+  return { ...map, BD: on, LBD: on };
+}
+
 export interface Config {
   /** px / ms scroll speed for chip fall. DTXmania "speed=1" works out
    * to ~0.625 px/ms; user-tuneable 0.30..1.50 here. */
