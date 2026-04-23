@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BoxNode, ChartEntry, LibraryNode, SongEntry, SongNode } from '@dtxmania/dtx-core';
-import { compareNodes, findBoxByPath, pickChartForSlot } from './song-wheel.js';
+import { compareNodes, findBoxByPath, pickChartForSlot } from './song-wheel-model.js';
 
 /**
  * Tests exercise SongWheel's pure decision helpers — the parts that hold

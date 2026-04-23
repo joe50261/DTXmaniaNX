@@ -50,8 +50,13 @@ import {
   type ResolvedLoopWindow,
 } from './tick-state.js';
 import { VrMenu, type VrMenuDeps, type VrMenuPick } from './vr-menu.js';
+import { VrCalibrate } from './vr-calibrate.js';
+import { VrConfig } from './vr-config.js';
+import { VrOnScreenLog } from './vr-on-screen-log.js';
+import { getConfig, subscribe as subscribeConfig } from './config.js';
 import type { BoxNode } from '@dtxmania/dtx-core';
-import { loadAudioOffsetMs } from './calibrate.js';
+import { loadAudioOffsetMs } from './calibrate-model.js';
+import { activeToast } from './hud-toast.js';
 
 const COUNTDOWN_MS = 2000;
 const BGM_CHANNEL = 0x01;
@@ -153,7 +158,10 @@ export class Game {
   private bgmSources: AudioBufferSourceNode[] = [];
   private readonly xrControllers: XrControllers;
   private readonly vrMenu: VrMenu;
-  private menuIsShown = false;
+  private readonly vrCalibrate: VrCalibrate;
+  private readonly vrConfig: VrConfig;
+  private readonly vrLog: VrOnScreenLog;
+  private readonly unsubConfig: () => void;
 
   constructor(private readonly canvas: HTMLCanvasElement, skin: SkinTextures = {}) {
     this.renderer = new Renderer(canvas, skin);
@@ -175,6 +183,13 @@ export class Game {
     this.xrControllers.setPadsTexture(skin.pads);
     this.xrControllers.onHit((e) => this.handleLaneHit(e));
     this.vrMenu = new VrMenu(this.renderer.webgl, this.renderer.scene);
+    this.vrCalibrate = new VrCalibrate(this.renderer.webgl, this.renderer.scene, this.engine);
+    this.vrConfig = new VrConfig(this.renderer.webgl, this.renderer.scene);
+    this.vrLog = new VrOnScreenLog(this.renderer.scene);
+    // Sync log panel visibility to the config flag + the XR session
+    // state. It's only meaningful while the headset is on; desktop
+    // already has the DOM `#on-screen-log` panel.
+    this.unsubConfig = subscribeConfig((cfg) => this.applyVrLogVisibility(cfg.vrLogEnabled));
     // Tick every frame, even before a chart is loaded, so the VR menu's
     // raycaster + trigger polling keeps working while the player's still
     // picking a song.
@@ -186,7 +201,9 @@ export class Game {
     await this.renderer.enterXR(() => {
       this.xrControllers.stop();
       this.vrMenu.hide();
-      this.menuIsShown = false;
+      this.vrCalibrate.hide();
+      this.vrConfig.hide();
+      this.vrLog.hide();
       // Restore playfield visibility: if the player exited via the Exit VR
       // button, the VR menu was up and we'd hidden the playfield. Without
       // this, the next enterXR would scale + position the playfield but
@@ -207,6 +224,11 @@ export class Game {
       onEnded();
     });
     this.xrControllers.start();
+    // Seed the log-panel visibility now that the session is actually
+    // active. Doing this before the await would no-op because `inXR`
+    // hasn't flipped to true yet, so a player with `vrLogEnabled=true`
+    // would see no log until they touched the setting.
+    this.applyVrLogVisibility(getConfig().vrLogEnabled);
   }
 
   /**
@@ -219,7 +241,6 @@ export class Game {
     onExit: () => void,
     deps: VrMenuDeps
   ): void {
-    this.menuIsShown = true;
     // Hide playfield while the menu is up. Without this the result HUD +
     // scrolling pads (renderOrder 2/4, depthTest:off) keep painting over
     // the menu panel (renderOrder 0) and the player can't see what they
@@ -229,9 +250,40 @@ export class Game {
   }
 
   hideVrMenu(): void {
-    this.menuIsShown = false;
     this.renderer.setPlayfieldVisible(true);
     this.vrMenu.hide();
+  }
+
+  /** Show the VR calibration panel. Call `hideVrMenu()` first if the
+   * menu is currently up — the two UIs share the same controller input
+   * and shouldn't be visible simultaneously. `onDone` receives the
+   * measured offset in ms, or null if the player cancelled or the
+   * presses were too noisy to compute a median. */
+  showVrCalibrate(onDone: (offsetMs: number | null) => void): void {
+    this.renderer.setPlayfieldVisible(false);
+    this.vrCalibrate.show(onDone);
+  }
+
+  hideVrCalibrate(): void {
+    this.vrCalibrate.hide();
+  }
+
+  /** Show the VR settings panel. Mirrors the calibrate pair: caller
+   * should hide the menu first so they don't collide on the shared
+   * controller input. `onClose` is invoked when the player hits the
+   * panel's Back button. */
+  showVrConfig(onClose: () => void): void {
+    this.renderer.setPlayfieldVisible(false);
+    this.vrConfig.show(onClose);
+  }
+
+  hideVrConfig(): void {
+    this.vrConfig.hide();
+  }
+
+  private applyVrLogVisibility(enabled: boolean): void {
+    if (enabled && this.inXR) this.vrLog.show();
+    else this.vrLog.hide();
   }
 
   get inXR(): boolean {
@@ -399,7 +451,11 @@ export class Game {
   stop(): void {
     this.input.detach();
     this.stopBgm();
+    this.unsubConfig();
     this.vrMenu.dispose();
+    this.vrCalibrate.dispose();
+    this.vrConfig.dispose();
+    this.vrLog.dispose();
     this.renderer.dispose();
   }
 
@@ -574,6 +630,8 @@ export class Game {
   private tick(): void {
     this.xrControllers.tick();
     this.vrMenu.tick();
+    this.vrCalibrate.tick();
+    this.vrConfig.tick();
     // VR face-button mapping during play:
     //   - LEFT  X (button 4) / Y (button 5) → leaveSong (panic quit)
     //   - RIGHT A (button 4)                → capture loop A marker
@@ -742,6 +800,7 @@ export class Game {
       excellent: isExcellent(snap),
       finishedAtMs: this.finishedAtMs,
       inXR: this.renderer.inXR,
+      toast: activeToast(),
     };
     this.renderer.render(state);
     this.renderer.submitPadHits(this.lastPadHitMs);

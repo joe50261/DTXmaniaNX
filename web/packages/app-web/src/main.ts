@@ -44,7 +44,18 @@ import {
 } from './fs/handle-store.js';
 import { loadSkin } from './skin.js';
 import type { SkinTextures } from './renderer.js';
-import { loadAudioOffsetMs, runCalibration, saveAudioOffsetMs } from './calibrate.js';
+import { runCalibration } from './calibrate.js';
+import { loadAudioOffsetMs, saveAudioOffsetMs } from './calibrate-model.js';
+import { activeToast, showToast } from './hud-toast.js';
+
+// Test hook for the Playwright e2e suite. Toast is painted onto the
+// HUD canvas rather than a DOM node Playwright can locate, so we
+// expose the module singleton directly. Always-installed (a single
+// function reference on window) because the e2e suite runs against
+// `vite preview` which matches a production build.
+(
+  window as unknown as { __dtxmaniaTest?: { activeToast: typeof activeToast } }
+).__dtxmaniaTest = { activeToast };
 import { AudioEngine } from '@dtxmania/audio-engine';
 
 /**
@@ -851,6 +862,30 @@ function showVrMenuForActive(fs?: GameFsContext): void {
         // scrolling gets the same feel.
         schedulePreview(song);
       },
+      onCalibrate: () => {
+        if (!activeGame) return;
+        // Stop the preview clip so its tail doesn't overlap the metronome
+        // clicks while the player is listening for beats.
+        schedulePreview(null);
+        activeGame.hideVrMenu();
+        activeGame.showVrCalibrate((offsetMs) => {
+          if (offsetMs !== null) {
+            saveAudioOffsetMs(offsetMs);
+            showToast(`Latency offset: ${Math.round(offsetMs)} ms`);
+          }
+          activeGame?.hideVrCalibrate();
+          showVrMenuForActive(fs);
+        });
+      },
+      onConfig: () => {
+        if (!activeGame) return;
+        schedulePreview(null);
+        activeGame.hideVrMenu();
+        activeGame.showVrConfig(() => {
+          activeGame?.hideVrConfig();
+          showVrMenuForActive(fs);
+        });
+      },
     }
   );
 }
@@ -929,22 +964,6 @@ function setStatus(text: string): void {
   statusEl.textContent = text;
 }
 
-const toastEl = document.getElementById('hud-toast') as HTMLDivElement;
-let toastTimer: number | null = null;
-/** Mid-play feedback toast. Routes through a dedicated DOM element
- * because the main `#status` lives inside `#overlay` (display:none
- * during play), so `setStatus` alone isn't visible while the player
- * holds a keyboard shortcut or presses a VR face button. */
-function showToast(text: string, durationMs = 1800): void {
-  if (!toastEl) return;
-  toastEl.textContent = text;
-  toastEl.classList.add('visible');
-  if (toastTimer !== null) window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => {
-    toastEl.classList.remove('visible');
-    toastTimer = null;
-  }, durationMs);
-}
 
 function registerServiceWorker(): void {
   if (!('serviceWorker' in navigator)) return;

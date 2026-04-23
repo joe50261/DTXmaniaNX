@@ -9,13 +9,33 @@ import { test, expect } from '@playwright/test';
  *   1. `[` / `]` / `\` hotkeys fire and surface the HUD toast (the
  *      `setStatus` → overlay path is hidden during play, so toast is
  *      the ONLY visual feedback — a regression that swallows it is
- *      silent from the player's perspective).
+ *      silent from the player's perspective). The toast is painted
+ *      onto the HUD canvas, so we read it via the `__dtxmaniaTest`
+ *      window hook rather than a DOM selector.
  *   2. The Settings panel's "Range is invalid" amber warning toggles
  *      visibility off config state, so players who misconfigure the
  *      range via hotkey don't get silent-disabled loops.
  */
 
 const STORAGE_KEY = 'dtxmania.config';
+
+/** Read the currently-active toast via the window hook main.ts exposes.
+ * Polls briefly because the hotkey → render-state update happens on the
+ * next frame, not synchronously. */
+async function expectToastText(page: import('@playwright/test').Page, pattern: RegExp): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (window as unknown as {
+              __dtxmaniaTest?: { activeToast: () => { text: string } | null };
+            }).__dtxmaniaTest?.activeToast()?.text ?? '',
+        ),
+      { timeout: 2_000 },
+    )
+    .toMatch(pattern);
+}
 
 test.describe('practice loop — hotkeys + invalid-range warning', () => {
   test('[ captures Loop A, ] captures Loop B, and \\ toggles — all surface the HUD toast', async ({ page }) => {
@@ -28,16 +48,13 @@ test.describe('practice loop — hotkeys + invalid-range warning', () => {
     // a cold Chromium warmup.
     await expect(page.locator('#overlay')).toBeHidden({ timeout: 10_000 });
 
-    const toast = page.locator('#hud-toast');
-
     // Toggle: starts disabled (default config), `\` flips it on → toast
     // "Loop on". A second press → "Loop off". Does not depend on a
     // specific songTime, so it's the safest assertion to run first.
     await page.keyboard.press('\\');
-    await expect(toast).toHaveClass(/visible/);
-    await expect(toast).toHaveText(/Loop on/);
+    await expectToastText(page, /Loop on/);
     await page.keyboard.press('\\');
-    await expect(toast).toHaveText(/Loop off/);
+    await expectToastText(page, /Loop off/);
 
     // Capture hotkeys — [ snaps the current songTime to the floor
     // measure, ] to the ceil. Toast text includes the measure index,
@@ -45,14 +62,11 @@ test.describe('practice loop — hotkeys + invalid-range warning', () => {
     // (can happen if both captures fire during the lead-in countdown,
     // where songTime is negative and snaps to measure 0 for both).
     await page.keyboard.press('[');
-    await expect(toast).toHaveText(/Loop A: measure \d+/);
+    await expectToastText(page, /Loop A: measure \d+/);
 
     await page.keyboard.press(']');
-    await expect(toast).toHaveText(/Loop B: measure \d+|invalid/);
+    await expectToastText(page, /Loop B: measure \d+|invalid/);
 
-    // Toast persists the "Loop *" text for ~1.8 s before the fade-out
-    // class is removed. We've already asserted on the text; no need
-    // to wait through the fade.
     expect(errors, `pageerrors: ${errors.join('\n')}`).toEqual([]);
   });
 

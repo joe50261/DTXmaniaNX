@@ -105,6 +105,10 @@ export interface Config {
   /** 0-based measure index where the loop ends. null = end of song
    * (useful when only A is set — loops the tail of the chart). */
   practiceLoopEndMeasure: number | null;
+  /** When true, show a small on-screen console log panel inside the VR
+   * scene. Off by default — the panel adds visual clutter; players only
+   * turn it on when actively diagnosing a VR-only issue. */
+  vrLogEnabled: boolean;
 }
 
 const EMPTY_AUTO_PLAY: AutoPlayMap = Object.freeze({
@@ -139,6 +143,7 @@ export const DEFAULT_CONFIG: Config = Object.freeze({
   practiceLoopEnabled: false,
   practiceLoopStartMeasure: 0,
   practiceLoopEndMeasure: null,
+  vrLogEnabled: false,
 });
 
 /** True when the current run should NOT commit a best-score record.

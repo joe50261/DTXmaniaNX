@@ -118,6 +118,21 @@ describe('loadConfig — migrations', () => {
     expect(cfg.preservePitch).toBe(true);
     expect(cfg.practiceLoopEnabled).toBe(false);
   });
+
+  it('vrLogEnabled defaults off; existing storage without the key migrates to false', () => {
+    // Fresh storage → off.
+    expect(loadConfig().vrLogEnabled).toBe(false);
+    // Old stored config without the key (pre-R6) → shouldn't crash or
+    // flip anything else; the field picks up its default.
+    localStorage.setItem(
+      'dtxmania.config',
+      JSON.stringify({ volumeBgm: 0.75, scrollSpeed: 0.5 }),
+    );
+    const cfg = loadConfig();
+    expect(cfg.vrLogEnabled).toBe(false);
+    expect(cfg.volumeBgm).toBe(0.75); // surrounding fields survive merge
+    expect(cfg.scrollSpeed).toBe(0.5);
+  });
 });
 
 describe('isPracticeRun — best-score gate', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeOffset } from './calibrate.js';
+import { computeOffset } from './calibrate-model.js';
 
 /**
  * `computeOffset` is the silent-regression-prone heart of latency

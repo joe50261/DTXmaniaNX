@@ -1,75 +1,26 @@
 import type { AudioEngine } from '@dtxmania/audio-engine';
+import {
+  computeOffset,
+  makeClickBuffer,
+  scheduleBeats,
+  type PressEvent,
+} from './calibrate-model.js';
 
 /**
- * Audio-latency calibration routine.
+ * DOM calibration overlay — plays a short metronome sequence and asks
+ * the player to press Space / click / tap on every beat. The median
+ * press-minus-beat delta is the `audioOffsetMs` the game subtracts
+ * from its judgment calculation.
  *
- * Plays a series of short metronome clicks through the AudioContext and asks
- * the player to press Space (or tap / click / controller trigger — any
- * pointerdown or keydown counts) on each beat. The median delta between the
- * player's press times and the scheduled click times is returned as the
- * `audioOffsetMs` the game should subtract from the judgment calculation.
- *
- * Positive offsets ("player hits late") shift the judgment window later —
- * i.e. the code sees `delta - offset`, so a consistently-late press on a
- * laggy headset still scores PERFECT.
- *
- * The routine is UI-only; it knows nothing about the game state. The caller
- * is responsible for persisting the returned number.
+ * The math, click buffer, beat scheduler, and localStorage helpers
+ * live in `calibrate-model.ts` so the in-VR calibration panel can
+ * reuse them.
  */
-/**
- * Pure math core of the calibration routine: given the scheduled beat times
- * (AudioContext seconds) and the player's recorded press times, return the
- * median press-minus-beat delta in ms. Exported so the algorithm can be
- * unit-tested without driving a real AudioContext. See `runCalibration` for
- * the UI shell.
- *
- * Rules:
- *  - Each press matches to its *nearest* beat (skipping the first `warmup`
- *    warm-up beats, which exist to settle latency / input driver state).
- *  - Presses further than 300 ms from any non-warmup beat are discarded as
- *    strays (fat fingers, ignoring a beat and pressing on the next one).
- *  - Need at least 3 survivors; otherwise the result is too noisy to trust
- *    and we return null so the caller keeps the previous offset.
- *  - Median is used instead of mean so a single outlier that squeaks under
- *    the 300 ms cutoff can't shift the result by much.
- */
-export function computeOffset(
-  beatTimes: number[],
-  presses: { audioTime: number }[],
-  warmup: number
-): number | null {
-  const deltas: number[] = [];
-  const active = beatTimes.slice(warmup);
-  for (const press of presses) {
-    let best = Number.POSITIVE_INFINITY;
-    let bestAbs = Number.POSITIVE_INFINITY;
-    for (const beat of active) {
-      const d = press.audioTime - beat;
-      if (Math.abs(d) < bestAbs) {
-        bestAbs = Math.abs(d);
-        best = d;
-      }
-    }
-    if (Math.abs(best) <= 0.3) deltas.push(best * 1000);
-  }
-  if (deltas.length < 3) return null;
-  deltas.sort((a, b) => a - b);
-  const mid = Math.floor(deltas.length / 2);
-  return deltas.length % 2 === 0
-    ? (deltas[mid - 1]! + deltas[mid]!) / 2
-    : deltas[mid]!;
-}
-
-export const AUDIO_OFFSET_LS_KEY = 'dtxmania-audio-offset-ms';
 
 export interface CalibrateOptions {
   beats?: number;        // total beats played (default 12)
   warmup?: number;       // beats skipped at the start (default 2)
   intervalMs?: number;   // gap between beats (default 500)
-}
-
-interface PressEvent {
-  audioTime: number; // AudioContext.currentTime when press happened
 }
 
 export async function runCalibration(
@@ -138,21 +89,8 @@ export async function runCalibration(
   panel.appendChild(inner);
   host.appendChild(panel);
 
-  // Schedule click buffer (short white-noise burst) for each beat.
   const clickBuf = makeClickBuffer(ctx);
-  const startAt = ctx.currentTime + 0.6;
-  const beatTimes: number[] = [];
-  for (let i = 0; i < beats; i++) {
-    const when = startAt + (i * intervalMs) / 1000;
-    beatTimes.push(when);
-    const src = ctx.createBufferSource();
-    src.buffer = clickBuf;
-    const gain = ctx.createGain();
-    gain.gain.value = 0.4;
-    src.connect(gain);
-    gain.connect(ctx.destination);
-    src.start(when);
-  }
+  const { beatTimes } = scheduleBeats(ctx, clickBuf, { beats, intervalMs });
 
   // Animate the dot alongside beats.
   const tickers: number[] = [];
@@ -215,37 +153,4 @@ export async function runCalibration(
       resolve(offset);
     }, 50);
   });
-}
-
-/** Returns the current persisted offset (ms), or 0 if none. */
-export function loadAudioOffsetMs(): number {
-  try {
-    const raw = window.localStorage.getItem(AUDIO_OFFSET_LS_KEY);
-    if (raw === null) return 0;
-    const n = Number.parseFloat(raw);
-    return Number.isFinite(n) ? n : 0;
-  } catch {
-    return 0;
-  }
-}
-
-export function saveAudioOffsetMs(ms: number): void {
-  try {
-    window.localStorage.setItem(AUDIO_OFFSET_LS_KEY, String(ms));
-  } catch {
-    /* ignore — private mode / disabled storage */
-  }
-}
-
-/** Short noise burst — cheaper than decoding a click.wav for two routines. */
-function makeClickBuffer(ctx: AudioContext): AudioBuffer {
-  const sampleRate = ctx.sampleRate;
-  const length = Math.round(sampleRate * 0.04);
-  const buf = ctx.createBuffer(1, length, sampleRate);
-  const data = buf.getChannelData(0);
-  for (let i = 0; i < length; i++) {
-    const envelope = Math.exp(-i / (sampleRate * 0.01));
-    data[i] = (Math.random() * 2 - 1) * envelope * 0.9;
-  }
-  return buf;
 }

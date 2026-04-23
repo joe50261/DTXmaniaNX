@@ -1,10 +1,26 @@
 import * as THREE from 'three';
-import type { BoxNode, ChartEntry, LibraryNode, SongEntry } from '@dtxmania/dtx-core';
+import type { BoxNode, ChartEntry, SongEntry } from '@dtxmania/dtx-core';
 import {
   findButtonAtPoint,
   stepStickAxis,
   type StickAxisState,
 } from './vr-menu-input.js';
+import {
+  buildBreadcrumbPath,
+  buildDisplayEntries,
+  cycleDifficultySlot,
+  cycleFocus,
+  DIFFICULTY_SLOT_LABELS,
+  findBoxByPath,
+  formatBestRecordLine,
+  lampTier,
+  pickChartForSlot,
+  pickRandomSongIn,
+  rowTitle,
+  WHEEL_CENTER_OFFSET,
+  WHEEL_VISIBLE_ROWS,
+  type DisplayEntry,
+} from './song-wheel-model.js';
 
 /**
  * In-VR song-selection panel — DTXmania Stage 05 flavour.
@@ -34,9 +50,6 @@ const PANEL_WORLD_W = 1.6;
 const PANEL_WORLD_H = (PANEL_WORLD_W * PANEL_H_PX) / PANEL_W_PX;
 const PANEL_POS = new THREE.Vector3(0, 1.45, -1.5);
 
-/** Number of wheel rows — odd so there's a single visual focus row. */
-const WHEEL_VISIBLE_ROWS = 7;
-const WHEEL_CENTER_OFFSET = (WHEEL_VISIBLE_ROWS - 1) / 2;
 const WHEEL_X = 40;
 const WHEEL_W = 560;
 const WHEEL_ROW_H = 74;
@@ -55,12 +68,11 @@ const EXIT_H = 50;
 const EXIT_X = PANEL_W_PX - 40 - EXIT_W;
 const EXIT_Y = PANEL_H_PX - 70;
 
-const DIFFICULTY_SLOT_LABELS = ['NOVICE', 'REGULAR', 'EXPERT', 'MASTER', 'DTX'] as const;
-
-type SyntheticEntry =
-  | { kind: 'back'; parent: BoxNode }
-  | { kind: 'random'; box: BoxNode };
-type DisplayEntry = { kind: 'node'; node: LibraryNode } | SyntheticEntry;
+const UTIL_BTN_W = 180;
+const UTIL_BTN_H = 36;
+const UTIL_BTN_Y = PANEL_H_PX - 60;
+const CONFIG_BTN_X = 40;
+const CALIB_BTN_X = CONFIG_BTN_X + UTIL_BTN_W + 16;
 
 interface ButtonHit {
   /** Canvas rectangle. */
@@ -72,7 +84,9 @@ interface ButtonHit {
   action:
     | { kind: 'activate'; entryIdx: number }
     | { kind: 'chart'; song: SongEntry; chart: ChartEntry }
-    | { kind: 'exit' };
+    | { kind: 'exit' }
+    | { kind: 'calibrate' }
+    | { kind: 'config' };
 }
 
 export interface VrMenuPick {
@@ -89,6 +103,15 @@ export interface VrMenuDeps {
   joinPath: (folder: string, rel: string) => string;
   /** Called when focus lands on a song — host starts/stops preview audio. */
   onFocusedSong: (song: SongEntry | null) => void;
+  /** Player tapped the "Calibrate Latency" button. Host hides the menu
+   * and shows the VR calibration panel, then re-shows the menu when
+   * calibration completes. Optional — menu simply omits the button if
+   * no handler is provided (e.g. tests, early boot before audio is up). */
+  onCalibrate?: () => void;
+  /** Player tapped the "Settings" button. Host hides the menu, shows
+   * the VR config panel, then re-shows the menu when the player closes
+   * it. Optional — menu omits the button if no handler is wired. */
+  onConfig?: () => void;
 }
 
 export class VrMenu {
@@ -135,7 +158,18 @@ export class VrMenu {
   private shown = false;
 
   private readonly raycaster = new THREE.Raycaster();
-  private readonly addedControllers: THREE.Group[] = [];
+  /** Controllers the menu attached a laser + listeners to. Populated
+   * once in the constructor — re-creating per show() was leaking Line
+   * children and event listeners onto the long-lived XR controller
+   * Groups. */
+  private readonly controllers: THREE.Group[] = [];
+  // Three.js exposes its own event types (Object3DEventMap) that don't
+  // know about the WebXR 'connected'/'disconnected' string events; we
+  // pass listeners through the string-overload of addEventListener and
+  // type the saved handlers loosely here so removeEventListener is
+  // symmetric.
+  private readonly onConnectedHandlers: Array<(event: unknown) => void> = [];
+  private readonly onDisconnectedHandlers: Array<() => void> = [];
 
   /** Supplied at show() time so the Game class doesn't need to know about
    * backends at construction. Cleared on hide. */
@@ -163,6 +197,46 @@ export class VrMenu {
     this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(PANEL_WORLD_W, PANEL_WORLD_H), mat);
     this.mesh.position.copy(PANEL_POS);
     this.mesh.visible = false;
+    this.scene.add(this.mesh);
+
+    for (let i = 0; i < 2; i++) {
+      const controller = this.webgl.xr.getController(i);
+      const idx = i;
+      const onConnected = (event: unknown): void => {
+        const data = (event as { data?: XRInputSource }).data;
+        if (data) this.inputSources[idx] = data;
+      };
+      const onDisconnected = (): void => {
+        this.inputSources[idx] = null;
+      };
+      controller.addEventListener('connected', onConnected);
+      controller.addEventListener('disconnected', onDisconnected);
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(0, 0, 0),
+          new THREE.Vector3(0, 0, -2.5),
+        ]),
+        new THREE.LineBasicMaterial({ color: 0xffeb3b, transparent: true, opacity: 0.7 })
+      );
+      line.visible = false;
+      controller.add(line);
+      // scene.add is idempotent; XrControllers may also add this same
+      // controller when its drum kit starts. We don't scene.remove on
+      // hide/dispose because XrControllers owns controller lifetime.
+      this.scene.add(controller);
+      this.controllers.push(controller);
+      this.lasers.push(line);
+      this.onConnectedHandlers.push(onConnected);
+      this.onDisconnectedHandlers.push(onDisconnected);
+
+      const tip = new THREE.Mesh(
+        new THREE.SphereGeometry(0.012, 12, 12),
+        new THREE.MeshBasicMaterial({ color: 0xffeb3b })
+      );
+      tip.visible = false;
+      this.scene.add(tip);
+      this.tipMarks.push(tip);
+    }
   }
 
   show(
@@ -194,38 +268,7 @@ export class VrMenu {
     this.hoveredIdx = -1;
     this.shown = true;
     this.mesh.visible = true;
-    if (!this.scene.children.includes(this.mesh)) this.scene.add(this.mesh);
-
-    for (let i = 0; i < 2; i++) {
-      const controller = this.webgl.xr.getController(i);
-      const idx = i;
-      controller.addEventListener('connected', (event) => {
-        const data = (event as unknown as { data?: XRInputSource }).data;
-        if (data) this.inputSources[idx] = data;
-      });
-      controller.addEventListener('disconnected', () => {
-        this.inputSources[idx] = null;
-      });
-      const line = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(0, 0, 0),
-          new THREE.Vector3(0, 0, -2.5),
-        ]),
-        new THREE.LineBasicMaterial({ color: 0xffeb3b, transparent: true, opacity: 0.7 })
-      );
-      controller.add(line);
-      this.scene.add(controller);
-      this.addedControllers.push(controller);
-      this.lasers.push(line);
-
-      const tip = new THREE.Mesh(
-        new THREE.SphereGeometry(0.012, 12, 12),
-        new THREE.MeshBasicMaterial({ color: 0xffeb3b })
-      );
-      tip.visible = false;
-      this.scene.add(tip);
-      this.tipMarks.push(tip);
-    }
+    for (const l of this.lasers) l.visible = true;
 
     this.emitFocusedSong();
     void this.loadCoverForFocused();
@@ -250,12 +293,29 @@ export class VrMenu {
 
   dispose(): void {
     this.hide();
+    for (let i = 0; i < this.controllers.length; i++) {
+      const c = this.controllers[i]!;
+      c.removeEventListener('connected', this.onConnectedHandlers[i]!);
+      c.removeEventListener('disconnected', this.onDisconnectedHandlers[i]!);
+      c.remove(this.lasers[i]!);
+    }
+    for (const l of this.lasers) {
+      l.geometry.dispose();
+      if (Array.isArray(l.material)) l.material.forEach((m) => m.dispose());
+      else l.material.dispose();
+    }
+    for (const t of this.tipMarks) {
+      this.scene.remove(t);
+      t.geometry.dispose();
+      if (Array.isArray(t.material)) t.material.forEach((m) => m.dispose());
+      else t.material.dispose();
+    }
     this.scene.remove(this.mesh);
-    for (const c of this.addedControllers) this.scene.remove(c);
-    for (const t of this.tipMarks) this.scene.remove(t);
     this.lasers.length = 0;
     this.tipMarks.length = 0;
-    this.addedControllers.length = 0;
+    this.controllers.length = 0;
+    this.onConnectedHandlers.length = 0;
+    this.onDisconnectedHandlers.length = 0;
     this.texture.dispose();
   }
 
@@ -347,9 +407,8 @@ export class VrMenu {
   }
 
   private moveFocus(delta: number): void {
-    const n = this.entries.length;
-    if (n === 0) return;
-    this.focusIdx = ((this.focusIdx + delta) % n + n) % n;
+    if (this.entries.length === 0) return;
+    this.focusIdx = cycleFocus(this.focusIdx, this.entries.length, delta);
     this.emitFocusedSong();
     void this.loadCoverForFocused();
     this.paint();
@@ -357,12 +416,8 @@ export class VrMenu {
 
   private cycleDifficulty(delta: number): void {
     const song = this.focusedSong();
-    if (!song || song.charts.length === 0) return;
-    const slots = song.charts.map((c) => c.slot).sort((a, b) => a - b);
-    const effective = this.chartForPreferred(song);
-    const curIdx = slots.indexOf(effective.slot);
-    const next = ((curIdx + delta) % slots.length + slots.length) % slots.length;
-    this.preferredSlot = slots[next]!;
+    if (!song) return;
+    this.preferredSlot = cycleDifficultySlot(song, this.preferredSlot, delta);
     this.paint();
   }
 
@@ -373,11 +428,7 @@ export class VrMenu {
   }
 
   private chartForPreferred(song: SongEntry): ChartEntry {
-    const sorted = [...song.charts].sort((a, b) => a.slot - b.slot);
-    const exact = sorted.find((c) => c.slot === this.preferredSlot);
-    if (exact) return exact;
-    const nextHigher = sorted.find((c) => c.slot >= this.preferredSlot);
-    return nextHigher ?? sorted[sorted.length - 1]!;
+    return pickChartForSlot(song, this.preferredSlot);
   }
 
   private activateFocused(): void {
@@ -388,7 +439,7 @@ export class VrMenu {
       return;
     }
     if (entry.kind === 'random') {
-      const song = this.pickRandomSongIn(entry.box);
+      const song = pickRandomSongIn(entry.box);
       if (song && this.onPick) {
         this.onPick({ song, chart: this.chartForPreferred(song) });
       }
@@ -428,25 +479,10 @@ export class VrMenu {
     this.paint();
   }
 
-  private pickRandomSongIn(box: BoxNode): SongEntry | null {
-    const songs: SongEntry[] = [];
-    const stack: LibraryNode[] = [box];
-    while (stack.length > 0) {
-      const node = stack.pop()!;
-      if (node.type === 'song') songs.push(node.entry);
-      else for (const c of node.children) stack.push(c);
-    }
-    if (songs.length === 0) return null;
-    return songs[Math.floor(Math.random() * songs.length)] ?? null;
-  }
-
   private rebuildEntries(): void {
-    const box = this.currentBox;
-    this.entries = [];
-    if (!box) return;
-    if (box.parent) this.entries.push({ kind: 'back', parent: box.parent });
-    this.entries.push({ kind: 'random', box });
-    for (const child of box.children) this.entries.push({ kind: 'node', node: child });
+    // VR menu doesn't expose sort/search controls yet — children appear
+    // in scan order (matches the legacy behaviour).
+    this.entries = buildDisplayEntries(this.currentBox);
   }
 
   private invokeHit(hit: ButtonHit): void {
@@ -464,6 +500,12 @@ export class VrMenu {
         return;
       case 'exit':
         if (this.onExit) this.onExit();
+        return;
+      case 'calibrate':
+        this.deps?.onCalibrate?.();
+        return;
+      case 'config':
+        this.deps?.onConfig?.();
         return;
     }
   }
@@ -520,7 +562,13 @@ export class VrMenu {
     // Breadcrumb
     ctx.font = '15px ui-monospace, monospace';
     ctx.fillStyle = '#94a3b8';
-    ctx.fillText(this.breadcrumbText(), 40, 86);
+    ctx.fillText(
+      buildBreadcrumbPath(this.currentBox)
+        .map((s) => s.node.name)
+        .join('  ›  '),
+      40,
+      86
+    );
 
     this.paintWheel();
     this.paintCover();
@@ -528,13 +576,6 @@ export class VrMenu {
     this.paintFooter();
 
     this.texture.needsUpdate = true;
-  }
-
-  private breadcrumbText(): string {
-    const chain: string[] = [];
-    for (let b: BoxNode | null = this.currentBox; b; b = b.parent) chain.push(b.name);
-    chain.reverse();
-    return chain.join('  ›  ');
   }
 
   private paintWheel(): void {
@@ -631,7 +672,7 @@ export class VrMenu {
       // Clear-lamp dot in the top-right corner, mirrors the desktop
       // wheel. Only drawn when the chart has a record — no dot = never
       // played.
-      const lampColor = vrLampForRecord(chart);
+      const lampColor = canvasLampColor(chart);
       if (lampColor) {
         ctx.fillStyle = lampColor;
         ctx.beginPath();
@@ -707,7 +748,7 @@ export class VrMenu {
     y += 12;
     ctx.textAlign = 'left';
     const lines: Array<[string, string | undefined]> = [
-      ['Best', vrFormatBestLine(selected)],
+      ['Best', formatBestRecordLine(selected)],
       ['Artist', song.artist],
       ['Genre', song.genre],
       ['BPM', song.bpm ? Math.round(song.bpm).toString() : undefined],
@@ -742,44 +783,56 @@ export class VrMenu {
     ctx.textAlign = 'center';
     ctx.fillText('Exit VR', EXIT_X + EXIT_W / 2, EXIT_Y + 32);
     this.hits.push({ x: EXIT_X, y: EXIT_Y, w: EXIT_W, h: EXIT_H, action: { kind: 'exit' } });
+
+    // Utility row: Settings + Calibrate. Each is drawn only if a handler
+    // is wired; callers can hide either without code churn.
+    if (this.deps?.onConfig) {
+      this.paintUtilityButton('Settings', CONFIG_BTN_X, 'config');
+    }
+    if (this.deps?.onCalibrate) {
+      // Offset X if Settings isn't rendered so Calibrate doesn't float
+      // in the middle of the row.
+      const x = this.deps?.onConfig ? CALIB_BTN_X : CONFIG_BTN_X;
+      this.paintUtilityButton('Calibrate Latency', x, 'calibrate');
+    }
+  }
+
+  private paintUtilityButton(
+    label: string,
+    x: number,
+    actionKind: 'config' | 'calibrate'
+  ): void {
+    const ctx = this.ctx;
+    const hovered =
+      this.hoveredIdx >= 0 && this.hits[this.hoveredIdx]?.action.kind === actionKind;
+    ctx.fillStyle = hovered ? '#2563eb' : '#1e293b';
+    ctx.fillRect(x, UTIL_BTN_Y, UTIL_BTN_W, UTIL_BTN_H);
+    ctx.strokeStyle = '#475569';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, UTIL_BTN_Y + 0.5, UTIL_BTN_W - 1, UTIL_BTN_H - 1);
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, x + UTIL_BTN_W / 2, UTIL_BTN_Y + 23);
+    this.hits.push({
+      x,
+      y: UTIL_BTN_Y,
+      w: UTIL_BTN_W,
+      h: UTIL_BTN_H,
+      action: { kind: actionKind },
+    });
   }
 }
 
-/** Walk the tree looking for a BoxNode whose `path` matches. Used to
- * restore browse state after the scanner produces fresh BoxNode
- * references (e.g. after Rescan or IDB cache hydration). */
-function findBoxByPath(box: BoxNode, path: string): BoxNode | null {
-  if (box.path === path) return box;
-  for (const child of box.children) {
-    if (child.type !== 'box') continue;
-    const found = findBoxByPath(child, path);
-    if (found) return found;
-  }
-  return null;
-}
-
-function vrLampForRecord(chart: ChartEntry): string | null {
-  const r = chart.record;
-  if (!r) return null;
-  if (r.excellent) return '#fde047';
-  if (r.fullCombo) return '#7dd3fc';
+/** Canvas palette for lamp dots. Matches the DOM palette except the
+ * "played" tier is a lighter slate (canvas background is darker than the
+ * DOM button background, so the dot needs more contrast). */
+function canvasLampColor(chart: ChartEntry): string | null {
+  const tier = lampTier(chart);
+  if (tier === null) return null;
+  if (tier === 'excellent') return '#fde047';
+  if (tier === 'fullCombo') return '#7dd3fc';
   return '#94a3b8';
-}
-
-function vrFormatBestLine(chart: ChartEntry): string | undefined {
-  const r = chart.record;
-  if (!r) return undefined;
-  const score = r.bestScore.toString().padStart(7, '0');
-  const medal = r.excellent ? ' · EX' : r.fullCombo ? ' · FC' : '';
-  return `${score} (${r.bestRank})${medal}`;
-}
-
-function rowTitle(entry: DisplayEntry): string {
-  if (entry.kind === 'back') return `⬆  ..  (${entry.parent.name})`;
-  if (entry.kind === 'random') return '🎲  Random';
-  const node = entry.node;
-  if (node.type === 'box') return `📁  ${node.name}`;
-  return node.entry.title;
 }
 
 function truncate(s: string, max: number): string {
