@@ -371,7 +371,7 @@ export class XrControllers {
             timestampMs: nowMs,
             key: `xr-pad-${laneLabel(pad.lane)}`,
           });
-          this.pulseHaptic(session, i);
+          this.pulseHaptic(i);
           fired = true;
           break;
         }
@@ -399,40 +399,71 @@ export class XrControllers {
     return out;
   }
 
-  private pulseHaptic(session: XRSession, controllerIdx: number): void {
-    const src = resolveHapticSource(
-      session.inputSources,
-      this.inputSources[controllerIdx] ?? null,
-    );
+  private pulseHaptic(controllerIdx: number): void {
+    // Use THE SAME identity that hit detection used: this slot's
+    // cached XRInputSource. Hit detection in `tick()` reads grip poses
+    // via `webgl.xr.getControllerGrip(i)` and calls `pulseHaptic(i)`;
+    // the input source we pulse must be the one bound to that SAME
+    // slot at 'connected' time, otherwise the hand that swung and the
+    // hand that buzzes can drift apart.
+    //
+    // An earlier iteration of this method did a second lookup in
+    // `session.inputSources` by handedness — "find the live source
+    // with the same `handedness` as the cached slot entry" — which
+    // introduced exactly that drift: hit detection was slot-indexed,
+    // vibration was handedness-indexed, and if the two ever disagreed
+    // (stale cache vs. reassigned live slot, handedness string
+    // mismatch, etc.) the pulse went to the wrong actuator. The
+    // reported symptom "right hit → left controller buzzes" fit this
+    // pattern; dropping the handedness hop restores the 1:1
+    // slot→actuator routing the original 2026-04-21 fix (6c87c7b)
+    // shipped with and was known to work.
+    const src = this.inputSources[controllerIdx];
     if (!src?.gamepad) {
       console.info('[haptic] no src', {
         slotIdx: controllerIdx,
-        slotCached: this.inputSources[controllerIdx]?.handedness ?? 'null',
-        liveHands: Array.from(session.inputSources, (s) => s.handedness),
+        slotCached: src?.handedness ?? 'null',
       });
       return;
     }
-    // Prefer the modern single-actuator API (`gamepad.vibrationActuator`,
-    // Chrome 89+ / Quest Browser current) over the legacy
-    // `hapticActuators[]` array. Some runtimes populate one and not the
-    // other; some populate both but with actuators bound to the wrong
-    // physical controller. We try `vibrationActuator.playEffect` first,
-    // fall back to `hapticActuators[0].pulse`, and log whichever path
-    // actually fires so the bug reporter can tell us which primitive the
-    // runtime is exposing. This diagnostic can be dialed back once the
-    // "right hit → left buzz, left hit → nothing" issue is understood.
+    const hand = src.handedness;
     const gp = src.gamepad as Gamepad & {
       vibrationActuator?: {
         playEffect: (type: string, params: { duration: number; strongMagnitude?: number; weakMagnitude?: number }) => Promise<string>;
       };
       hapticActuators?: GamepadHapticActuator[];
     };
-    const hand = src.handedness;
+    // Priority: legacy `hapticActuators[0].pulse` first (original
+    // fix's path, Quest Browser known-good on both hands), fall back
+    // to `vibrationActuator.playEffect` only if the legacy array is
+    // absent. Avoids the "left vibrationActuator returns
+    // not-supported for dual-rumble" issue the user's diagnostic run
+    // surfaced.
+    const legacyAct = gp.hapticActuators?.[0];
+    if (legacyAct && 'pulse' in legacyAct) {
+      (legacyAct as GamepadHapticActuator & { pulse(intensity: number, durationMs: number): Promise<boolean> })
+        .pulse(0.6, 40)
+        .then((fired) => {
+          console.info('[haptic] hapticActuators[0].pulse fired', {
+            slotIdx: controllerIdx,
+            hand,
+            fired,
+          });
+        })
+        .catch((e: unknown) => {
+          console.info('[haptic] hapticActuators[0].pulse rejected', {
+            slotIdx: controllerIdx,
+            hand,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        });
+      return;
+    }
     if (gp.vibrationActuator?.playEffect) {
       gp.vibrationActuator
         .playEffect('dual-rumble', { duration: 40, strongMagnitude: 0.6, weakMagnitude: 0.6 })
         .then((result) => {
-          console.info('[haptic] vibrationActuator.playEffect fired', {
+          console.info('[haptic] vibrationActuator.playEffect fired (fallback)', {
             slotIdx: controllerIdx,
             hand,
             result,
@@ -445,20 +476,6 @@ export class XrControllers {
             error: e instanceof Error ? e.message : String(e),
           });
         });
-      return;
-    }
-    const act = gp.hapticActuators?.[0];
-    if (act && 'pulse' in act) {
-      (act as GamepadHapticActuator & { pulse(intensity: number, durationMs: number): Promise<boolean> })
-        .pulse(0.6, 40)
-        .then(() => {
-          console.info('[haptic] hapticActuators[0].pulse fired', {
-            slotIdx: controllerIdx,
-            hand,
-            actuatorCount: gp.hapticActuators?.length ?? 0,
-          });
-        })
-        .catch(() => {});
       return;
     }
     console.info('[haptic] no actuator available', {
@@ -507,43 +524,6 @@ export class XrControllers {
     // XR session is active, so there's no stale-dispatch risk. Clearing
     // it here would break re-enter-VR — start() doesn't re-subscribe.
   }
-}
-
-/**
- * Pick the XRInputSource whose haptic actuator should be pulsed when
- * the given slot detected a hit. The slot's tracked handedness is the
- * source of truth — we then look up the *live* input source in
- * `session.inputSources` with that handedness so we're pulsing the
- * hand that's actually connected right now, not a stale slot cache.
- *
- * This guards against a specific Quest-browser behaviour we've seen in
- * the field: on a brief controller reconnect the runtime fires a new
- * `connected` event but re-seats the device into the *other* slot,
- * leaving the original slot's cached XRInputSource pointing at a now-
- * disconnected gamepad. Pulsing that cached actuator was firing the
- * wrong hand (specifically "right stick hit → left controller buzzes"
- * — see the bug report that prompted this helper).
- *
- * Returns null when:
- *   - the slot has no tracked hand (e.g. a hand-tracking
- *     `handedness === 'none'` entry);
- *   - OR the live session list has no input source with that
- *     handedness. The cached slot entry would also be stale in this
- *     case (it's the only reason live lookup can miss), so pulsing
- *     it would either no-op on a disconnected gamepad or — worse —
- *     fire the same wrong-hand bug this helper was written to fix.
- *     Callers skip the pulse on null.
- */
-export function resolveHapticSource(
-  liveInputSources: Iterable<XRInputSource>,
-  slotSrc: XRInputSource | null,
-): XRInputSource | null {
-  const hand = slotSrc?.handedness;
-  if (hand !== 'left' && hand !== 'right') return null;
-  for (const s of liveInputSources) {
-    if (s.handedness === hand) return s;
-  }
-  return null;
 }
 
 function laneLabel(lane: LaneValue): string {
