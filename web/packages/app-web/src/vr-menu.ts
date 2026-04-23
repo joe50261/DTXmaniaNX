@@ -68,10 +68,11 @@ const EXIT_H = 50;
 const EXIT_X = PANEL_W_PX - 40 - EXIT_W;
 const EXIT_Y = PANEL_H_PX - 70;
 
-const CALIB_W = 220;
-const CALIB_H = 36;
-const CALIB_X = 40;
-const CALIB_Y = PANEL_H_PX - 60;
+const UTIL_BTN_W = 180;
+const UTIL_BTN_H = 36;
+const UTIL_BTN_Y = PANEL_H_PX - 60;
+const CONFIG_BTN_X = 40;
+const CALIB_BTN_X = CONFIG_BTN_X + UTIL_BTN_W + 16;
 
 interface ButtonHit {
   /** Canvas rectangle. */
@@ -84,7 +85,8 @@ interface ButtonHit {
     | { kind: 'activate'; entryIdx: number }
     | { kind: 'chart'; song: SongEntry; chart: ChartEntry }
     | { kind: 'exit' }
-    | { kind: 'calibrate' };
+    | { kind: 'calibrate' }
+    | { kind: 'config' };
 }
 
 export interface VrMenuPick {
@@ -106,6 +108,10 @@ export interface VrMenuDeps {
    * calibration completes. Optional — menu simply omits the button if
    * no handler is provided (e.g. tests, early boot before audio is up). */
   onCalibrate?: () => void;
+  /** Player tapped the "Settings" button. Host hides the menu, shows
+   * the VR config panel, then re-shows the menu when the player closes
+   * it. Optional — menu omits the button if no handler is wired. */
+  onConfig?: () => void;
 }
 
 export class VrMenu {
@@ -461,6 +467,9 @@ export class VrMenu {
       case 'calibrate':
         this.deps?.onCalibrate?.();
         return;
+      case 'config':
+        this.deps?.onConfig?.();
+        return;
     }
   }
 
@@ -738,29 +747,43 @@ export class VrMenu {
     ctx.fillText('Exit VR', EXIT_X + EXIT_W / 2, EXIT_Y + 32);
     this.hits.push({ x: EXIT_X, y: EXIT_Y, w: EXIT_W, h: EXIT_H, action: { kind: 'exit' } });
 
-    // Calibrate Latency — drawn only if a handler is wired up. Compositor
-    // photon-to-motion delay differs from desktop, so players really do
-    // need a VR-path offset separate from the desktop one.
-    if (this.deps?.onCalibrate) {
-      const calibHover =
-        this.hoveredIdx >= 0 && this.hits[this.hoveredIdx]?.action.kind === 'calibrate';
-      ctx.fillStyle = calibHover ? '#2563eb' : '#1e293b';
-      ctx.fillRect(CALIB_X, CALIB_Y, CALIB_W, CALIB_H);
-      ctx.strokeStyle = '#475569';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(CALIB_X + 0.5, CALIB_Y + 0.5, CALIB_W - 1, CALIB_H - 1);
-      ctx.fillStyle = '#cbd5e1';
-      ctx.font = 'bold 13px ui-monospace, monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText('Calibrate Latency', CALIB_X + CALIB_W / 2, CALIB_Y + 23);
-      this.hits.push({
-        x: CALIB_X,
-        y: CALIB_Y,
-        w: CALIB_W,
-        h: CALIB_H,
-        action: { kind: 'calibrate' },
-      });
+    // Utility row: Settings + Calibrate. Each is drawn only if a handler
+    // is wired; callers can hide either without code churn.
+    if (this.deps?.onConfig) {
+      this.paintUtilityButton('Settings', CONFIG_BTN_X, 'config');
     }
+    if (this.deps?.onCalibrate) {
+      // Offset X if Settings isn't rendered so Calibrate doesn't float
+      // in the middle of the row.
+      const x = this.deps?.onConfig ? CALIB_BTN_X : CONFIG_BTN_X;
+      this.paintUtilityButton('Calibrate Latency', x, 'calibrate');
+    }
+  }
+
+  private paintUtilityButton(
+    label: string,
+    x: number,
+    actionKind: 'config' | 'calibrate'
+  ): void {
+    const ctx = this.ctx;
+    const hovered =
+      this.hoveredIdx >= 0 && this.hits[this.hoveredIdx]?.action.kind === actionKind;
+    ctx.fillStyle = hovered ? '#2563eb' : '#1e293b';
+    ctx.fillRect(x, UTIL_BTN_Y, UTIL_BTN_W, UTIL_BTN_H);
+    ctx.strokeStyle = '#475569';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, UTIL_BTN_Y + 0.5, UTIL_BTN_W - 1, UTIL_BTN_H - 1);
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, x + UTIL_BTN_W / 2, UTIL_BTN_Y + 23);
+    this.hits.push({
+      x,
+      y: UTIL_BTN_Y,
+      w: UTIL_BTN_W,
+      h: UTIL_BTN_H,
+      action: { kind: actionKind },
+    });
   }
 }
 

@@ -876,6 +876,15 @@ function showVrMenuForActive(fs?: GameFsContext): void {
           showVrMenuForActive(fs);
         });
       },
+      onConfig: () => {
+        if (!activeGame) return;
+        schedulePreview(null);
+        activeGame.hideVrMenu();
+        activeGame.showVrConfig(() => {
+          activeGame?.hideVrConfig();
+          showVrMenuForActive(fs);
+        });
+      },
     }
   );
 }

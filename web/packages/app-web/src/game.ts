@@ -51,6 +51,7 @@ import {
 } from './tick-state.js';
 import { VrMenu, type VrMenuDeps, type VrMenuPick } from './vr-menu.js';
 import { VrCalibrate } from './vr-calibrate.js';
+import { VrConfig } from './vr-config.js';
 import type { BoxNode } from '@dtxmania/dtx-core';
 import { loadAudioOffsetMs } from './calibrate-model.js';
 import { activeToast } from './hud-toast.js';
@@ -156,8 +157,10 @@ export class Game {
   private readonly xrControllers: XrControllers;
   private readonly vrMenu: VrMenu;
   private readonly vrCalibrate: VrCalibrate;
+  private readonly vrConfig: VrConfig;
   private menuIsShown = false;
   private calibrateIsShown = false;
+  private configIsShown = false;
 
   constructor(private readonly canvas: HTMLCanvasElement, skin: SkinTextures = {}) {
     this.renderer = new Renderer(canvas, skin);
@@ -180,6 +183,7 @@ export class Game {
     this.xrControllers.onHit((e) => this.handleLaneHit(e));
     this.vrMenu = new VrMenu(this.renderer.webgl, this.renderer.scene);
     this.vrCalibrate = new VrCalibrate(this.renderer.webgl, this.renderer.scene, this.engine);
+    this.vrConfig = new VrConfig(this.renderer.webgl, this.renderer.scene);
     // Tick every frame, even before a chart is loaded, so the VR menu's
     // raycaster + trigger polling keeps working while the player's still
     // picking a song.
@@ -192,8 +196,10 @@ export class Game {
       this.xrControllers.stop();
       this.vrMenu.hide();
       this.vrCalibrate.hide();
+      this.vrConfig.hide();
       this.menuIsShown = false;
       this.calibrateIsShown = false;
+      this.configIsShown = false;
       // Restore playfield visibility: if the player exited via the Exit VR
       // button, the VR menu was up and we'd hidden the playfield. Without
       // this, the next enterXR would scale + position the playfield but
@@ -255,6 +261,21 @@ export class Game {
   hideVrCalibrate(): void {
     this.calibrateIsShown = false;
     this.vrCalibrate.hide();
+  }
+
+  /** Show the VR settings panel. Mirrors the calibrate pair: caller
+   * should hide the menu first so they don't collide on the shared
+   * controller input. `onClose` is invoked when the player hits the
+   * panel's Back button. */
+  showVrConfig(onClose: () => void): void {
+    this.configIsShown = true;
+    this.renderer.setPlayfieldVisible(false);
+    this.vrConfig.show(onClose);
+  }
+
+  hideVrConfig(): void {
+    this.configIsShown = false;
+    this.vrConfig.hide();
   }
 
   get inXR(): boolean {
@@ -424,6 +445,7 @@ export class Game {
     this.stopBgm();
     this.vrMenu.dispose();
     this.vrCalibrate.dispose();
+    this.vrConfig.dispose();
     this.renderer.dispose();
   }
 
@@ -599,6 +621,7 @@ export class Game {
     this.xrControllers.tick();
     this.vrMenu.tick();
     this.vrCalibrate.tick();
+    this.vrConfig.tick();
     // VR face-button mapping during play:
     //   - LEFT  X (button 4) / Y (button 5) → leaveSong (panic quit)
     //   - RIGHT A (button 4)                → capture loop A marker
