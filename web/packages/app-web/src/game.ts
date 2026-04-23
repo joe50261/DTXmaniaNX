@@ -52,6 +52,7 @@ import {
 import { VrMenu, type VrMenuDeps, type VrMenuPick } from './vr-menu.js';
 import type { BoxNode } from '@dtxmania/dtx-core';
 import { loadAudioOffsetMs } from './calibrate.js';
+import { activeToast } from './hud-toast.js';
 
 const COUNTDOWN_MS = 2000;
 const BGM_CHANNEL = 0x01;
@@ -742,6 +743,7 @@ export class Game {
       excellent: isExcellent(snap),
       finishedAtMs: this.finishedAtMs,
       inXR: this.renderer.inXR,
+      toast: activeToast(),
     };
     this.renderer.render(state);
     this.renderer.submitPadHits(this.lastPadHitMs);

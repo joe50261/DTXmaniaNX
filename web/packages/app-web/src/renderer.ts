@@ -75,6 +75,10 @@ export interface RenderState {
   finishedAtMs: number | null;
   /** True when the session runs inside a WebXR headset. Changes the result-screen footer hint. */
   inXR: boolean;
+  /** Active mid-play toast text + expiry. Null when nothing to show.
+   * Painted over the HUD so it's visible in both desktop and VR — a
+   * DOM overlay would be invisible inside an immersive WebXR session. */
+  toast: { text: string; expiresAtMs: number } | null;
 }
 
 /** Optional textures injected by the skin loader. Renderer tolerates absent textures. */
@@ -475,6 +479,7 @@ export class Renderer {
     this.drawHitFlashes(state);
     this.drawHUD(state);
     this.drawJudgmentFlash(state);
+    this.drawToast(state);        // highest z — pinned top-center, both desktop & VR
     ctx.restore();
   }
 
@@ -818,6 +823,63 @@ export class Renderer {
     ctx.fillText(state.judgmentFlash.text, lane.x + lane.width / 2, y);
     ctx.globalAlpha = 1;
     this.drawFastSlowLabel(state, lane, y, alpha);
+  }
+
+  /**
+   * Pinned-top toast band for mid-play feedback ("Loop A: measure 8",
+   * etc.). Painted onto the HUD canvas so it's visible on both the
+   * desktop ortho quad AND the VR floating playfield panel (a DOM
+   * overlay would be invisible inside an immersive WebXR session).
+   *
+   * Fades out over the last 250 ms of its lifetime. Expired toasts
+   * auto-clear inside `activeToast()` so we don't double-check here.
+   */
+  private drawToast(state: RenderState): void {
+    const toast = state.toast;
+    if (!toast) return;
+    const now = performance.now();
+    const remaining = toast.expiresAtMs - now;
+    if (remaining <= 0) return;
+    const fadeMs = 250;
+    const alpha = remaining >= fadeMs ? 1 : Math.max(0, remaining / fadeMs);
+
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = '18px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    const padX = 24;
+    const padY = 14;
+    const textWidth = ctx.measureText(toast.text).width;
+    const boxW = textWidth + padX * 2;
+    const boxH = 40;
+    const boxX = Math.round((CANVAS_W - boxW) / 2);
+    const boxY = 28;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+    ctx.strokeStyle = 'rgba(80, 120, 255, 0.55)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    // Rounded rectangle (no Path2D.roundRect fallback needed — all
+    // supported browsers have it, but the manual path keeps us safe
+    // on older WebView builds Quest Browser sometimes lags on).
+    const r = 6;
+    ctx.moveTo(boxX + r, boxY);
+    ctx.lineTo(boxX + boxW - r, boxY);
+    ctx.quadraticCurveTo(boxX + boxW, boxY, boxX + boxW, boxY + r);
+    ctx.lineTo(boxX + boxW, boxY + boxH - r);
+    ctx.quadraticCurveTo(boxX + boxW, boxY + boxH, boxX + boxW - r, boxY + boxH);
+    ctx.lineTo(boxX + r, boxY + boxH);
+    ctx.quadraticCurveTo(boxX, boxY + boxH, boxX, boxY + boxH - r);
+    ctx.lineTo(boxX, boxY + r);
+    ctx.quadraticCurveTo(boxX, boxY, boxX + r, boxY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff';
+    ctx.fillText(toast.text, CANVAS_W / 2, boxY + padY + 12);
+    ctx.restore();
   }
 
   /**

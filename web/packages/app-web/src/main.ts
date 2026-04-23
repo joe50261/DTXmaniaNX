@@ -45,6 +45,15 @@ import {
 import { loadSkin } from './skin.js';
 import type { SkinTextures } from './renderer.js';
 import { loadAudioOffsetMs, runCalibration, saveAudioOffsetMs } from './calibrate.js';
+import { activeToast, showToast } from './hud-toast.js';
+
+// Test hook for the Playwright e2e suite — the pre-R3 toast was a DOM
+// node Playwright could locate and assert on; now it's painted onto the
+// HUD canvas, so we expose the module singleton directly. Harmless in
+// production (a single function reference on window).
+(
+  window as unknown as { __dtxmaniaTest?: { activeToast: typeof activeToast } }
+).__dtxmaniaTest = { activeToast };
 import { AudioEngine } from '@dtxmania/audio-engine';
 
 /**
@@ -929,22 +938,6 @@ function setStatus(text: string): void {
   statusEl.textContent = text;
 }
 
-const toastEl = document.getElementById('hud-toast') as HTMLDivElement;
-let toastTimer: number | null = null;
-/** Mid-play feedback toast. Routes through a dedicated DOM element
- * because the main `#status` lives inside `#overlay` (display:none
- * during play), so `setStatus` alone isn't visible while the player
- * holds a keyboard shortcut or presses a VR face button. */
-function showToast(text: string, durationMs = 1800): void {
-  if (!toastEl) return;
-  toastEl.textContent = text;
-  toastEl.classList.add('visible');
-  if (toastTimer !== null) window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => {
-    toastEl.classList.remove('visible');
-    toastTimer = null;
-  }, durationMs);
-}
 
 function registerServiceWorker(): void {
   if (!('serviceWorker' in navigator)) return;
