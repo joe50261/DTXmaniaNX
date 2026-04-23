@@ -44,7 +44,8 @@ import {
 } from './fs/handle-store.js';
 import { loadSkin } from './skin.js';
 import type { SkinTextures } from './renderer.js';
-import { loadAudioOffsetMs, runCalibration, saveAudioOffsetMs } from './calibrate.js';
+import { runCalibration } from './calibrate.js';
+import { loadAudioOffsetMs, saveAudioOffsetMs } from './calibrate-model.js';
 import { activeToast, showToast } from './hud-toast.js';
 
 // Test hook for the Playwright e2e suite — the pre-R3 toast was a DOM
@@ -859,6 +860,21 @@ function showVrMenuForActive(fs?: GameFsContext): void {
         // handles the 600 ms debounce and stop-on-replace, so VR wheel
         // scrolling gets the same feel.
         schedulePreview(song);
+      },
+      onCalibrate: () => {
+        if (!activeGame) return;
+        // Stop the preview clip so its tail doesn't overlap the metronome
+        // clicks while the player is listening for beats.
+        schedulePreview(null);
+        activeGame.hideVrMenu();
+        activeGame.showVrCalibrate((offsetMs) => {
+          if (offsetMs !== null) {
+            saveAudioOffsetMs(offsetMs);
+            showToast(`Latency offset: ${Math.round(offsetMs)} ms`);
+          }
+          activeGame?.hideVrCalibrate();
+          showVrMenuForActive(fs);
+        });
       },
     }
   );

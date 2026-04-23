@@ -68,6 +68,11 @@ const EXIT_H = 50;
 const EXIT_X = PANEL_W_PX - 40 - EXIT_W;
 const EXIT_Y = PANEL_H_PX - 70;
 
+const CALIB_W = 220;
+const CALIB_H = 36;
+const CALIB_X = 40;
+const CALIB_Y = PANEL_H_PX - 60;
+
 interface ButtonHit {
   /** Canvas rectangle. */
   x: number;
@@ -78,7 +83,8 @@ interface ButtonHit {
   action:
     | { kind: 'activate'; entryIdx: number }
     | { kind: 'chart'; song: SongEntry; chart: ChartEntry }
-    | { kind: 'exit' };
+    | { kind: 'exit' }
+    | { kind: 'calibrate' };
 }
 
 export interface VrMenuPick {
@@ -95,6 +101,11 @@ export interface VrMenuDeps {
   joinPath: (folder: string, rel: string) => string;
   /** Called when focus lands on a song — host starts/stops preview audio. */
   onFocusedSong: (song: SongEntry | null) => void;
+  /** Player tapped the "Calibrate Latency" button. Host hides the menu
+   * and shows the VR calibration panel, then re-shows the menu when
+   * calibration completes. Optional — menu simply omits the button if
+   * no handler is provided (e.g. tests, early boot before audio is up). */
+  onCalibrate?: () => void;
 }
 
 export class VrMenu {
@@ -447,6 +458,9 @@ export class VrMenu {
       case 'exit':
         if (this.onExit) this.onExit();
         return;
+      case 'calibrate':
+        this.deps?.onCalibrate?.();
+        return;
     }
   }
 
@@ -723,6 +737,30 @@ export class VrMenu {
     ctx.textAlign = 'center';
     ctx.fillText('Exit VR', EXIT_X + EXIT_W / 2, EXIT_Y + 32);
     this.hits.push({ x: EXIT_X, y: EXIT_Y, w: EXIT_W, h: EXIT_H, action: { kind: 'exit' } });
+
+    // Calibrate Latency — drawn only if a handler is wired up. Compositor
+    // photon-to-motion delay differs from desktop, so players really do
+    // need a VR-path offset separate from the desktop one.
+    if (this.deps?.onCalibrate) {
+      const calibHover =
+        this.hoveredIdx >= 0 && this.hits[this.hoveredIdx]?.action.kind === 'calibrate';
+      ctx.fillStyle = calibHover ? '#2563eb' : '#1e293b';
+      ctx.fillRect(CALIB_X, CALIB_Y, CALIB_W, CALIB_H);
+      ctx.strokeStyle = '#475569';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(CALIB_X + 0.5, CALIB_Y + 0.5, CALIB_W - 1, CALIB_H - 1);
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('Calibrate Latency', CALIB_X + CALIB_W / 2, CALIB_Y + 23);
+      this.hits.push({
+        x: CALIB_X,
+        y: CALIB_Y,
+        w: CALIB_W,
+        h: CALIB_H,
+        action: { kind: 'calibrate' },
+      });
+    }
   }
 }
 

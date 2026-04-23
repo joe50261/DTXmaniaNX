@@ -50,8 +50,9 @@ import {
   type ResolvedLoopWindow,
 } from './tick-state.js';
 import { VrMenu, type VrMenuDeps, type VrMenuPick } from './vr-menu.js';
+import { VrCalibrate } from './vr-calibrate.js';
 import type { BoxNode } from '@dtxmania/dtx-core';
-import { loadAudioOffsetMs } from './calibrate.js';
+import { loadAudioOffsetMs } from './calibrate-model.js';
 import { activeToast } from './hud-toast.js';
 
 const COUNTDOWN_MS = 2000;
@@ -154,7 +155,9 @@ export class Game {
   private bgmSources: AudioBufferSourceNode[] = [];
   private readonly xrControllers: XrControllers;
   private readonly vrMenu: VrMenu;
+  private readonly vrCalibrate: VrCalibrate;
   private menuIsShown = false;
+  private calibrateIsShown = false;
 
   constructor(private readonly canvas: HTMLCanvasElement, skin: SkinTextures = {}) {
     this.renderer = new Renderer(canvas, skin);
@@ -176,6 +179,7 @@ export class Game {
     this.xrControllers.setPadsTexture(skin.pads);
     this.xrControllers.onHit((e) => this.handleLaneHit(e));
     this.vrMenu = new VrMenu(this.renderer.webgl, this.renderer.scene);
+    this.vrCalibrate = new VrCalibrate(this.renderer.webgl, this.renderer.scene, this.engine);
     // Tick every frame, even before a chart is loaded, so the VR menu's
     // raycaster + trigger polling keeps working while the player's still
     // picking a song.
@@ -187,7 +191,9 @@ export class Game {
     await this.renderer.enterXR(() => {
       this.xrControllers.stop();
       this.vrMenu.hide();
+      this.vrCalibrate.hide();
       this.menuIsShown = false;
+      this.calibrateIsShown = false;
       // Restore playfield visibility: if the player exited via the Exit VR
       // button, the VR menu was up and we'd hidden the playfield. Without
       // this, the next enterXR would scale + position the playfield but
@@ -233,6 +239,22 @@ export class Game {
     this.menuIsShown = false;
     this.renderer.setPlayfieldVisible(true);
     this.vrMenu.hide();
+  }
+
+  /** Show the VR calibration panel. Call `hideVrMenu()` first if the
+   * menu is currently up — the two UIs share the same controller input
+   * and shouldn't be visible simultaneously. `onDone` receives the
+   * measured offset in ms, or null if the player cancelled or the
+   * presses were too noisy to compute a median. */
+  showVrCalibrate(onDone: (offsetMs: number | null) => void): void {
+    this.calibrateIsShown = true;
+    this.renderer.setPlayfieldVisible(false);
+    this.vrCalibrate.show(onDone);
+  }
+
+  hideVrCalibrate(): void {
+    this.calibrateIsShown = false;
+    this.vrCalibrate.hide();
   }
 
   get inXR(): boolean {
@@ -401,6 +423,7 @@ export class Game {
     this.input.detach();
     this.stopBgm();
     this.vrMenu.dispose();
+    this.vrCalibrate.dispose();
     this.renderer.dispose();
   }
 
@@ -575,6 +598,7 @@ export class Game {
   private tick(): void {
     this.xrControllers.tick();
     this.vrMenu.tick();
+    this.vrCalibrate.tick();
     // VR face-button mapping during play:
     //   - LEFT  X (button 4) / Y (button 5) → leaveSong (panic quit)
     //   - RIGHT A (button 4)                → capture loop A marker
