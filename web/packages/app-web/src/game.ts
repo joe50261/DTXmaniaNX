@@ -52,6 +52,8 @@ import {
 import { VrMenu, type VrMenuDeps, type VrMenuPick } from './vr-menu.js';
 import { VrCalibrate } from './vr-calibrate.js';
 import { VrConfig } from './vr-config.js';
+import { VrOnScreenLog } from './vr-on-screen-log.js';
+import { getConfig, subscribe as subscribeConfig } from './config.js';
 import type { BoxNode } from '@dtxmania/dtx-core';
 import { loadAudioOffsetMs } from './calibrate-model.js';
 import { activeToast } from './hud-toast.js';
@@ -158,6 +160,8 @@ export class Game {
   private readonly vrMenu: VrMenu;
   private readonly vrCalibrate: VrCalibrate;
   private readonly vrConfig: VrConfig;
+  private readonly vrLog: VrOnScreenLog;
+  private readonly unsubConfig: () => void;
   private menuIsShown = false;
   private calibrateIsShown = false;
   private configIsShown = false;
@@ -184,6 +188,11 @@ export class Game {
     this.vrMenu = new VrMenu(this.renderer.webgl, this.renderer.scene);
     this.vrCalibrate = new VrCalibrate(this.renderer.webgl, this.renderer.scene, this.engine);
     this.vrConfig = new VrConfig(this.renderer.webgl, this.renderer.scene);
+    this.vrLog = new VrOnScreenLog(this.renderer.webgl, this.renderer.scene);
+    // Sync log panel visibility to the config flag + the XR session
+    // state. It's only meaningful while the headset is on; desktop
+    // already has the DOM `#on-screen-log` panel.
+    this.unsubConfig = subscribeConfig((cfg) => this.applyVrLogVisibility(cfg.vrLogEnabled));
     // Tick every frame, even before a chart is loaded, so the VR menu's
     // raycaster + trigger polling keeps working while the player's still
     // picking a song.
@@ -192,11 +201,16 @@ export class Game {
 
   /** Enter a WebXR immersive-vr session (Quest browser). Throws if unsupported. */
   async enterXR(onEnded: () => void): Promise<void> {
+    // Apply the log-panel visibility *before* the session starts so
+    // the mesh is already staged when the compositor picks up the
+    // scene, avoiding a single-frame flicker on session start.
+    this.applyVrLogVisibility(getConfig().vrLogEnabled);
     await this.renderer.enterXR(() => {
       this.xrControllers.stop();
       this.vrMenu.hide();
       this.vrCalibrate.hide();
       this.vrConfig.hide();
+      this.vrLog.hide();
       this.menuIsShown = false;
       this.calibrateIsShown = false;
       this.configIsShown = false;
@@ -276,6 +290,11 @@ export class Game {
   hideVrConfig(): void {
     this.configIsShown = false;
     this.vrConfig.hide();
+  }
+
+  private applyVrLogVisibility(enabled: boolean): void {
+    if (enabled && this.inXR) this.vrLog.show();
+    else this.vrLog.hide();
   }
 
   get inXR(): boolean {
@@ -443,9 +462,11 @@ export class Game {
   stop(): void {
     this.input.detach();
     this.stopBgm();
+    this.unsubConfig();
     this.vrMenu.dispose();
     this.vrCalibrate.dispose();
     this.vrConfig.dispose();
+    this.vrLog.dispose();
     this.renderer.dispose();
   }
 

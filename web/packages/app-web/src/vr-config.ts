@@ -247,6 +247,12 @@ export class VrConfig {
     // which song-time to snap when the menu/settings is open).
     y = this.paintLoopRange(y, cfg);
 
+    y += SECTION_GAP;
+    y = this.paintSection('Diagnostics', y);
+    y = this.paintToggle(y, 'In-VR console log', cfg.vrLogEnabled, (v) =>
+      updateConfig({ vrLogEnabled: v })
+    );
+
     // Footer hints
     ctx.fillStyle = '#64748b';
     ctx.font = '13px ui-monospace, monospace';
