@@ -412,15 +412,22 @@ export class XrControllers {
       });
       return;
     }
-    // Prefer the modern single-actuator API (`gamepad.vibrationActuator`,
-    // Chrome 89+ / Quest Browser current) over the legacy
-    // `hapticActuators[]` array. Some runtimes populate one and not the
-    // other; some populate both but with actuators bound to the wrong
-    // physical controller. We try `vibrationActuator.playEffect` first,
-    // fall back to `hapticActuators[0].pulse`, and log whichever path
-    // actually fires so the bug reporter can tell us which primitive the
-    // runtime is exposing. This diagnostic can be dialed back once the
-    // "right hit → left buzz, left hit → nothing" issue is understood.
+    // Priority order: legacy `hapticActuators[0].pulse` FIRST, then
+    // `vibrationActuator.playEffect` as fallback.
+    //
+    // Why not prefer the modern API? The user's in-VR diagnostic run
+    // showed `playEffect('dual-rumble', ...)` resolves with
+    // `"not-supported"` on the LEFT input source on Quest Browser —
+    // the actuator doesn't accept the dual-rumble effect type there,
+    // so the pulse silently never fires. Meanwhile the legacy
+    // `hapticActuators[0].pulse(intensity, duration)` is what the
+    // original 2026-04-21 fix shipped with and is known to work on
+    // both hands. The fallback still exists in case a future Quest
+    // Browser drops the legacy array entirely.
+    //
+    // Diagnostic console.info calls stay in place so we can see which
+    // primitive actually fires on each hit — flip Settings → In-VR
+    // console log on to read them back.
     const gp = src.gamepad as Gamepad & {
       vibrationActuator?: {
         playEffect: (type: string, params: { duration: number; strongMagnitude?: number; weakMagnitude?: number }) => Promise<string>;
@@ -428,11 +435,31 @@ export class XrControllers {
       hapticActuators?: GamepadHapticActuator[];
     };
     const hand = src.handedness;
+    const legacyAct = gp.hapticActuators?.[0];
+    if (legacyAct && 'pulse' in legacyAct) {
+      (legacyAct as GamepadHapticActuator & { pulse(intensity: number, durationMs: number): Promise<boolean> })
+        .pulse(0.6, 40)
+        .then((fired) => {
+          console.info('[haptic] hapticActuators[0].pulse fired', {
+            slotIdx: controllerIdx,
+            hand,
+            fired,
+          });
+        })
+        .catch((e: unknown) => {
+          console.info('[haptic] hapticActuators[0].pulse rejected', {
+            slotIdx: controllerIdx,
+            hand,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        });
+      return;
+    }
     if (gp.vibrationActuator?.playEffect) {
       gp.vibrationActuator
         .playEffect('dual-rumble', { duration: 40, strongMagnitude: 0.6, weakMagnitude: 0.6 })
         .then((result) => {
-          console.info('[haptic] vibrationActuator.playEffect fired', {
+          console.info('[haptic] vibrationActuator.playEffect fired (fallback)', {
             slotIdx: controllerIdx,
             hand,
             result,
@@ -445,20 +472,6 @@ export class XrControllers {
             error: e instanceof Error ? e.message : String(e),
           });
         });
-      return;
-    }
-    const act = gp.hapticActuators?.[0];
-    if (act && 'pulse' in act) {
-      (act as GamepadHapticActuator & { pulse(intensity: number, durationMs: number): Promise<boolean> })
-        .pulse(0.6, 40)
-        .then(() => {
-          console.info('[haptic] hapticActuators[0].pulse fired', {
-            slotIdx: controllerIdx,
-            hand,
-            actuatorCount: gp.hapticActuators?.length ?? 0,
-          });
-        })
-        .catch(() => {});
       return;
     }
     console.info('[haptic] no actuator available', {

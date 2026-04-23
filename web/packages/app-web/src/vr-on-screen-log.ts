@@ -25,17 +25,23 @@ import {
  * who don't want clutter can keep it off.
  */
 
-const PANEL_W_PX = 720;
-const PANEL_H_PX = 360;
-/** Narrow panel in the lower-left corner of view — big enough for
- * 20-ish rows of monospace text at the chosen font size. */
-const PANEL_WORLD_W = 1.0;
+const PANEL_W_PX = 960;
+const PANEL_H_PX = 480;
+/** Wider-and-taller panel in the lower-left of view — fits longer
+ * diagnostic lines (e.g. the haptic dump `{"slotIdx":1,"hand":"right",
+ * "result":"preempted"}` overflowed the old 720-wide panel and got
+ * clipped at the key field names). Word-wrapping takes care of the
+ * remainder. */
+const PANEL_WORLD_W = 1.4;
 const PANEL_WORLD_H = (PANEL_WORLD_W * PANEL_H_PX) / PANEL_W_PX;
 const PANEL_POS = new THREE.Vector3(-0.9, 1.05, -1.3);
 
-const VISIBLE_ROWS = 18;
+const VISIBLE_ROWS = 24;
 const ROW_H = 17;
 const FONT = '11px ui-monospace, monospace';
+/** Char width in the 11px monospace font we use. Empirical; Chromium
+ * and Quest Browser both render the ui-monospace glyphs at ≈6.6 px. */
+const CHAR_W_PX = 6.6;
 
 export class VrOnScreenLog {
   private readonly canvas: HTMLCanvasElement;
@@ -127,16 +133,29 @@ export class VrOnScreenLog {
 
     const padX = 8;
     const padY = 6;
-    const entries = this.latest.slice(-VISIBLE_ROWS);
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i]!;
-      ctx.fillStyle = LOG_LEVEL_COLOR[entry.level];
+    // Word-wrap rather than truncate: diagnostic entries like the
+    // haptic dump carry key=value pairs at the tail, and clipping
+    // those hides the answer the player is reading the log to find.
+    // We wrap by char-count (monospace font so each glyph is a fixed
+    // CHAR_W_PX) and render the newest entries first so the latest
+    // line is always on screen even when a single entry spans 3 rows.
+    const maxCharsPerRow = Math.floor((PANEL_W_PX - padX * 2) / CHAR_W_PX);
+    const rows: Array<{ text: string; color: string }> = [];
+    for (const entry of this.latest) {
+      const color = LOG_LEVEL_COLOR[entry.level];
       const text = formatLogEntry(entry);
-      // Truncate to fit the panel width — monospace so a char-count
-      // cap is a close-enough proxy for measureText.
-      const maxChars = 96;
-      const line = text.length > maxChars ? text.slice(0, maxChars - 1) + '…' : text;
-      ctx.fillText(line, padX, padY + i * ROW_H);
+      for (let off = 0; off < text.length; off += maxCharsPerRow) {
+        rows.push({
+          text: text.slice(off, off + maxCharsPerRow),
+          color,
+        });
+      }
+    }
+    const visible = rows.slice(-VISIBLE_ROWS);
+    for (let i = 0; i < visible.length; i++) {
+      const row = visible[i]!;
+      ctx.fillStyle = row.color;
+      ctx.fillText(row.text, padX, padY + i * ROW_H);
     }
     this.texture.needsUpdate = true;
   }
