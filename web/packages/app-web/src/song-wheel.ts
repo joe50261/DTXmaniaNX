@@ -1,20 +1,27 @@
-import type { BoxNode, ChartEntry, LibraryNode, SongEntry, SongNode } from '@dtxmania/dtx-core';
+import type { BoxNode, ChartEntry, SongEntry } from '@dtxmania/dtx-core';
+import {
+  buildBreadcrumbPath,
+  buildDisplayEntries,
+  compareNodes,
+  cycleDifficultySlot,
+  cycleFocus,
+  DIFFICULTY_SLOT_LABELS,
+  displayTitle,
+  findBoxByPath,
+  formatBestRecordLine,
+  formatSongMeta,
+  lampTier,
+  pickChartForSlot,
+  pickRandomSongIn,
+  rowTitle,
+  SORT_MODES,
+  WHEEL_CENTER_OFFSET,
+  WHEEL_VISIBLE_ROWS,
+  type DisplayEntry,
+  type SortMode,
+} from './song-wheel-model.js';
 
-/** Number of visible rows in the wheel. Odd so there's a single focused
- * center row with equal offsets above and below. */
-const WHEEL_VISIBLE_ROWS = 7;
-const WHEEL_CENTER_OFFSET = (WHEEL_VISIBLE_ROWS - 1) / 2;
-
-const DIFFICULTY_SLOT_LABELS = ['NOVICE', 'REGULAR', 'EXPERT', 'MASTER', 'DTX'] as const;
-
-/** Synthetic wheel entries that DTXmania renders alongside real songs /
- * boxes. We don't bake them into the scanner tree; they're computed at
- * render time so the scanner doesn't have to know about UI conventions. */
-type SyntheticEntry =
-  | { kind: 'back'; parent: BoxNode }
-  | { kind: 'random'; box: BoxNode };
-
-type DisplayEntry = { kind: 'node'; node: LibraryNode } | SyntheticEntry;
+export type { SortMode } from './song-wheel-model.js';
 
 export interface SongWheelCallbacks {
   /** Called when the user commits a chart (Enter key or direct chart-btn click). */
@@ -40,10 +47,11 @@ export interface SongWheelCallbacks {
  *
  * Mouse still works: clicking an unfocused row moves focus to it;
  * clicking a chart button on the focused row starts that chart directly.
+ *
+ * All shared data/logic (wheel size, entry list building, sort mode,
+ * breadcrumb path) lives in `song-wheel-model.ts` so the VR canvas view
+ * (`vr-menu.ts`) can subscribe to the same model.
  */
-export type SortMode = 'title' | 'artist' | 'bpm' | 'level';
-const SORT_MODES: readonly SortMode[] = ['title', 'artist', 'bpm', 'level'];
-
 export class SongWheel {
   private root: BoxNode | null = null;
   private currentBox: BoxNode | null = null;
@@ -152,31 +160,17 @@ export class SongWheel {
   }
 
   private moveFocus(delta: number): void {
-    const n = this.entries.length;
-    if (n === 0) return;
-    this.focusIdx = ((this.focusIdx + delta) % n + n) % n;
+    if (this.entries.length === 0) return;
+    this.focusIdx = cycleFocus(this.focusIdx, this.entries.length, delta);
     this.render();
     this.emitFocusChanged();
   }
 
   private cycleDifficulty(delta: number): void {
     const song = this.focusedSong();
-    if (!song || song.charts.length === 0) return;
-    // The available slots are song.charts' slot numbers (not always
-    // contiguous: a song may have only slot 1 + 3). Find the current
-    // index within the SLOTS present, step, and translate back.
-    const slots = song.charts.map((c) => c.slot).sort((a, b) => a - b);
-    const effective = this.chartForPreferred(song);
-    const curIdx = slots.indexOf(effective.slot);
-    const next = ((curIdx + delta) % slots.length + slots.length) % slots.length;
-    this.preferredSlot = slots[next]!;
+    if (!song) return;
+    this.preferredSlot = cycleDifficultySlot(song, this.preferredSlot, delta);
     this.render();
-  }
-
-  /** Pick the chart whose slot matches preferredSlot, falling back to the
-   * nearest-higher and then the highest available. */
-  private chartForPreferred(song: SongEntry): ChartEntry {
-    return pickChartForSlot(song, this.preferredSlot);
   }
 
   /** Commit the focused entry: start a song, descend into a box, pop out
@@ -189,8 +183,8 @@ export class SongWheel {
       return;
     }
     if (entry.kind === 'random') {
-      const song = this.pickRandomSongIn(entry.box);
-      if (song) this.callbacks.onStart(this.chartForPreferred(song));
+      const song = pickRandomSongIn(entry.box);
+      if (song) this.callbacks.onStart(pickChartForSlot(song, this.preferredSlot));
       return;
     }
     const node = entry.node;
@@ -199,7 +193,7 @@ export class SongWheel {
       return;
     }
     // SongNode
-    this.callbacks.onStart(this.chartForPreferred(node.entry));
+    this.callbacks.onStart(pickChartForSlot(node.entry, this.preferredSlot));
   }
 
   private enterBox(box: BoxNode): void {
@@ -224,18 +218,6 @@ export class SongWheel {
     this.focusIdx = returnIdx >= 0 ? returnIdx : 0;
     this.render();
     this.emitFocusChanged();
-  }
-
-  private pickRandomSongIn(box: BoxNode): SongEntry | null {
-    const songs: SongEntry[] = [];
-    const stack: LibraryNode[] = [box];
-    while (stack.length > 0) {
-      const node = stack.pop()!;
-      if (node.type === 'song') songs.push(node.entry);
-      else for (const c of node.children) stack.push(c);
-    }
-    if (songs.length === 0) return null;
-    return songs[Math.floor(Math.random() * songs.length)] ?? null;
   }
 
   /** Set the sort mode; order of children is recomputed and focus reset
@@ -279,27 +261,11 @@ export class SongWheel {
     this.emitFocusChanged();
   }
 
-  /** Rebuild the flat display list for `currentBox`: synthetic Back at
-   * the top (if not root), Random, then children filtered + sorted.
-   * Called whenever currentBox / sortMode / searchQuery changes. */
   private rebuildEntries(): void {
-    const box = this.currentBox;
-    this.entries = [];
-    if (!box) return;
-    if (box.parent) {
-      this.entries.push({ kind: 'back', parent: box.parent });
-    }
-    this.entries.push({ kind: 'random', box });
-
-    const q = this.searchQuery;
-    const children = box.children.filter((c) => {
-      if (!q) return true;
-      return displayTitle(c).toLowerCase().includes(q);
+    this.entries = buildDisplayEntries(this.currentBox, {
+      sort: this.sortMode,
+      searchQuery: this.searchQuery,
     });
-    children.sort((a, b) => compareNodes(a, b, this.sortMode));
-    for (const child of children) {
-      this.entries.push({ kind: 'node', node: child });
-    }
   }
 
   /** Skip the synthetic Back/Random when resetting focus — the player
@@ -321,26 +287,19 @@ export class SongWheel {
 
   private renderBreadcrumb(): void {
     this.breadcrumbEl.replaceChildren();
-    if (!this.currentBox) return;
-    // Walk up from currentBox collecting names; reverse so we display
-    // root → … → current.
-    const chain: BoxNode[] = [];
-    for (let b: BoxNode | null = this.currentBox; b !== null; b = b.parent) {
-      chain.push(b);
-    }
-    chain.reverse();
-    for (let i = 0; i < chain.length; i++) {
-      const box = chain[i]!;
+    const segments = buildBreadcrumbPath(this.currentBox);
+    for (let i = 0; i < segments.length; i++) {
+      const { node, current } = segments[i]!;
       const seg = document.createElement('span');
       seg.className = 'breadcrumb-seg';
-      seg.textContent = box.name;
-      if (box === this.currentBox) seg.classList.add('current');
+      seg.textContent = node.name;
+      if (current) seg.classList.add('current');
       else {
         seg.classList.add('nav');
-        seg.addEventListener('click', () => this.enterBox(box));
+        seg.addEventListener('click', () => this.enterBox(node));
       }
       this.breadcrumbEl.appendChild(seg);
-      if (i < chain.length - 1) {
+      if (i < segments.length - 1) {
         const sep = document.createElement('span');
         sep.className = 'breadcrumb-sep';
         sep.textContent = '›';
@@ -403,7 +362,7 @@ export class SongWheel {
 
       const chartRow = document.createElement('div');
       chartRow.className = 'wheel-charts';
-      const selectedChart = this.chartForPreferred(song);
+      const selectedChart = pickChartForSlot(song, this.preferredSlot);
       for (const chart of [...song.charts].sort((a, b) => a.slot - b.slot)) {
         const btn = document.createElement('button');
         btn.className = 'chart-btn';
@@ -420,7 +379,7 @@ export class SongWheel {
         // Clear-lamp dot in the top-right corner if this chart has a
         // best-of record. Colour tiers match standard rhythm-game
         // convention: gold=excellent, cyan=full combo, grey=played.
-        const lampColor = lampForRecord(chart);
+        const lampColor = domLampColor(chart);
         if (lampColor) {
           const lamp = document.createElement('span');
           lamp.className = 'chart-lamp';
@@ -467,7 +426,7 @@ export class SongWheel {
 
     const diffList = document.createElement('div');
     diffList.className = 'status-diffs';
-    const selected = this.chartForPreferred(song);
+    const selected = pickChartForSlot(song, this.preferredSlot);
     for (let slot = 0; slot < DIFFICULTY_SLOT_LABELS.length; slot++) {
       const chart = slotsUsed.get(slot);
       const row = document.createElement('div');
@@ -517,111 +476,13 @@ export class SongWheel {
   }
 }
 
-/** Map a chart's ChartRecord (if any) to a lamp colour. Returns null for
- * never-played charts so the caller can skip painting altogether. */
-function lampForRecord(chart: ChartEntry): string | null {
-  const r = chart.record;
-  if (!r) return null;
-  if (r.excellent) return '#fde047';   // gold
-  if (r.fullCombo) return '#7dd3fc';   // cyan
-  return '#64748b';                    // plain "played" slate
-}
-
-/** Compact summary line for the status panel. Undefined when the
- * chart's never been played — the metaLines loop then skips the row. */
-function formatBestRecordLine(chart: ChartEntry): string | undefined {
-  const r = chart.record;
-  if (!r) return undefined;
-  const score = r.bestScore.toString().padStart(7, '0');
-  const medal = r.excellent ? ' · EX' : r.fullCombo ? ' · FC' : '';
-  return `${score} (${r.bestRank})${medal}`;
-}
-
-/** Pick the chart whose slot matches `preferredSlot`, falling back to
- * the nearest-higher slot and then the highest available. Pure so it
- * can be unit-tested independent of SongWheel's DOM.
- *
- * Why "nearest higher" over "nearest either direction": if the player
- * has been cycling through MASTER (slot 3) and lands on a song that
- * only offers NOVICE (0) + REGULAR (1), picking the highest avoids a
- * sudden difficulty downshift to the easiest chart — usually not
- * what the player wants. */
-export function pickChartForSlot(song: SongEntry, preferredSlot: number): ChartEntry {
-  const sorted = [...song.charts].sort((a, b) => a.slot - b.slot);
-  const exact = sorted.find((c) => c.slot === preferredSlot);
-  if (exact) return exact;
-  const nextHigher = sorted.find((c) => c.slot >= preferredSlot);
-  return nextHigher ?? sorted[sorted.length - 1]!;
-}
-
-/** Walk the tree looking for a BoxNode whose `path` matches. Lets
- * setRoot restore the player's browse position across Rescans where
- * BoxNode identity changes. */
-export function findBoxByPath(box: BoxNode, path: string): BoxNode | null {
-  if (box.path === path) return box;
-  for (const child of box.children) {
-    if (child.type !== 'box') continue;
-    const found = findBoxByPath(child, path);
-    if (found) return found;
-  }
-  return null;
-}
-
-function rowTitle(entry: DisplayEntry): string {
-  if (entry.kind === 'back') return `⬆  ..  (${entry.parent.name})`;
-  if (entry.kind === 'random') return '🎲  Random';
-  const node = entry.node;
-  if (node.type === 'box') return `📁  ${node.name}`;
-  return node.entry.title;
-}
-
-function displayTitle(node: LibraryNode): string {
-  return node.type === 'box' ? node.name : node.entry.title;
-}
-
-/** Sort key for the preferred-slot chart's level, or 0 if no chart has
- * a parsed level. Used for the `level` sort mode so that unknown levels
- * fall to the top (matches DTXmania's "ungraded" ordering). */
-function levelKey(node: LibraryNode): number {
-  if (node.type === 'box') return 0;
-  const levels = node.entry.charts
-    .map((c) => c.drumLevel ?? 0)
-    .filter((l) => l > 0);
-  if (levels.length === 0) return 0;
-  return Math.max(...levels);
-}
-
-export function compareNodes(a: LibraryNode, b: LibraryNode, mode: SortMode): number {
-  // Boxes always sort above songs within the same tier so the folder
-  // layout stays visually obvious after a sort. Mirrors DTXmania's habit
-  // of listing BOX nodes at the top of a wheel.
-  if (a.type !== b.type) return a.type === 'box' ? -1 : 1;
-  switch (mode) {
-    case 'title':
-      return displayTitle(a).localeCompare(displayTitle(b));
-    case 'artist': {
-      const aa = a.type === 'song' ? (a.entry.artist ?? '') : '';
-      const bb = b.type === 'song' ? (b.entry.artist ?? '') : '';
-      const primary = aa.localeCompare(bb);
-      return primary !== 0 ? primary : displayTitle(a).localeCompare(displayTitle(b));
-    }
-    case 'bpm': {
-      const aa = a.type === 'song' ? (a.entry.bpm ?? 0) : 0;
-      const bb = b.type === 'song' ? (b.entry.bpm ?? 0) : 0;
-      const primary = aa - bb;
-      return primary !== 0 ? primary : displayTitle(a).localeCompare(displayTitle(b));
-    }
-    case 'level': {
-      const primary = levelKey(a) - levelKey(b);
-      return primary !== 0 ? primary : displayTitle(a).localeCompare(displayTitle(b));
-    }
-  }
-}
-
-function formatSongMeta(song: SongEntry): string {
-  const parts: string[] = [];
-  if (song.artist) parts.push(song.artist);
-  if (song.genre) parts.push(song.genre);
-  if (song.bpm) parts.push(`BPM ${Math.round(song.bpm)}`);
-  return parts.join(' · ');
+/** DOM palette for lamp dots. The "played" tier uses a darker slate than
+ * the canvas/VR palette — CSS on the chart button already brightens on
+ * hover so we want the rest state a bit dimmer. */
+function domLampColor(chart: ChartEntry): string | null {
+  const tier = lampTier(chart);
+  if (tier === null) return null;
+  if (tier === 'excellent') return '#fde047'; // gold
+  if (tier === 'fullCombo') return '#7dd3fc'; // cyan
+  return '#64748b'; // slate
 }

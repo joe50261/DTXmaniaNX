@@ -1,10 +1,26 @@
 import * as THREE from 'three';
-import type { BoxNode, ChartEntry, LibraryNode, SongEntry } from '@dtxmania/dtx-core';
+import type { BoxNode, ChartEntry, SongEntry } from '@dtxmania/dtx-core';
 import {
   findButtonAtPoint,
   stepStickAxis,
   type StickAxisState,
 } from './vr-menu-input.js';
+import {
+  buildBreadcrumbPath,
+  buildDisplayEntries,
+  cycleDifficultySlot,
+  cycleFocus,
+  DIFFICULTY_SLOT_LABELS,
+  findBoxByPath,
+  formatBestRecordLine,
+  lampTier,
+  pickChartForSlot,
+  pickRandomSongIn,
+  rowTitle,
+  WHEEL_CENTER_OFFSET,
+  WHEEL_VISIBLE_ROWS,
+  type DisplayEntry,
+} from './song-wheel-model.js';
 
 /**
  * In-VR song-selection panel — DTXmania Stage 05 flavour.
@@ -34,9 +50,6 @@ const PANEL_WORLD_W = 1.6;
 const PANEL_WORLD_H = (PANEL_WORLD_W * PANEL_H_PX) / PANEL_W_PX;
 const PANEL_POS = new THREE.Vector3(0, 1.45, -1.5);
 
-/** Number of wheel rows — odd so there's a single visual focus row. */
-const WHEEL_VISIBLE_ROWS = 7;
-const WHEEL_CENTER_OFFSET = (WHEEL_VISIBLE_ROWS - 1) / 2;
 const WHEEL_X = 40;
 const WHEEL_W = 560;
 const WHEEL_ROW_H = 74;
@@ -54,13 +67,6 @@ const EXIT_W = 200;
 const EXIT_H = 50;
 const EXIT_X = PANEL_W_PX - 40 - EXIT_W;
 const EXIT_Y = PANEL_H_PX - 70;
-
-const DIFFICULTY_SLOT_LABELS = ['NOVICE', 'REGULAR', 'EXPERT', 'MASTER', 'DTX'] as const;
-
-type SyntheticEntry =
-  | { kind: 'back'; parent: BoxNode }
-  | { kind: 'random'; box: BoxNode };
-type DisplayEntry = { kind: 'node'; node: LibraryNode } | SyntheticEntry;
 
 interface ButtonHit {
   /** Canvas rectangle. */
@@ -347,9 +353,8 @@ export class VrMenu {
   }
 
   private moveFocus(delta: number): void {
-    const n = this.entries.length;
-    if (n === 0) return;
-    this.focusIdx = ((this.focusIdx + delta) % n + n) % n;
+    if (this.entries.length === 0) return;
+    this.focusIdx = cycleFocus(this.focusIdx, this.entries.length, delta);
     this.emitFocusedSong();
     void this.loadCoverForFocused();
     this.paint();
@@ -357,12 +362,8 @@ export class VrMenu {
 
   private cycleDifficulty(delta: number): void {
     const song = this.focusedSong();
-    if (!song || song.charts.length === 0) return;
-    const slots = song.charts.map((c) => c.slot).sort((a, b) => a - b);
-    const effective = this.chartForPreferred(song);
-    const curIdx = slots.indexOf(effective.slot);
-    const next = ((curIdx + delta) % slots.length + slots.length) % slots.length;
-    this.preferredSlot = slots[next]!;
+    if (!song) return;
+    this.preferredSlot = cycleDifficultySlot(song, this.preferredSlot, delta);
     this.paint();
   }
 
@@ -373,11 +374,7 @@ export class VrMenu {
   }
 
   private chartForPreferred(song: SongEntry): ChartEntry {
-    const sorted = [...song.charts].sort((a, b) => a.slot - b.slot);
-    const exact = sorted.find((c) => c.slot === this.preferredSlot);
-    if (exact) return exact;
-    const nextHigher = sorted.find((c) => c.slot >= this.preferredSlot);
-    return nextHigher ?? sorted[sorted.length - 1]!;
+    return pickChartForSlot(song, this.preferredSlot);
   }
 
   private activateFocused(): void {
@@ -388,7 +385,7 @@ export class VrMenu {
       return;
     }
     if (entry.kind === 'random') {
-      const song = this.pickRandomSongIn(entry.box);
+      const song = pickRandomSongIn(entry.box);
       if (song && this.onPick) {
         this.onPick({ song, chart: this.chartForPreferred(song) });
       }
@@ -428,25 +425,10 @@ export class VrMenu {
     this.paint();
   }
 
-  private pickRandomSongIn(box: BoxNode): SongEntry | null {
-    const songs: SongEntry[] = [];
-    const stack: LibraryNode[] = [box];
-    while (stack.length > 0) {
-      const node = stack.pop()!;
-      if (node.type === 'song') songs.push(node.entry);
-      else for (const c of node.children) stack.push(c);
-    }
-    if (songs.length === 0) return null;
-    return songs[Math.floor(Math.random() * songs.length)] ?? null;
-  }
-
   private rebuildEntries(): void {
-    const box = this.currentBox;
-    this.entries = [];
-    if (!box) return;
-    if (box.parent) this.entries.push({ kind: 'back', parent: box.parent });
-    this.entries.push({ kind: 'random', box });
-    for (const child of box.children) this.entries.push({ kind: 'node', node: child });
+    // VR menu doesn't expose sort/search controls yet — children appear
+    // in scan order (matches the legacy behaviour).
+    this.entries = buildDisplayEntries(this.currentBox);
   }
 
   private invokeHit(hit: ButtonHit): void {
@@ -520,7 +502,13 @@ export class VrMenu {
     // Breadcrumb
     ctx.font = '15px ui-monospace, monospace';
     ctx.fillStyle = '#94a3b8';
-    ctx.fillText(this.breadcrumbText(), 40, 86);
+    ctx.fillText(
+      buildBreadcrumbPath(this.currentBox)
+        .map((s) => s.node.name)
+        .join('  ›  '),
+      40,
+      86
+    );
 
     this.paintWheel();
     this.paintCover();
@@ -528,13 +516,6 @@ export class VrMenu {
     this.paintFooter();
 
     this.texture.needsUpdate = true;
-  }
-
-  private breadcrumbText(): string {
-    const chain: string[] = [];
-    for (let b: BoxNode | null = this.currentBox; b; b = b.parent) chain.push(b.name);
-    chain.reverse();
-    return chain.join('  ›  ');
   }
 
   private paintWheel(): void {
@@ -631,7 +612,7 @@ export class VrMenu {
       // Clear-lamp dot in the top-right corner, mirrors the desktop
       // wheel. Only drawn when the chart has a record — no dot = never
       // played.
-      const lampColor = vrLampForRecord(chart);
+      const lampColor = canvasLampColor(chart);
       if (lampColor) {
         ctx.fillStyle = lampColor;
         ctx.beginPath();
@@ -707,7 +688,7 @@ export class VrMenu {
     y += 12;
     ctx.textAlign = 'left';
     const lines: Array<[string, string | undefined]> = [
-      ['Best', vrFormatBestLine(selected)],
+      ['Best', formatBestRecordLine(selected)],
       ['Artist', song.artist],
       ['Genre', song.genre],
       ['BPM', song.bpm ? Math.round(song.bpm).toString() : undefined],
@@ -745,41 +726,15 @@ export class VrMenu {
   }
 }
 
-/** Walk the tree looking for a BoxNode whose `path` matches. Used to
- * restore browse state after the scanner produces fresh BoxNode
- * references (e.g. after Rescan or IDB cache hydration). */
-function findBoxByPath(box: BoxNode, path: string): BoxNode | null {
-  if (box.path === path) return box;
-  for (const child of box.children) {
-    if (child.type !== 'box') continue;
-    const found = findBoxByPath(child, path);
-    if (found) return found;
-  }
-  return null;
-}
-
-function vrLampForRecord(chart: ChartEntry): string | null {
-  const r = chart.record;
-  if (!r) return null;
-  if (r.excellent) return '#fde047';
-  if (r.fullCombo) return '#7dd3fc';
+/** Canvas palette for lamp dots. Matches the DOM palette except the
+ * "played" tier is a lighter slate (canvas background is darker than the
+ * DOM button background, so the dot needs more contrast). */
+function canvasLampColor(chart: ChartEntry): string | null {
+  const tier = lampTier(chart);
+  if (tier === null) return null;
+  if (tier === 'excellent') return '#fde047';
+  if (tier === 'fullCombo') return '#7dd3fc';
   return '#94a3b8';
-}
-
-function vrFormatBestLine(chart: ChartEntry): string | undefined {
-  const r = chart.record;
-  if (!r) return undefined;
-  const score = r.bestScore.toString().padStart(7, '0');
-  const medal = r.excellent ? ' · EX' : r.fullCombo ? ' · FC' : '';
-  return `${score} (${r.bestRank})${medal}`;
-}
-
-function rowTitle(entry: DisplayEntry): string {
-  if (entry.kind === 'back') return `⬆  ..  (${entry.parent.name})`;
-  if (entry.kind === 'random') return '🎲  Random';
-  const node = entry.node;
-  if (node.type === 'box') return `📁  ${node.name}`;
-  return node.entry.title;
 }
 
 function truncate(s: string, max: number): string {
