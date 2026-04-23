@@ -76,19 +76,31 @@ export const VR_CONFIG_LAYOUT = Object.freeze({
  * there's no tooltip / manual to fall back on inside the headset.
  * Exported for the unit-test spec so label drift (e.g. rename "Bass
  * (Kick)" → "Kick") stays a one-place change. */
-export const AUTO_PLAY_LABELS: Record<keyof AutoPlayMap, string> = {
-  LC: 'L.Crash',
-  HH: 'Hi-Hat',
-  LP: 'L.Pedal',
-  SD: 'Snare',
-  HT: 'Hi Tom',
-  BD: 'Bass (Kick)',
-  LT: 'Low Tom',
-  FT: 'Floor Tom',
-  CY: 'Crash',
-  RD: 'Ride',
-  LBD: 'Left Bass',
-};
+export const AUTO_PLAY_LABELS: Readonly<Record<keyof AutoPlayMap, string>> =
+  Object.freeze({
+    LC: 'L.Crash',
+    HH: 'Hi-Hat',
+    LP: 'L.Pedal',
+    SD: 'Snare',
+    HT: 'Hi Tom',
+    BD: 'Bass (Kick)',
+    LT: 'Low Tom',
+    FT: 'Floor Tom',
+    CY: 'Crash',
+    RD: 'Ride',
+    LBD: 'Left Bass',
+  });
+
+/** Footer hint strings, exported so geometry tests can compute their
+ * expected widths from `.length` instead of hand-estimating character
+ * counts. Kept here (not inside paintFooter) so any edit to the
+ * wording automatically re-runs the geometry invariants. */
+export const VR_CONFIG_FOOTER_HINTS = Object.freeze({
+  line1:
+    'Hit the − / + buttons to step a slider. Toggles flip on click. Changes persist instantly.',
+  line2:
+    'Loop A / B capture lives on the right controller face buttons during play.',
+});
 
 interface ButtonHit {
   x: number;
@@ -411,16 +423,8 @@ export class VrConfig {
     ctx.fillStyle = '#64748b';
     ctx.font = '13px ui-monospace, monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(
-      'Hit the − / + buttons to step a slider. Toggles flip on click. Changes persist instantly.',
-      40,
-      FOOTER_TOP + 22
-    );
-    ctx.fillText(
-      'Loop A / B capture lives on the right controller face buttons during play.',
-      40,
-      FOOTER_TOP + 42
-    );
+    ctx.fillText(VR_CONFIG_FOOTER_HINTS.line1, 40, FOOTER_TOP + 22);
+    ctx.fillText(VR_CONFIG_FOOTER_HINTS.line2, 40, FOOTER_TOP + 42);
 
     this.drawBack();
   }

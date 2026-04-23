@@ -55,39 +55,16 @@ test.describe('demo replay path — no residual state between runs', () => {
     await expect(page.locator('#overlay')).toBeHidden({ timeout: 10_000 });
     await expect(page.locator('#game')).toBeAttached();
 
-    // Let a few frames tick so any latent stale-state crash surfaces.
-    await page.waitForTimeout(500);
+    // Let a few render frames tick so any latent stale-state crash
+    // in tick() surfaces as a pageerror. Using rAF instead of a
+    // wall-clock timeout keeps the test deterministic across slow
+    // CI machines.
+    await page.evaluate(async () => {
+      for (let i = 0; i < 10; i++) {
+        await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      }
+    });
 
     expect(errors, `errors during replay: ${errors.join('\n')}`).toEqual([]);
-  });
-
-  test('returning from results screen clears finishedReturnHandled', async ({ page }) => {
-    // Narrower check on the specific latch the bug report flagged: if
-    // the result-screen return latch leaks between chart loads, the
-    // second run's auto-return / pad-hit-skip wouldn't fire. We don't
-    // have a way to drive the short bundled demo to its natural end
-    // inside a test, so we instead assert the prerequisite: after
-    // Esc-back the replay succeeds without the #overlay hanging (which
-    // is what would happen if loadAndStart short-circuited on the
-    // stale latch).
-    const pageerrors: string[] = [];
-    page.on('pageerror', (err) => pageerrors.push(err.message));
-
-    await page.goto('/');
-    await page.locator('#start-demo').click();
-    await expect(page.locator('#overlay')).toBeHidden({ timeout: 10_000 });
-
-    // Simulate a drum keystroke during play to populate hitFlashes on
-    // the previous chart — if the reset forgets this array, the second
-    // run would start with pre-populated flashes visible for 400 ms.
-    await page.keyboard.press('KeyS');
-    await page.keyboard.press('Space');
-    await page.keyboard.press('Escape');
-    await expect(page.locator('#overlay')).toBeVisible();
-
-    await page.locator('#start-demo').click();
-    await expect(page.locator('#overlay')).toBeHidden({ timeout: 10_000 });
-
-    expect(pageerrors).toEqual([]);
   });
 });

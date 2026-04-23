@@ -60,16 +60,6 @@ export function toggleAutoPlayLane(
   return { ...map, [lane]: !map[lane] };
 }
 
-/**
- * Convenience: set both kick lanes (BD + LBD) to the same value.
- * "Auto-kick" is the most common auto-play preset — DTXmania even
- * had a dedicated `autoKick` boolean pre-refactor — so the VR panel
- * shows a hint pointing at this helper for players who don't want to
- * tap individual lane cells. */
-export function setAutoKick(map: AutoPlayMap, on: boolean): AutoPlayMap {
-  return { ...map, BD: on, LBD: on };
-}
-
 export interface Config {
   /** px / ms scroll speed for chip fall. DTXmania "speed=1" works out
    * to ~0.625 px/ms; user-tuneable 0.30..1.50 here. */

@@ -1,23 +1,29 @@
 import type { Song } from '@dtxmania/dtx-core';
 
-/** Snapshot of the Game fields that tick()+Renderer read per frame.
- * Pulled into a single shape so `emptyChartState` / `resetStateOnVrExit`
- * can be reasoned about (and tested) without standing up a Game. */
-export interface ChartVisibleState {
-  song: Song | null;
-  status: VrExitGameStatus;
-  finishedAtMs: number | null;
-  finishedReturnHandled: boolean;
-  judgmentFlash: unknown | null;
-  hitFlashes: readonly unknown[];
-  playables: readonly unknown[];
-  measureStartMs: readonly number[];
-  loopedAtLeastOnce: boolean;
-  loopMarkerPressed: readonly [boolean, boolean];
+/** Narrow shape of the "empty" chart-visible state. Every field is
+ * typed as its literal empty / null value rather than the wider type
+ * it would carry during play, so `game.ts` can assign fields
+ * directly without casts (`null` is assignable to `T | null`,
+ * `never[]` spreads into `T[]`, the `[false, false]` tuple matches
+ * the rising-edge pair exactly). The tightening also enforces the
+ * promise `emptyChartState` is making: a change adding a new Game
+ * field that tick() reads would need a matching null literal here,
+ * caught at the call site. */
+export interface ChartVisibleStateEmpty {
+  song: null;
+  status: 'idle';
+  finishedAtMs: null;
+  finishedReturnHandled: false;
+  judgmentFlash: null;
+  hitFlashes: readonly never[];
+  playables: readonly never[];
+  measureStartMs: readonly never[];
+  loopedAtLeastOnce: false;
+  loopMarkerPressed: readonly [false, false];
 }
 
-/** Values every field in `ChartVisibleState` must hold after a fresh
- * `loadAndStart` entry, before any async work kicks off.
+/** Values every field in `ChartVisibleStateEmpty` must hold after a
+ * fresh `loadAndStart` entry, before any async work kicks off.
  *
  * Why: between the first await (engine.resume) and the final status
  * flip to 'playing', the `renderer.onFrame(tick)` loop keeps firing. If
@@ -28,7 +34,7 @@ export interface ChartVisibleState {
  * lets tick()'s `if (!this.song) return;` early-exit kick in cleanly
  * until the new chart is ready. Exported so the invariant can be
  * asserted without constructing an AudioEngine + Three.js scene. */
-export function emptyChartState(): ChartVisibleState {
+export function emptyChartState(): ChartVisibleStateEmpty {
   return {
     song: null,
     status: 'idle',
@@ -42,6 +48,7 @@ export function emptyChartState(): ChartVisibleState {
     loopMarkerPressed: [false, false],
   };
 }
+
 
 /**
  * Pure state helper for the VR-session-end cleanup path. Keeping this

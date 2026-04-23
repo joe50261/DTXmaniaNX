@@ -448,12 +448,17 @@ export class XrControllers {
  * leaving the original slot's cached XRInputSource pointing at a now-
  * disconnected gamepad. Pulsing that cached actuator was firing the
  * wrong hand (specifically "right stick hit → left controller buzzes"
- * — see the bug report that prompted this helper). Falling back to the
- * cached slot source only when handedness lookup finds nothing keeps
- * single-controller + test paths working.
+ * — see the bug report that prompted this helper).
  *
- * Returns null when the slot has no tracked hand (e.g. a hand-tracking
- * `handedness === 'none'` entry) — callers skip the pulse in that case.
+ * Returns null when:
+ *   - the slot has no tracked hand (e.g. a hand-tracking
+ *     `handedness === 'none'` entry);
+ *   - OR the live session list has no input source with that
+ *     handedness. The cached slot entry would also be stale in this
+ *     case (it's the only reason live lookup can miss), so pulsing
+ *     it would either no-op on a disconnected gamepad or — worse —
+ *     fire the same wrong-hand bug this helper was written to fix.
+ *     Callers skip the pulse on null.
  */
 export function resolveHapticSource(
   liveInputSources: Iterable<XRInputSource>,
@@ -464,7 +469,7 @@ export function resolveHapticSource(
   for (const s of liveInputSources) {
     if (s.handedness === hand) return s;
   }
-  return slotSrc;
+  return null;
 }
 
 function laneLabel(lane: LaneValue): string {

@@ -166,16 +166,15 @@ describe('XrControllers — input source tracking', () => {
     expect(resolveHapticSource(liveSources, staleRight)).toBe(liveRight);
   });
 
-  it('resolveHapticSource falls back to the cached slot source when the live list has no matching hand', () => {
-    // Guards the single-controller case (only right hand connected;
-    // left slot cached but the live list contains only right). For a
-    // right-slot pulse the live right source is returned; for a
-    // would-be left pulse with no left in the live list, we fall back
-    // to the cached left so test harnesses without live iteration
-    // still pulse something sane.
+  it('resolveHapticSource returns null when the live list has no matching hand (stale cache would be wrong)', () => {
+    // Guards against the specific bug the helper was written to fix:
+    // a slot caching a now-disconnected input source while the live
+    // session has only the other hand. Pulsing the cached entry would
+    // fire a dead gamepad at best and the wrong hand at worst.
+    // Returning null tells the caller to skip the pulse.
     const cachedLeft = { handedness: 'left' } as unknown as XRInputSource;
     const liveRight = { handedness: 'right' } as unknown as XRInputSource;
-    expect(resolveHapticSource([liveRight], cachedLeft)).toBe(cachedLeft);
+    expect(resolveHapticSource([liveRight], cachedLeft)).toBe(null);
   });
 
   it('resolveHapticSource returns null for slots with no tracked hand', () => {

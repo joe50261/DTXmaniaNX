@@ -395,15 +395,17 @@ export class Game {
     // the renderer.onFrame tick paints the PREVIOUS chart's chips +
     // result overlay into the VR panel texture for the entire preload
     // window. Pure helper so the invariant can be unit-tested without
-    // standing up an AudioEngine.
+    // standing up an AudioEngine. `ChartVisibleStateEmpty`'s narrow
+    // literal types (null, never[], readonly [false, false]) flow
+    // straight into Game's fields without casts.
     const empty = emptyChartState();
     this.song = empty.song;
     this.status = empty.status;
     this.finishedAtMs = empty.finishedAtMs;
     this.finishedReturnHandled = empty.finishedReturnHandled;
-    this.judgmentFlash = empty.judgmentFlash as JudgmentFlash | null;
-    this.hitFlashes = [...(empty.hitFlashes as HitFlash[])];
-    this.playables = [...(empty.playables as PlayableChip[])];
+    this.judgmentFlash = empty.judgmentFlash;
+    this.hitFlashes = [...empty.hitFlashes];
+    this.playables = [...empty.playables];
     this.measureStartMs = [...empty.measureStartMs];
     this.loopedAtLeastOnce = empty.loopedAtLeastOnce;
     this.loopMarkerPressed = [...empty.loopMarkerPressed];
@@ -436,9 +438,22 @@ export class Game {
     // Preload every sample the chart references (BGM + drums) in one batch.
     // Missing or undecodable (e.g. .xa) samples are just absent from the map;
     // the drum scheduler falls through to the synth voice for those chips.
+    // A preload rejection (disk I/O error, backend vanished) would otherwise
+    // bubble out of loadAndStart and leave Game staged in the empty-reset
+    // state with `this.song === null` — tick() keeps early-returning, audio
+    // stays paused, and the player sits on a silent idle panel with no
+    // indication of what went wrong. Re-throwing after logging preserves
+    // the caller's error-path expectations (main.ts surfaces it as a
+    // status message) while making sure the idle state we return to is
+    // deliberate, not partial.
     let sampleByWavId = new Map<number, AudioBuffer>();
     if (opts.fs) {
-      sampleByWavId = await this.preloadSamples(song, opts.fs);
+      try {
+        sampleByWavId = await this.preloadSamples(song, opts.fs);
+      } catch (e) {
+        console.error('[game] sample preload failed — staying in idle state', e);
+        throw e;
+      }
     }
 
     const playables = song.chips
