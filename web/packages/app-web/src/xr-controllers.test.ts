@@ -206,4 +206,52 @@ describe('XrControllers — input source tracking', () => {
     expect(scene.children).toContain(gl.grips[0]);
     expect(scene.children).toContain(gl.grips[1]);
   });
+
+  it('captures `connected` events that fire BEFORE start() — listener wired in ctor', () => {
+    // Regression for the "right hit → left buzz, left hit → nothing"
+    // bug. Three.js dispatches the initial `connected` events during
+    // the first `onAnimationFrame` of an XR session, not synchronously
+    // inside `setSession`. If we attach listeners inside start()
+    // (called right after await renderer.enterXR()), the timing
+    // race can leave listeners behind the first-frame dispatch on
+    // some Quest runtimes — inputSources[i] stays null and
+    // pulseHaptic silently no-ops. The fix is to attach listeners in
+    // the ctor so they're live across the entire session lifecycle;
+    // this test drives that contract directly by dispatching the
+    // events BEFORE start() runs.
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const xr = new XrControllers(
+      gl as unknown as THREE.WebGLRenderer,
+      scene,
+    );
+    const leftSrc = fakeInputSource('left');
+    const rightSrc = fakeInputSource('right');
+    // Events before start() — matches the real flow where
+    // Three.js fires 'connected' during the first XR animation
+    // frame and the host's start() runs right after setSession.
+    dispatchConnected(gl.controllers[0]!, leftSrc);
+    dispatchConnected(gl.controllers[1]!, rightSrc);
+    expect(xr.currentInputSources[0]).toBe(leftSrc);
+    expect(xr.currentInputSources[1]).toBe(rightSrc);
+    xr.start();
+    // start() must not clobber pre-captured input sources.
+    expect(xr.currentInputSources[0]).toBe(leftSrc);
+    expect(xr.currentInputSources[1]).toBe(rightSrc);
+  });
+
+  it('adds controllers to the scene from the ctor (before start)', () => {
+    // Companion to the listener test above: if controllers aren't
+    // parented into the scene at ctor time, Three.js won't update
+    // their world pose on the first frame — the grip we capture
+    // stick samples from would read stale / identity positions and
+    // no hits would register even after listeners populate
+    // inputSources[i]. Ctor-time scene.add is the other half of the
+    // regression fix.
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    new XrControllers(gl as unknown as THREE.WebGLRenderer, scene);
+    expect(scene.children).toContain(gl.controllers[0]);
+    expect(scene.children).toContain(gl.controllers[1]);
+  });
 });

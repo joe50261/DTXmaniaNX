@@ -116,6 +116,34 @@ export class XrControllers {
       const t = i / (STICK_SAMPLE_COUNT - 1);
       this.stickOffsets.push(new THREE.Vector3(0, 0, -STICK_LENGTH_M * t));
     }
+
+    // Attach `connected` / `disconnected` listeners in the CTOR, not
+    // `start()`, so they're live before the first animation frame of
+    // any XR session. Three.js dispatches the initial `connected`
+    // events during the first `onAnimationFrame` call after
+    // `setSession`, not synchronously — which means listeners wired
+    // in `start()` (called right after `await renderer.enterXR()`)
+    // are attached a microtask EARLY but `scene.add(controller)`
+    // plus the session-start animation loop then races against
+    // subsequent first-frame event dispatch. In practice we saw the
+    // listeners miss the initial dispatch on some Quest runtimes,
+    // leaving `inputSources[i]` null and `pulseHaptic` silently
+    // no-opping ("right stick hit → nothing, left stick hit → left
+    // buzz" was the reported symptom — the cached slot that DID
+    // populate was the only one ever pulsed). Mirrors the pattern
+    // VrMenu / VrConfig / VrCalibrate already use.
+    for (let i = 0; i < 2; i++) {
+      const controller = this.webgl.xr.getController(i);
+      const idx = i;
+      controller.addEventListener('connected', (event) => {
+        const data = (event as unknown as { data?: XRInputSource }).data;
+        if (data) this.inputSources[idx] = data;
+      });
+      controller.addEventListener('disconnected', () => {
+        this.inputSources[idx] = null;
+      });
+      this.scene.add(controller);
+    }
   }
 
   /** Expose input sources so other subsystems (e.g. the game layer's
@@ -161,24 +189,16 @@ export class XrControllers {
       }
     }
 
-    // Controllers: sticks extending forward from each grip. Also capture the
-    // XRInputSource on `connected` so haptics pulse the matching hand.
+    // Controllers + their `connected` listeners live in the CTOR (so
+    // the initial first-frame event dispatch can't miss them — see the
+    // regression comment there). Here we only attach the per-session
+    // stick mesh to each grip; the controller Object3D itself is
+    // already in the scene.
     for (let i = 0; i < 2; i++) {
-      const controller = this.webgl.xr.getController(i);
       const grip = this.webgl.xr.getControllerGrip(i);
-      const idx = i;
-      controller.addEventListener('connected', (event) => {
-        const data = (event as unknown as { data?: XRInputSource }).data;
-        if (data) this.inputSources[idx] = data;
-      });
-      controller.addEventListener('disconnected', () => {
-        this.inputSources[idx] = null;
-      });
       grip.add(this.buildStick());
       this.scene.add(grip);
-      this.scene.add(controller);
       this.addedToScene.push(grip);
-      this.addedToScene.push(controller);
     }
   }
 
@@ -384,15 +404,69 @@ export class XrControllers {
       session.inputSources,
       this.inputSources[controllerIdx] ?? null,
     );
-    if (!src?.gamepad) return;
-    const actuators = (src.gamepad as Gamepad & { hapticActuators?: GamepadHapticActuator[] })
-      .hapticActuators;
-    const act = actuators?.[0];
+    if (!src?.gamepad) {
+      console.info('[haptic] no src', {
+        slotIdx: controllerIdx,
+        slotCached: this.inputSources[controllerIdx]?.handedness ?? 'null',
+        liveHands: Array.from(session.inputSources, (s) => s.handedness),
+      });
+      return;
+    }
+    // Prefer the modern single-actuator API (`gamepad.vibrationActuator`,
+    // Chrome 89+ / Quest Browser current) over the legacy
+    // `hapticActuators[]` array. Some runtimes populate one and not the
+    // other; some populate both but with actuators bound to the wrong
+    // physical controller. We try `vibrationActuator.playEffect` first,
+    // fall back to `hapticActuators[0].pulse`, and log whichever path
+    // actually fires so the bug reporter can tell us which primitive the
+    // runtime is exposing. This diagnostic can be dialed back once the
+    // "right hit → left buzz, left hit → nothing" issue is understood.
+    const gp = src.gamepad as Gamepad & {
+      vibrationActuator?: {
+        playEffect: (type: string, params: { duration: number; strongMagnitude?: number; weakMagnitude?: number }) => Promise<string>;
+      };
+      hapticActuators?: GamepadHapticActuator[];
+    };
+    const hand = src.handedness;
+    if (gp.vibrationActuator?.playEffect) {
+      gp.vibrationActuator
+        .playEffect('dual-rumble', { duration: 40, strongMagnitude: 0.6, weakMagnitude: 0.6 })
+        .then((result) => {
+          console.info('[haptic] vibrationActuator.playEffect fired', {
+            slotIdx: controllerIdx,
+            hand,
+            result,
+          });
+        })
+        .catch((e: unknown) => {
+          console.info('[haptic] vibrationActuator.playEffect rejected', {
+            slotIdx: controllerIdx,
+            hand,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        });
+      return;
+    }
+    const act = gp.hapticActuators?.[0];
     if (act && 'pulse' in act) {
       (act as GamepadHapticActuator & { pulse(intensity: number, durationMs: number): Promise<boolean> })
         .pulse(0.6, 40)
+        .then(() => {
+          console.info('[haptic] hapticActuators[0].pulse fired', {
+            slotIdx: controllerIdx,
+            hand,
+            actuatorCount: gp.hapticActuators?.length ?? 0,
+          });
+        })
         .catch(() => {});
+      return;
     }
+    console.info('[haptic] no actuator available', {
+      slotIdx: controllerIdx,
+      hand,
+      hasVibrationActuator: !!gp.vibrationActuator,
+      hapticActuatorsLen: gp.hapticActuators?.length ?? 0,
+    });
   }
 
   /** Dip each struck pad downward 1.5 cm then spring back over ~150 ms. */
