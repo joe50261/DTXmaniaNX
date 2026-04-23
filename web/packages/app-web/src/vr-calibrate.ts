@@ -63,8 +63,18 @@ export class VrCalibrate {
   private readonly texture: THREE.CanvasTexture;
   private readonly mesh: THREE.Mesh;
 
+  /** One laser per controller, attached once in the constructor.
+   * Re-creating them on every show() without cleanup was leaking
+   * Three.js Line children and event listeners onto the long-lived
+   * controller objects. */
   private readonly lasers: THREE.Line[] = [];
-  private readonly addedControllers: THREE.Group[] = [];
+  private readonly controllers: THREE.Group[] = [];
+  // Three.js event types (Object3DEventMap) don't know about the
+  // WebXR 'connected'/'disconnected' events; handlers are passed
+  // through the string-overload of addEventListener and typed loosely
+  // here so removeEventListener sees the same signature.
+  private readonly onConnectedHandlers: Array<(event: unknown) => void> = [];
+  private readonly onDisconnectedHandlers: Array<() => void> = [];
   private readonly inputSources: (XRInputSource | null)[] = [null, null];
   private readonly wasPressed: boolean[] = [false, false];
   private readonly raycaster = new THREE.Raycaster();
@@ -72,6 +82,10 @@ export class VrCalibrate {
   private shown = false;
   private phase: Phase = 'idle';
   private onDone: ((offsetMs: number | null) => void) | null = null;
+  /** Dirty flag — set when state changes; checked in tick() to decide
+   * whether to repaint. Avoids unconditional 90 Hz canvas upload during
+   * idle/review phases where nothing changes visually. */
+  private dirty = true;
 
   // Beat-sequence state (populated when phase === 'collecting').
   private beatTimes: number[] = [];
@@ -109,29 +123,20 @@ export class VrCalibrate {
     this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(PANEL_WORLD_W, PANEL_WORLD_H), mat);
     this.mesh.position.copy(PANEL_POS);
     this.mesh.visible = false;
-  }
-
-  show(onDone: (offsetMs: number | null) => void): void {
-    this.onDone = onDone;
-    this.shown = true;
-    this.mesh.visible = true;
-    if (!this.scene.children.includes(this.mesh)) this.scene.add(this.mesh);
-    this.phase = 'idle';
-    this.presses = [];
-    this.beatTimes = [];
-    this.result = null;
-    this.lastBeatIdx = -1;
+    this.scene.add(this.mesh);
 
     for (let i = 0; i < 2; i++) {
       const controller = this.webgl.xr.getController(i);
       const idx = i;
-      controller.addEventListener('connected', (event) => {
-        const data = (event as unknown as { data?: XRInputSource }).data;
+      const onConnected = (event: unknown): void => {
+        const data = (event as { data?: XRInputSource }).data;
         if (data) this.inputSources[idx] = data;
-      });
-      controller.addEventListener('disconnected', () => {
+      };
+      const onDisconnected = (): void => {
         this.inputSources[idx] = null;
-      });
+      };
+      controller.addEventListener('connected', onConnected);
+      controller.addEventListener('disconnected', onDisconnected);
       const line = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([
           new THREE.Vector3(0, 0, 0),
@@ -139,11 +144,30 @@ export class VrCalibrate {
         ]),
         new THREE.LineBasicMaterial({ color: 0xffeb3b, transparent: true, opacity: 0.7 })
       );
+      line.visible = false;
       controller.add(line);
+      // scene.add is idempotent; XrControllers may also add the same
+      // controller when its drum kit starts. Don't scene.remove on
+      // hide/dispose — XrControllers owns controller lifetime.
       this.scene.add(controller);
-      this.addedControllers.push(controller);
+      this.controllers.push(controller);
       this.lasers.push(line);
+      this.onConnectedHandlers.push(onConnected);
+      this.onDisconnectedHandlers.push(onDisconnected);
     }
+  }
+
+  show(onDone: (offsetMs: number | null) => void): void {
+    this.onDone = onDone;
+    this.shown = true;
+    this.mesh.visible = true;
+    for (const l of this.lasers) l.visible = true;
+    this.phase = 'idle';
+    this.presses = [];
+    this.beatTimes = [];
+    this.result = null;
+    this.lastBeatIdx = -1;
+    this.dirty = true;
     this.paint();
   }
 
@@ -160,10 +184,22 @@ export class VrCalibrate {
 
   dispose(): void {
     this.hide();
+    for (let i = 0; i < this.controllers.length; i++) {
+      const c = this.controllers[i]!;
+      c.removeEventListener('connected', this.onConnectedHandlers[i]!);
+      c.removeEventListener('disconnected', this.onDisconnectedHandlers[i]!);
+      c.remove(this.lasers[i]!);
+    }
+    for (const l of this.lasers) {
+      l.geometry.dispose();
+      if (Array.isArray(l.material)) l.material.forEach((m) => m.dispose());
+      else l.material.dispose();
+    }
     this.scene.remove(this.mesh);
-    for (const c of this.addedControllers) this.scene.remove(c);
     this.lasers.length = 0;
-    this.addedControllers.length = 0;
+    this.controllers.length = 0;
+    this.onConnectedHandlers.length = 0;
+    this.onDisconnectedHandlers.length = 0;
     this.texture.dispose();
   }
 
@@ -206,15 +242,19 @@ export class VrCalibrate {
           // beats were built on, so press timestamps line up 1:1 with
           // beatTimes without any clock conversion.
           this.presses.push({ audioTime: this.engine.ctx.currentTime });
+          this.dirty = true; // the "Presses: N" counter changed
         } else if (rayHitIdx >= 0) {
           // Idle / review phase: trigger on a laser-hit button activates it.
           this.invokeButton(this.hits[rayHitIdx]!.action);
+          this.dirty = true;
         }
       }
       this.wasPressed[i] = pressed;
     }
 
-    // Beat-dot animation during collection.
+    // Beat-dot animation during collection. Flip dirty while the flash
+    // is fading so the opacity/brightness animation re-renders each
+    // frame; otherwise the paint is skipped entirely.
     if (this.phase === 'collecting') {
       const now = this.engine.ctx.currentTime;
       let active = -1;
@@ -228,14 +268,23 @@ export class VrCalibrate {
       if (active !== this.lastBeatIdx) {
         this.lastBeatIdx = active;
         this.lastBeatFlashStartMs = performance.now();
+        this.dirty = true;
+      }
+      // Keep repainting while the flash is still inside its fade window.
+      if (performance.now() - this.lastBeatFlashStartMs < BEAT_FLASH_MS) {
+        this.dirty = true;
       }
     }
 
-    if (hovered !== this.hoveredIdx) this.hoveredIdx = hovered;
+    if (hovered !== this.hoveredIdx) {
+      this.hoveredIdx = hovered;
+      this.dirty = true;
+    }
 
-    // Paint every tick; cheap relative to the XR frame loop and keeps
-    // the flashing beat dot smooth.
-    this.paint();
+    if (this.dirty) {
+      this.dirty = false;
+      this.paint();
+    }
   }
 
   private async startCollection(): Promise<void> {
@@ -249,6 +298,7 @@ export class VrCalibrate {
     this.beatTimes = scheduled.beatTimes;
     this.presses = [];
     this.phase = 'collecting';
+    this.dirty = true;
 
     const endAt = this.beatTimes[this.beatTimes.length - 1]! + 0.35;
     this.watchdog = window.setInterval(() => {
@@ -268,6 +318,7 @@ export class VrCalibrate {
     this.result = { offset, usablePresses };
     this.phase = 'review';
     this.lastBeatIdx = -1;
+    this.dirty = true;
     this.paint();
   }
 
@@ -301,6 +352,7 @@ export class VrCalibrate {
         this.result = null;
         this.presses = [];
         this.beatTimes = [];
+        this.dirty = true;
         this.paint();
         return;
     }

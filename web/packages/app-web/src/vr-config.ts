@@ -51,8 +51,19 @@ export class VrConfig {
   private readonly texture: THREE.CanvasTexture;
   private readonly mesh: THREE.Mesh;
 
+  /** One laser per controller, attached once in the constructor and
+   * toggled visible/invisible on show/hide. Re-creating them on every
+   * show() and never removing them was leaking Three.js Line children
+   * and event listeners onto the long-lived XR controller objects
+   * (`webgl.xr.getController` returns the same Group every call). */
   private readonly lasers: THREE.Line[] = [];
-  private readonly addedControllers: THREE.Group[] = [];
+  private readonly controllers: THREE.Group[] = [];
+  // Three.js event types (Object3DEventMap) don't know about the
+  // WebXR 'connected'/'disconnected' events; handlers are passed
+  // through the string-overload of addEventListener and typed loosely
+  // here so removeEventListener sees the same signature.
+  private readonly onConnectedHandlers: Array<(event: unknown) => void> = [];
+  private readonly onDisconnectedHandlers: Array<() => void> = [];
   private readonly inputSources: (XRInputSource | null)[] = [null, null];
   private readonly wasPressed: boolean[] = [false, false];
   private readonly raycaster = new THREE.Raycaster();
@@ -86,24 +97,20 @@ export class VrConfig {
     this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(PANEL_WORLD_W, PANEL_WORLD_H), mat);
     this.mesh.position.copy(PANEL_POS);
     this.mesh.visible = false;
-  }
-
-  show(onClose: () => void): void {
-    this.onClose = onClose;
-    this.shown = true;
-    this.mesh.visible = true;
-    if (!this.scene.children.includes(this.mesh)) this.scene.add(this.mesh);
+    this.scene.add(this.mesh);
 
     for (let i = 0; i < 2; i++) {
       const controller = this.webgl.xr.getController(i);
       const idx = i;
-      controller.addEventListener('connected', (event) => {
-        const data = (event as unknown as { data?: XRInputSource }).data;
+      const onConnected = (event: unknown): void => {
+        const data = (event as { data?: XRInputSource }).data;
         if (data) this.inputSources[idx] = data;
-      });
-      controller.addEventListener('disconnected', () => {
+      };
+      const onDisconnected = (): void => {
         this.inputSources[idx] = null;
-      });
+      };
+      controller.addEventListener('connected', onConnected);
+      controller.addEventListener('disconnected', onDisconnected);
       const line = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([
           new THREE.Vector3(0, 0, 0),
@@ -111,14 +118,26 @@ export class VrConfig {
         ]),
         new THREE.LineBasicMaterial({ color: 0xffeb3b, transparent: true, opacity: 0.7 })
       );
+      line.visible = false;
       controller.add(line);
+      // scene.add is idempotent; XrControllers may also add the same
+      // controller when its drum kit starts. We don't scene.remove on
+      // hide/dispose because XrControllers owns the controller lifetime.
       this.scene.add(controller);
-      this.addedControllers.push(controller);
+      this.controllers.push(controller);
       this.lasers.push(line);
+      this.onConnectedHandlers.push(onConnected);
+      this.onDisconnectedHandlers.push(onDisconnected);
     }
+  }
 
-    // Repaint on any config change (e.g. hotkey-driven loop capture,
-    // desktop DOM panel touching the same settings).
+  show(onClose: () => void): void {
+    this.onClose = onClose;
+    this.shown = true;
+    this.mesh.visible = true;
+    for (const l of this.lasers) l.visible = true;
+    // Repaint on any config change (hotkey-driven loop capture, desktop
+    // DOM panel touching the same settings, etc.). Unsubscribed in hide.
     this.unsubConfig = subscribe(() => {
       if (this.shown) this.paint();
     });
@@ -136,10 +155,22 @@ export class VrConfig {
 
   dispose(): void {
     this.hide();
+    for (let i = 0; i < this.controllers.length; i++) {
+      const c = this.controllers[i]!;
+      c.removeEventListener('connected', this.onConnectedHandlers[i]!);
+      c.removeEventListener('disconnected', this.onDisconnectedHandlers[i]!);
+      c.remove(this.lasers[i]!);
+    }
+    for (const l of this.lasers) {
+      l.geometry.dispose();
+      if (Array.isArray(l.material)) l.material.forEach((m) => m.dispose());
+      else l.material.dispose();
+    }
     this.scene.remove(this.mesh);
-    for (const c of this.addedControllers) this.scene.remove(c);
     this.lasers.length = 0;
-    this.addedControllers.length = 0;
+    this.controllers.length = 0;
+    this.onConnectedHandlers.length = 0;
+    this.onDisconnectedHandlers.length = 0;
     this.texture.dispose();
   }
 

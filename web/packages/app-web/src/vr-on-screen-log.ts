@@ -46,11 +46,7 @@ export class VrOnScreenLog {
   private unsubLog: (() => void) | null = null;
   private latest: readonly LogEntry[] = [];
 
-  constructor(
-    _webgl: THREE.WebGLRenderer,
-    private readonly scene: THREE.Scene
-  ) {
-    void _webgl;
+  constructor(private readonly scene: THREE.Scene) {
     this.canvas = document.createElement('canvas');
     this.canvas.width = PANEL_W_PX;
     this.canvas.height = PANEL_H_PX;

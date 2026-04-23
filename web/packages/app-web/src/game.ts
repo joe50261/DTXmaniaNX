@@ -162,9 +162,6 @@ export class Game {
   private readonly vrConfig: VrConfig;
   private readonly vrLog: VrOnScreenLog;
   private readonly unsubConfig: () => void;
-  private menuIsShown = false;
-  private calibrateIsShown = false;
-  private configIsShown = false;
 
   constructor(private readonly canvas: HTMLCanvasElement, skin: SkinTextures = {}) {
     this.renderer = new Renderer(canvas, skin);
@@ -188,7 +185,7 @@ export class Game {
     this.vrMenu = new VrMenu(this.renderer.webgl, this.renderer.scene);
     this.vrCalibrate = new VrCalibrate(this.renderer.webgl, this.renderer.scene, this.engine);
     this.vrConfig = new VrConfig(this.renderer.webgl, this.renderer.scene);
-    this.vrLog = new VrOnScreenLog(this.renderer.webgl, this.renderer.scene);
+    this.vrLog = new VrOnScreenLog(this.renderer.scene);
     // Sync log panel visibility to the config flag + the XR session
     // state. It's only meaningful while the headset is on; desktop
     // already has the DOM `#on-screen-log` panel.
@@ -201,19 +198,12 @@ export class Game {
 
   /** Enter a WebXR immersive-vr session (Quest browser). Throws if unsupported. */
   async enterXR(onEnded: () => void): Promise<void> {
-    // Apply the log-panel visibility *before* the session starts so
-    // the mesh is already staged when the compositor picks up the
-    // scene, avoiding a single-frame flicker on session start.
-    this.applyVrLogVisibility(getConfig().vrLogEnabled);
     await this.renderer.enterXR(() => {
       this.xrControllers.stop();
       this.vrMenu.hide();
       this.vrCalibrate.hide();
       this.vrConfig.hide();
       this.vrLog.hide();
-      this.menuIsShown = false;
-      this.calibrateIsShown = false;
-      this.configIsShown = false;
       // Restore playfield visibility: if the player exited via the Exit VR
       // button, the VR menu was up and we'd hidden the playfield. Without
       // this, the next enterXR would scale + position the playfield but
@@ -234,6 +224,11 @@ export class Game {
       onEnded();
     });
     this.xrControllers.start();
+    // Seed the log-panel visibility now that the session is actually
+    // active. Doing this before the await would no-op because `inXR`
+    // hasn't flipped to true yet, so a player with `vrLogEnabled=true`
+    // would see no log until they touched the setting.
+    this.applyVrLogVisibility(getConfig().vrLogEnabled);
   }
 
   /**
@@ -246,7 +241,6 @@ export class Game {
     onExit: () => void,
     deps: VrMenuDeps
   ): void {
-    this.menuIsShown = true;
     // Hide playfield while the menu is up. Without this the result HUD +
     // scrolling pads (renderOrder 2/4, depthTest:off) keep painting over
     // the menu panel (renderOrder 0) and the player can't see what they
@@ -256,7 +250,6 @@ export class Game {
   }
 
   hideVrMenu(): void {
-    this.menuIsShown = false;
     this.renderer.setPlayfieldVisible(true);
     this.vrMenu.hide();
   }
@@ -267,13 +260,11 @@ export class Game {
    * measured offset in ms, or null if the player cancelled or the
    * presses were too noisy to compute a median. */
   showVrCalibrate(onDone: (offsetMs: number | null) => void): void {
-    this.calibrateIsShown = true;
     this.renderer.setPlayfieldVisible(false);
     this.vrCalibrate.show(onDone);
   }
 
   hideVrCalibrate(): void {
-    this.calibrateIsShown = false;
     this.vrCalibrate.hide();
   }
 
@@ -282,13 +273,11 @@ export class Game {
    * controller input. `onClose` is invoked when the player hits the
    * panel's Back button. */
   showVrConfig(onClose: () => void): void {
-    this.configIsShown = true;
     this.renderer.setPlayfieldVisible(false);
     this.vrConfig.show(onClose);
   }
 
   hideVrConfig(): void {
-    this.configIsShown = false;
     this.vrConfig.hide();
   }
 

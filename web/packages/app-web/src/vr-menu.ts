@@ -158,7 +158,18 @@ export class VrMenu {
   private shown = false;
 
   private readonly raycaster = new THREE.Raycaster();
-  private readonly addedControllers: THREE.Group[] = [];
+  /** Controllers the menu attached a laser + listeners to. Populated
+   * once in the constructor — re-creating per show() was leaking Line
+   * children and event listeners onto the long-lived XR controller
+   * Groups. */
+  private readonly controllers: THREE.Group[] = [];
+  // Three.js exposes its own event types (Object3DEventMap) that don't
+  // know about the WebXR 'connected'/'disconnected' string events; we
+  // pass listeners through the string-overload of addEventListener and
+  // type the saved handlers loosely here so removeEventListener is
+  // symmetric.
+  private readonly onConnectedHandlers: Array<(event: unknown) => void> = [];
+  private readonly onDisconnectedHandlers: Array<() => void> = [];
 
   /** Supplied at show() time so the Game class doesn't need to know about
    * backends at construction. Cleared on hide. */
@@ -186,6 +197,46 @@ export class VrMenu {
     this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(PANEL_WORLD_W, PANEL_WORLD_H), mat);
     this.mesh.position.copy(PANEL_POS);
     this.mesh.visible = false;
+    this.scene.add(this.mesh);
+
+    for (let i = 0; i < 2; i++) {
+      const controller = this.webgl.xr.getController(i);
+      const idx = i;
+      const onConnected = (event: unknown): void => {
+        const data = (event as { data?: XRInputSource }).data;
+        if (data) this.inputSources[idx] = data;
+      };
+      const onDisconnected = (): void => {
+        this.inputSources[idx] = null;
+      };
+      controller.addEventListener('connected', onConnected);
+      controller.addEventListener('disconnected', onDisconnected);
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(0, 0, 0),
+          new THREE.Vector3(0, 0, -2.5),
+        ]),
+        new THREE.LineBasicMaterial({ color: 0xffeb3b, transparent: true, opacity: 0.7 })
+      );
+      line.visible = false;
+      controller.add(line);
+      // scene.add is idempotent; XrControllers may also add this same
+      // controller when its drum kit starts. We don't scene.remove on
+      // hide/dispose because XrControllers owns controller lifetime.
+      this.scene.add(controller);
+      this.controllers.push(controller);
+      this.lasers.push(line);
+      this.onConnectedHandlers.push(onConnected);
+      this.onDisconnectedHandlers.push(onDisconnected);
+
+      const tip = new THREE.Mesh(
+        new THREE.SphereGeometry(0.012, 12, 12),
+        new THREE.MeshBasicMaterial({ color: 0xffeb3b })
+      );
+      tip.visible = false;
+      this.scene.add(tip);
+      this.tipMarks.push(tip);
+    }
   }
 
   show(
@@ -217,38 +268,7 @@ export class VrMenu {
     this.hoveredIdx = -1;
     this.shown = true;
     this.mesh.visible = true;
-    if (!this.scene.children.includes(this.mesh)) this.scene.add(this.mesh);
-
-    for (let i = 0; i < 2; i++) {
-      const controller = this.webgl.xr.getController(i);
-      const idx = i;
-      controller.addEventListener('connected', (event) => {
-        const data = (event as unknown as { data?: XRInputSource }).data;
-        if (data) this.inputSources[idx] = data;
-      });
-      controller.addEventListener('disconnected', () => {
-        this.inputSources[idx] = null;
-      });
-      const line = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(0, 0, 0),
-          new THREE.Vector3(0, 0, -2.5),
-        ]),
-        new THREE.LineBasicMaterial({ color: 0xffeb3b, transparent: true, opacity: 0.7 })
-      );
-      controller.add(line);
-      this.scene.add(controller);
-      this.addedControllers.push(controller);
-      this.lasers.push(line);
-
-      const tip = new THREE.Mesh(
-        new THREE.SphereGeometry(0.012, 12, 12),
-        new THREE.MeshBasicMaterial({ color: 0xffeb3b })
-      );
-      tip.visible = false;
-      this.scene.add(tip);
-      this.tipMarks.push(tip);
-    }
+    for (const l of this.lasers) l.visible = true;
 
     this.emitFocusedSong();
     void this.loadCoverForFocused();
@@ -273,12 +293,29 @@ export class VrMenu {
 
   dispose(): void {
     this.hide();
+    for (let i = 0; i < this.controllers.length; i++) {
+      const c = this.controllers[i]!;
+      c.removeEventListener('connected', this.onConnectedHandlers[i]!);
+      c.removeEventListener('disconnected', this.onDisconnectedHandlers[i]!);
+      c.remove(this.lasers[i]!);
+    }
+    for (const l of this.lasers) {
+      l.geometry.dispose();
+      if (Array.isArray(l.material)) l.material.forEach((m) => m.dispose());
+      else l.material.dispose();
+    }
+    for (const t of this.tipMarks) {
+      this.scene.remove(t);
+      t.geometry.dispose();
+      if (Array.isArray(t.material)) t.material.forEach((m) => m.dispose());
+      else t.material.dispose();
+    }
     this.scene.remove(this.mesh);
-    for (const c of this.addedControllers) this.scene.remove(c);
-    for (const t of this.tipMarks) this.scene.remove(t);
     this.lasers.length = 0;
     this.tipMarks.length = 0;
-    this.addedControllers.length = 0;
+    this.controllers.length = 0;
+    this.onConnectedHandlers.length = 0;
+    this.onDisconnectedHandlers.length = 0;
     this.texture.dispose();
   }
 

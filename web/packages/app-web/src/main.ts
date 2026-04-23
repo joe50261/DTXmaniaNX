@@ -48,10 +48,11 @@ import { runCalibration } from './calibrate.js';
 import { loadAudioOffsetMs, saveAudioOffsetMs } from './calibrate-model.js';
 import { activeToast, showToast } from './hud-toast.js';
 
-// Test hook for the Playwright e2e suite — the pre-R3 toast was a DOM
-// node Playwright could locate and assert on; now it's painted onto the
-// HUD canvas, so we expose the module singleton directly. Harmless in
-// production (a single function reference on window).
+// Test hook for the Playwright e2e suite. Toast is painted onto the
+// HUD canvas rather than a DOM node Playwright can locate, so we
+// expose the module singleton directly. Always-installed (a single
+// function reference on window) because the e2e suite runs against
+// `vite preview` which matches a production build.
 (
   window as unknown as { __dtxmaniaTest?: { activeToast: typeof activeToast } }
 ).__dtxmaniaTest = { activeToast };
