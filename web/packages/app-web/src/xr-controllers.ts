@@ -371,7 +371,7 @@ export class XrControllers {
             timestampMs: nowMs,
             key: `xr-pad-${laneLabel(pad.lane)}`,
           });
-          this.pulseHaptic(session, i);
+          this.pulseHaptic(i);
           fired = true;
           break;
         }
@@ -399,7 +399,7 @@ export class XrControllers {
     return out;
   }
 
-  private pulseHaptic(_session: XRSession, controllerIdx: number): void {
+  private pulseHaptic(controllerIdx: number): void {
     // Use THE SAME identity that hit detection used: this slot's
     // cached XRInputSource. Hit detection in `tick()` reads grip poses
     // via `webgl.xr.getControllerGrip(i)` and calls `pulseHaptic(i)`;
