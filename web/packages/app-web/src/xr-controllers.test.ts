@@ -40,6 +40,24 @@ function fakeInputSource(handedness: 'left' | 'right'): XRInputSource {
   return { handedness } as unknown as XRInputSource;
 }
 
+type PulseSpy = (intensity: number, durationMs: number) => Promise<boolean>;
+interface FakeGamepadSource {
+  handedness: 'left' | 'right';
+  gamepad: {
+    hapticActuators: { pulse: PulseSpy }[];
+  };
+}
+function fakeInputSourceWithGamepad(
+  handedness: 'left' | 'right',
+  pulse: PulseSpy,
+): XRInputSource {
+  const src: FakeGamepadSource = {
+    handedness,
+    gamepad: { hapticActuators: [{ pulse }] },
+  };
+  return src as unknown as XRInputSource;
+}
+
 /** Three.js EventDispatcher accepts arbitrary-shape event objects as long
  * as they carry a `type` string. The `data` field mirrors what Quest
  * Browser actually delivers with the XRInputSource. We go through `any`
@@ -160,12 +178,7 @@ describe('XrControllers — input source tracking', () => {
   // — any disagreement between the cached-slot handedness and the
   // live-session handedness would buzz the wrong hand. The fix is to
   // always read `inputSources[i]` directly in pulseHaptic, matching
-  // what captureSamples(i) does for hit detection. We can't unit-test
-  // pulseHaptic directly (it ends up calling actuator APIs that don't
-  // exist on our fake gamepad) but we CAN pin the class-level
-  // invariant: `currentInputSources[i]` is exactly what the slot-i
-  // 'connected' event delivered, and that reference is stable until
-  // a matching 'disconnected' clears it.
+  // what captureSamples(i) does for hit detection.
   it('currentInputSources[i] is the exact reference captured from slot i\'s connected event', () => {
     const { xr, gl } = makeStarted();
     const leftSrc = fakeInputSource('left');
@@ -179,6 +192,65 @@ describe('XrControllers — input source tracking', () => {
     // the wrong actuator.
     expect(xr.currentInputSources[0]).toBe(leftSrc);
     expect(xr.currentInputSources[1]).toBe(rightSrc);
+  });
+
+  // Directly exercise pulseHaptic's actuator resolution. Each slot gets
+  // its own pulse spy; calling pulseHaptic(i) must hit slot i's spy and
+  // no other. This is the slot→actuator invariant the 6f5bca6
+  // resolveHapticSource helper broke — verified here via the private
+  // method so we catch future regressions even if the call site
+  // changes.
+  it('pulseHaptic(i) hits inputSources[i]\'s actuator and no other slot\'s', async () => {
+    const { xr, gl } = makeStarted();
+    const leftCalls: Array<[number, number]> = [];
+    const rightCalls: Array<[number, number]> = [];
+    const leftSrc = fakeInputSourceWithGamepad('left', async (intensity, durationMs) => {
+      leftCalls.push([intensity, durationMs]);
+      return true;
+    });
+    const rightSrc = fakeInputSourceWithGamepad('right', async (intensity, durationMs) => {
+      rightCalls.push([intensity, durationMs]);
+      return true;
+    });
+    // Intentionally populate reversed: slot 0 gets the RIGHT-handed
+    // source, slot 1 gets the LEFT-handed one. A handedness-based
+    // reroute (the bug) would then send pulseHaptic(0) to the LEFT
+    // actuator. Slot-indexed routing (the fix) pulses slot 0's spy
+    // regardless of handedness label.
+    dispatchConnected(gl.controllers[0]!, rightSrc);
+    dispatchConnected(gl.controllers[1]!, leftSrc);
+
+    const pulseHaptic = (xr as unknown as { pulseHaptic: (i: number) => void }).pulseHaptic.bind(xr);
+    pulseHaptic(0);
+    // Pulse resolves asynchronously; flush microtasks.
+    await Promise.resolve();
+    expect(rightCalls).toEqual([[0.6, 40]]);
+    expect(leftCalls).toEqual([]);
+
+    pulseHaptic(1);
+    await Promise.resolve();
+    expect(rightCalls).toEqual([[0.6, 40]]);
+    expect(leftCalls).toEqual([[0.6, 40]]);
+  });
+
+  it('pulseHaptic no-ops silently when the slot is null (no double-buzz, no crash)', () => {
+    const { xr } = makeStarted();
+    const pulseHaptic = (xr as unknown as { pulseHaptic: (i: number) => void }).pulseHaptic.bind(xr);
+    expect(() => pulseHaptic(0)).not.toThrow();
+    expect(() => pulseHaptic(1)).not.toThrow();
+  });
+
+  it('pulseHaptic no-ops when the gamepad exposes no hapticActuators (older runtimes)', () => {
+    const { xr, gl } = makeStarted();
+    // Gamepad present but hapticActuators absent — early return, no
+    // throw. Matches Chrome < 89 / non-Quest runtimes behaviour.
+    const src = {
+      handedness: 'left',
+      gamepad: {} as Gamepad,
+    } as unknown as XRInputSource;
+    dispatchConnected(gl.controllers[0]!, src);
+    const pulseHaptic = (xr as unknown as { pulseHaptic: (i: number) => void }).pulseHaptic.bind(xr);
+    expect(() => pulseHaptic(0)).not.toThrow();
   });
 
   it('adds the controllers and grips to the scene (wiring sanity)', () => {

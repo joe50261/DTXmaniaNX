@@ -399,91 +399,24 @@ export class XrControllers {
     return out;
   }
 
+  // Pulse the actuator bound to the SAME slot that detected the hit
+  // (grip pose and gamepad both live at `inputSources[i]`). Don't
+  // re-resolve by handedness — `handedness` can drift relative to
+  // `inputSources[i]` across reconnects and produces wrong-hand buzz.
   private pulseHaptic(controllerIdx: number): void {
-    // Use THE SAME identity that hit detection used: this slot's
-    // cached XRInputSource. Hit detection in `tick()` reads grip poses
-    // via `webgl.xr.getControllerGrip(i)` and calls `pulseHaptic(i)`;
-    // the input source we pulse must be the one bound to that SAME
-    // slot at 'connected' time, otherwise the hand that swung and the
-    // hand that buzzes can drift apart.
-    //
-    // An earlier iteration of this method did a second lookup in
-    // `session.inputSources` by handedness — "find the live source
-    // with the same `handedness` as the cached slot entry" — which
-    // introduced exactly that drift: hit detection was slot-indexed,
-    // vibration was handedness-indexed, and if the two ever disagreed
-    // (stale cache vs. reassigned live slot, handedness string
-    // mismatch, etc.) the pulse went to the wrong actuator. The
-    // reported symptom "right hit → left controller buzzes" fit this
-    // pattern; dropping the handedness hop restores the 1:1
-    // slot→actuator routing the original 2026-04-21 fix (6c87c7b)
-    // shipped with and was known to work.
     const src = this.inputSources[controllerIdx];
-    if (!src?.gamepad) {
-      console.info('[haptic] no src', {
-        slotIdx: controllerIdx,
-        slotCached: src?.handedness ?? 'null',
-      });
-      return;
-    }
-    const hand = src.handedness;
-    const gp = src.gamepad as Gamepad & {
-      vibrationActuator?: {
-        playEffect: (type: string, params: { duration: number; strongMagnitude?: number; weakMagnitude?: number }) => Promise<string>;
-      };
+    if (!src?.gamepad) return;
+    const actuators = (src.gamepad as Gamepad & {
       hapticActuators?: GamepadHapticActuator[];
-    };
-    // Priority: legacy `hapticActuators[0].pulse` first (original
-    // fix's path, Quest Browser known-good on both hands), fall back
-    // to `vibrationActuator.playEffect` only if the legacy array is
-    // absent. Avoids the "left vibrationActuator returns
-    // not-supported for dual-rumble" issue the user's diagnostic run
-    // surfaced.
-    const legacyAct = gp.hapticActuators?.[0];
-    if (legacyAct && 'pulse' in legacyAct) {
-      (legacyAct as GamepadHapticActuator & { pulse(intensity: number, durationMs: number): Promise<boolean> })
+    }).hapticActuators;
+    const act = actuators?.[0];
+    if (act && 'pulse' in act) {
+      (act as GamepadHapticActuator & {
+        pulse(intensity: number, durationMs: number): Promise<boolean>;
+      })
         .pulse(0.6, 40)
-        .then((fired) => {
-          console.info('[haptic] hapticActuators[0].pulse fired', {
-            slotIdx: controllerIdx,
-            hand,
-            fired,
-          });
-        })
-        .catch((e: unknown) => {
-          console.info('[haptic] hapticActuators[0].pulse rejected', {
-            slotIdx: controllerIdx,
-            hand,
-            error: e instanceof Error ? e.message : String(e),
-          });
-        });
-      return;
+        .catch(() => {});
     }
-    if (gp.vibrationActuator?.playEffect) {
-      gp.vibrationActuator
-        .playEffect('dual-rumble', { duration: 40, strongMagnitude: 0.6, weakMagnitude: 0.6 })
-        .then((result) => {
-          console.info('[haptic] vibrationActuator.playEffect fired (fallback)', {
-            slotIdx: controllerIdx,
-            hand,
-            result,
-          });
-        })
-        .catch((e: unknown) => {
-          console.info('[haptic] vibrationActuator.playEffect rejected', {
-            slotIdx: controllerIdx,
-            hand,
-            error: e instanceof Error ? e.message : String(e),
-          });
-        });
-      return;
-    }
-    console.info('[haptic] no actuator available', {
-      slotIdx: controllerIdx,
-      hand,
-      hasVibrationActuator: !!gp.vibrationActuator,
-      hapticActuatorsLen: gp.hapticActuators?.length ?? 0,
-    });
   }
 
   /** Dip each struck pad downward 1.5 cm then spring back over ~150 ms. */
