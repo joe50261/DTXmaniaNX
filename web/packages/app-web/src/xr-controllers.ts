@@ -29,6 +29,18 @@ export interface XrLaneEvent {
 }
 export type XrLaneListener = (e: XrLaneEvent) => void;
 
+/** Loose shape of the GamepadHapticActuator we poke — TS's built-in
+ * `GamepadHapticActuator` types the `playEffect` type arg as a narrow
+ * `GamepadHapticEffectType` union that doesn't cover every runtime's
+ * vendor-specific values (Chromium sometimes accepts additional
+ * effect types like `"trigger-rumble"`; future runtimes may add more).
+ * We type through this interface so the fallback chain can pass
+ * arbitrary strings without fighting the lib.dom types. */
+interface HapticActuatorLike {
+  playEffect?: (type: string, params: Record<string, number>) => Promise<string>;
+  pulse?: (value: number, duration: number) => Promise<boolean>;
+}
+
 type PadShape = 'disc' | 'face' | 'pedal';
 
 interface PadSpec {
@@ -104,6 +116,10 @@ export class XrControllers {
   private padMeshByLane = new Map<LaneValue, { mesh: THREE.Mesh; baseY: number }>();
   /** Latest hit timestamps — read in tick() to animate the bounce. */
   private lastPadHitMs = new Map<LaneValue, number>();
+  /** One-time-per-slot-per-session latch for the actuator-shape
+   * diagnostic dump in `pulseHaptic`. Cleared in `stop()` so the dump
+   * re-fires on next VR entry. */
+  private readonly hapticShapeLogged: [boolean, boolean] = [false, false];
 
   constructor(private readonly webgl: THREE.WebGLRenderer, private readonly scene: THREE.Scene) {
     // Grip-local stick samples from grip (t=0) to tip (t=1). The shaft is
@@ -406,18 +422,6 @@ export class XrControllers {
     // the input source we pulse must be the one bound to that SAME
     // slot at 'connected' time, otherwise the hand that swung and the
     // hand that buzzes can drift apart.
-    //
-    // An earlier iteration of this method did a second lookup in
-    // `session.inputSources` by handedness — "find the live source
-    // with the same `handedness` as the cached slot entry" — which
-    // introduced exactly that drift: hit detection was slot-indexed,
-    // vibration was handedness-indexed, and if the two ever disagreed
-    // (stale cache vs. reassigned live slot, handedness string
-    // mismatch, etc.) the pulse went to the wrong actuator. The
-    // reported symptom "right hit → left controller buzzes" fit this
-    // pattern; dropping the handedness hop restores the 1:1
-    // slot→actuator routing the original 2026-04-21 fix (6c87c7b)
-    // shipped with and was known to work.
     const src = this.inputSources[controllerIdx];
     if (!src?.gamepad) {
       console.info('[haptic] no src', {
@@ -428,23 +432,79 @@ export class XrControllers {
     }
     const hand = src.handedness;
     const gp = src.gamepad as Gamepad & {
-      vibrationActuator?: {
-        playEffect: (type: string, params: { duration: number; strongMagnitude?: number; weakMagnitude?: number }) => Promise<string>;
+      vibrationActuator?: GamepadHapticActuator & {
+        playEffect?: (type: string, params: { duration: number; strongMagnitude?: number; weakMagnitude?: number; leftTrigger?: number; rightTrigger?: number }) => Promise<string>;
+        pulse?: (value: number, duration: number) => Promise<boolean>;
       };
       hapticActuators?: GamepadHapticActuator[];
     };
-    // Priority: legacy `hapticActuators[0].pulse` first (original
-    // fix's path, Quest Browser known-good on both hands), fall back
-    // to `vibrationActuator.playEffect` only if the legacy array is
-    // absent. Avoids the "left vibrationActuator returns
-    // not-supported for dual-rumble" issue the user's diagnostic run
-    // surfaced.
+    // One-time diagnostic: dump the actuator shape so we can tell
+    // whether `hapticActuators` is the per-hand array the spec
+    // implies or the shared-singleton shape a Quest Browser user
+    // reported (both gamepads' `hapticActuators[0]` pointing at the
+    // same object — pulsing it for either hand rumbles whichever
+    // physical motor the OS happens to have wired it to). Printed
+    // only on the first pulse per slot per session so the log isn't
+    // flooded.
+    if (!this.hapticShapeLogged[controllerIdx]) {
+      this.hapticShapeLogged[controllerIdx] = true;
+      console.info('[haptic] actuator shape', {
+        slotIdx: controllerIdx,
+        hand,
+        hapticActuatorsLen: gp.hapticActuators?.length ?? 0,
+        hasVibrationActuator: !!gp.vibrationActuator,
+        hasPlayEffect: !!gp.vibrationActuator?.playEffect,
+        hasPulseOnVA: typeof gp.vibrationActuator?.pulse === 'function',
+      });
+    }
+
+    // Priority: prefer `vibrationActuator` (the modern per-gamepad
+    // actuator; each `XRInputSource.gamepad` has its own, so left vs.
+    // right can be targeted independently) before the legacy
+    // `hapticActuators[]` array (which on Quest Browser shows up as a
+    // shared singleton that can't distinguish hands — pulsing [0] on
+    // either source fires the same motor, producing the "right hit →
+    // left buzzes, left hit → nothing perceptible" symptom a user
+    // reported on-device).
+    //
+    // Effect-type fallback chain handles Quest's single-motor-per-
+    // controller reality: `dual-rumble` (strong + weak magnitudes,
+    // assumes two motors) returns `"not-supported"` on Quest Touch
+    // because there's only one motor per hand. `trigger-rumble`
+    // (leftTrigger + rightTrigger, assumes gamepad trigger motors)
+    // is also unlikely to match. If both `playEffect` types reject as
+    // unsupported, fall through to `vibrationActuator.pulse()` if the
+    // runtime exposes it (non-standard but some Chromium builds do),
+    // and finally to the legacy `hapticActuators[0].pulse`.
+    if (typeof gp.vibrationActuator?.playEffect === 'function') {
+      void this.tryPlayEffectChain(gp.vibrationActuator as unknown as HapticActuatorLike, controllerIdx, hand);
+      return;
+    }
+    if (typeof gp.vibrationActuator?.pulse === 'function') {
+      gp.vibrationActuator
+        .pulse(0.6, 40)
+        .then((fired) => {
+          console.info('[haptic] vibrationActuator.pulse fired', {
+            slotIdx: controllerIdx,
+            hand,
+            fired,
+          });
+        })
+        .catch((e: unknown) => {
+          console.info('[haptic] vibrationActuator.pulse rejected', {
+            slotIdx: controllerIdx,
+            hand,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        });
+      return;
+    }
     const legacyAct = gp.hapticActuators?.[0];
     if (legacyAct && 'pulse' in legacyAct) {
       (legacyAct as GamepadHapticActuator & { pulse(intensity: number, durationMs: number): Promise<boolean> })
         .pulse(0.6, 40)
         .then((fired) => {
-          console.info('[haptic] hapticActuators[0].pulse fired', {
+          console.info('[haptic] hapticActuators[0].pulse fired (fallback)', {
             slotIdx: controllerIdx,
             hand,
             fired,
@@ -459,30 +519,58 @@ export class XrControllers {
         });
       return;
     }
-    if (gp.vibrationActuator?.playEffect) {
-      gp.vibrationActuator
-        .playEffect('dual-rumble', { duration: 40, strongMagnitude: 0.6, weakMagnitude: 0.6 })
-        .then((result) => {
-          console.info('[haptic] vibrationActuator.playEffect fired (fallback)', {
-            slotIdx: controllerIdx,
-            hand,
-            result,
-          });
-        })
-        .catch((e: unknown) => {
-          console.info('[haptic] vibrationActuator.playEffect rejected', {
-            slotIdx: controllerIdx,
-            hand,
-            error: e instanceof Error ? e.message : String(e),
-          });
-        });
-      return;
-    }
     console.info('[haptic] no actuator available', {
       slotIdx: controllerIdx,
       hand,
       hasVibrationActuator: !!gp.vibrationActuator,
       hapticActuatorsLen: gp.hapticActuators?.length ?? 0,
+    });
+  }
+
+  /** Walk the `playEffect` effect-type fallback chain on a per-source
+   * vibrationActuator. We need this because Quest Touch has one motor
+   * per hand and neither `dual-rumble` nor `trigger-rumble` maps to
+   * that cleanly — `playEffect` resolves with `"not-supported"`
+   * (resolved, not rejected) when the type doesn't fit. Chain stops
+   * on the first type that returns anything other than
+   * `"not-supported"` (i.e. `"complete"` or `"preempted"` both mean
+   * the effect actually ran). */
+  private async tryPlayEffectChain(
+    va: HapticActuatorLike,
+    controllerIdx: number,
+    hand: string,
+  ): Promise<void> {
+    const attempts: Array<{ type: string; params: Record<string, number> }> = [
+      { type: 'dual-rumble', params: { duration: 40, strongMagnitude: 0.6, weakMagnitude: 0.6 } },
+      { type: 'trigger-rumble', params: { duration: 40, leftTrigger: 0.6, rightTrigger: 0.6, strongMagnitude: 0.6, weakMagnitude: 0.6 } },
+    ];
+    for (const a of attempts) {
+      try {
+        const result = await va.playEffect!(a.type, a.params);
+        console.info('[haptic] vibrationActuator.playEffect', {
+          slotIdx: controllerIdx,
+          hand,
+          type: a.type,
+          result,
+        });
+        if (result !== 'not-supported') return;
+      } catch (e: unknown) {
+        console.info('[haptic] vibrationActuator.playEffect threw', {
+          slotIdx: controllerIdx,
+          hand,
+          type: a.type,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return;
+      }
+    }
+    // All `playEffect` types rejected as not-supported — the chain is
+    // effectively exhausted; caller already returned so we don't reach
+    // the legacy fallback here. Log so the user can see we ran out of
+    // supported types before giving up.
+    console.info('[haptic] playEffect exhausted all types (all not-supported)', {
+      slotIdx: controllerIdx,
+      hand,
     });
   }
 
@@ -519,6 +607,8 @@ export class XrControllers {
     this.lastHitMs.clear();
     this.inputSources[0] = null;
     this.inputSources[1] = null;
+    this.hapticShapeLogged[0] = false;
+    this.hapticShapeLogged[1] = false;
     // Intentionally NOT nulling this.listener: Game wires it once at
     // construction via onHit(), and tick() already bails early when no
     // XR session is active, so there's no stale-dispatch risk. Clearing
