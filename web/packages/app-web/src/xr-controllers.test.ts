@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { XrControllers, resolveHapticSource } from './xr-controllers.js';
+import { XrControllers } from './xr-controllers.js';
 
 /**
  * These tests don't touch Three.js's WebXR wiring — no WebGLRenderer, no
@@ -153,48 +153,32 @@ describe('XrControllers — input source tracking', () => {
     expect(xr.inputSourceByHand('left')).toBe(null);
   });
 
-  it('resolveHapticSource prefers the live source with matching handedness over the cached slot entry', () => {
-    // Scenario: a brief right-controller disconnect/reconnect re-seats
-    // it into slot 0, so the live session has a NEW right input source
-    // while the cached slot-1 entry still points at the stale (now-
-    // disconnected) right source. Pulsing the cached entry would go to
-    // a dead gamepad — resolveHapticSource must pick the live one.
-    const staleRight = { handedness: 'right' } as unknown as XRInputSource;
-    const liveRight = { handedness: 'right' } as unknown as XRInputSource;
-    const liveLeft = { handedness: 'left' } as unknown as XRInputSource;
-    const liveSources: XRInputSource[] = [liveRight, liveLeft];
-    expect(resolveHapticSource(liveSources, staleRight)).toBe(liveRight);
-  });
-
-  it('resolveHapticSource returns null when the live list has no matching hand (stale cache would be wrong)', () => {
-    // Guards against the specific bug the helper was written to fix:
-    // a slot caching a now-disconnected input source while the live
-    // session has only the other hand. Pulsing the cached entry would
-    // fire a dead gamepad at best and the wrong hand at worst.
-    // Returning null tells the caller to skip the pulse.
-    const cachedLeft = { handedness: 'left' } as unknown as XRInputSource;
-    const liveRight = { handedness: 'right' } as unknown as XRInputSource;
-    expect(resolveHapticSource([liveRight], cachedLeft)).toBe(null);
-  });
-
-  it('resolveHapticSource returns null for slots with no tracked hand', () => {
-    // handedness='none' (trackers, some hand-tracking entries) has no
-    // actuator we want to pulse. Callers skip the pulse on null.
-    const trackerSrc = { handedness: 'none' } as unknown as XRInputSource;
-    expect(resolveHapticSource([trackerSrc], trackerSrc)).toBe(null);
-    expect(resolveHapticSource([], null)).toBe(null);
-  });
-
-  it('resolveHapticSource picks the correctly-handed source even if live list is reordered', () => {
-    // The class doc comment flags this specifically — slot index ≠
-    // session.inputSources order on all runtimes. Handedness is the
-    // only authoritative key.
-    const cachedRight = { handedness: 'right' } as unknown as XRInputSource;
-    const liveLeft = { handedness: 'left' } as unknown as XRInputSource;
-    const liveRight = { handedness: 'right' } as unknown as XRInputSource;
-    // Left first in the live list; the cached slot is 'right'. Must
-    // still return the right-handed live source, not the first entry.
-    expect(resolveHapticSource([liveLeft, liveRight], cachedRight)).toBe(liveRight);
+  // Haptic routing regression: the slot that detected a hit and the
+  // slot whose actuator we pulse must be THE SAME slot. An earlier
+  // iteration added a handedness-based lookup between the two that
+  // made hit detection slot-indexed but vibration handedness-indexed
+  // — any disagreement between the cached-slot handedness and the
+  // live-session handedness would buzz the wrong hand. The fix is to
+  // always read `inputSources[i]` directly in pulseHaptic, matching
+  // what captureSamples(i) does for hit detection. We can't unit-test
+  // pulseHaptic directly (it ends up calling actuator APIs that don't
+  // exist on our fake gamepad) but we CAN pin the class-level
+  // invariant: `currentInputSources[i]` is exactly what the slot-i
+  // 'connected' event delivered, and that reference is stable until
+  // a matching 'disconnected' clears it.
+  it('currentInputSources[i] is the exact reference captured from slot i\'s connected event', () => {
+    const { xr, gl } = makeStarted();
+    const leftSrc = fakeInputSource('left');
+    const rightSrc = fakeInputSource('right');
+    dispatchConnected(gl.controllers[0]!, leftSrc);
+    dispatchConnected(gl.controllers[1]!, rightSrc);
+    // Not just handedness-equal — REFERENCE-equal. pulseHaptic pulls
+    // `.gamepad.hapticActuators[0]` off this exact object; if the
+    // pulse path ever resolved through a different lookup (e.g. live
+    // iteration by handedness), a stale cache could drift and pulse
+    // the wrong actuator.
+    expect(xr.currentInputSources[0]).toBe(leftSrc);
+    expect(xr.currentInputSources[1]).toBe(rightSrc);
   });
 
   it('adds the controllers and grips to the scene (wiring sanity)', () => {
