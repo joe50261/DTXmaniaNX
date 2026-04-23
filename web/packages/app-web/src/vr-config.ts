@@ -73,8 +73,10 @@ export const VR_CONFIG_LAYOUT = Object.freeze({
 /** Friendly names for auto-play lane toggles. The DOM panel shows the
  * raw lane codes (HH, SD, BD, …) which assumes the player already knows
  * DTXmania's lane abbreviations; the VR panel spells them out because
- * there's no tooltip / manual to fall back on inside the headset. */
-const AUTO_PLAY_LABELS: Record<keyof AutoPlayMap, string> = {
+ * there's no tooltip / manual to fall back on inside the headset.
+ * Exported for the unit-test spec so label drift (e.g. rename "Bass
+ * (Kick)" → "Kick") stays a one-place change. */
+export const AUTO_PLAY_LABELS: Record<keyof AutoPlayMap, string> = {
   LC: 'L.Crash',
   HH: 'Hi-Hat',
   LP: 'L.Pedal',
@@ -202,6 +204,29 @@ export class VrConfig {
     });
     this.dirty = true;
     this.paint();
+  }
+
+  /** Test-only: trigger the action of whichever button's hit-rect
+   * contains (px, py) on the panel canvas. Returns true when a rect
+   * was matched. This is what `tick()` does on a trigger-press once
+   * the laser-ray hit point is projected into panel UV space; exposing
+   * it directly lets vitest drive click behaviour without building a
+   * whole XR raycaster + XRSession pose fixture. */
+  __testClickAt(px: number, py: number): boolean {
+    for (const h of this.hits) {
+      if (px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h) {
+        h.action();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Test-only: snapshot of the current button hit-rects for assertion.
+   * Length varies with which sections `paint()` rendered this frame
+   * (e.g. `paintLoopRange` adds no hits on a valid range). */
+  __testHits(): ReadonlyArray<{ x: number; y: number; w: number; h: number }> {
+    return this.hits.map(({ x, y, w, h }) => ({ x, y, w, h }));
   }
 
   hide(): void {

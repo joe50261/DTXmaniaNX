@@ -315,6 +315,36 @@ export class VrMenu {
     this.deps = null;
   }
 
+  /** Test-only: fire the action of whichever button's rect covers
+   * (px, py) on the panel canvas. Mirrors what tick() does once it
+   * projects a controller ray into panel UV space — same code path
+   * reached from a unit test without standing up an XRSession. */
+  __testClickAt(px: number, py: number): boolean {
+    const hit = this.hits.find(
+      (h) => px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h,
+    );
+    if (!hit) return false;
+    this.invokeHit(hit);
+    return true;
+  }
+
+  /** Test-only: snapshot of the current button hit-rects. */
+  __testHits(): ReadonlyArray<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    kind: string;
+  }> {
+    return this.hits.map(({ x, y, w, h, action }) => ({
+      x,
+      y,
+      w,
+      h,
+      kind: action.kind,
+    }));
+  }
+
   dispose(): void {
     this.hide();
     for (let i = 0; i < this.controllers.length; i++) {
