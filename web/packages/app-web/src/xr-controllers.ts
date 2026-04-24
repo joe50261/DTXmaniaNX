@@ -137,9 +137,19 @@ export class XrControllers {
       const idx = i;
       controller.addEventListener('connected', (event) => {
         const data = (event as unknown as { data?: XRInputSource }).data;
+        // Diagnostic: correlates slot index with the handedness three.js
+        // bound at this moment. Needed because the persistent
+        // "right-hit→left-buzz, left-hit→nothing" bug can only be
+        // explained by a slot/cache mismatch whose cause isn't visible
+        // from code alone — see pulseHaptic's live-vs-cache log below.
+        console.info('[xr] connected', {
+          slot: idx,
+          handedness: data?.handedness ?? 'no-data',
+        });
         if (data) this.inputSources[idx] = data;
       });
       controller.addEventListener('disconnected', () => {
+        console.info('[xr] disconnected', { slot: idx });
         this.inputSources[idx] = null;
       });
       this.scene.add(controller);
@@ -404,6 +414,21 @@ export class XrControllers {
   // re-resolve by handedness — `handedness` can drift relative to
   // `inputSources[i]` across reconnects and produces wrong-hand buzz.
   private pulseHaptic(controllerIdx: number): void {
+    // Diagnostic: log the slot that fired vs. what's cached vs. what
+    // three.js sees live in session.inputSources. Three possible
+    // patterns tell us where the bug is:
+    //   cached==live, both ordered right→left → bug is elsewhere
+    //     (grip coord frame / velocity sign), NOT haptic routing.
+    //   cached has 'null' in one slot, live has both hands → one
+    //     `connected` listener never fired; fix init ordering.
+    //   cached and live disagree on handedness order → slot re-seat
+    //     left our cache stale; switch pulseHaptic to read live.
+    // Remove once the root cause is identified.
+    const session = this.webgl.xr.getSession();
+    const cached = this.inputSources.map((s) => s?.handedness ?? 'null');
+    const live = session ? Array.from(session.inputSources).map((s) => s.handedness) : [];
+    console.info('[haptic]', { slot: controllerIdx, cached, live });
+
     const src = this.inputSources[controllerIdx];
     if (!src?.gamepad) return;
     const actuators = (src.gamepad as Gamepad & {
