@@ -12,12 +12,21 @@ import { XrControllers } from './xr-controllers.js';
  * doc comment on `inputSources`).
  */
 
+interface FakeSession {
+  inputSources: XRInputSource[];
+}
 interface FakeWebGL {
   xr: {
     getController: (i: number) => THREE.Object3D;
     getControllerGrip: (i: number) => THREE.Object3D;
-    getSession: () => null;
+    getSession: () => FakeSession | null;
   };
+  /** Mutable live input-source array — tests mirror `dispatchConnected`
+   * calls here to simulate `session.inputSources` as seen from
+   * `webgl.xr.getSession()`. pulseHaptic looks up the LIVE source by
+   * handedness via this array (not via `this.inputSources[slot]`),
+   * mirroring what Quest Browser returns. */
+  session: FakeSession;
   controllers: THREE.Object3D[];
   grips: THREE.Object3D[];
 }
@@ -25,15 +34,27 @@ interface FakeWebGL {
 function makeFakeWebGL(): FakeWebGL {
   const controllers = [new THREE.Object3D(), new THREE.Object3D()];
   const grips = [new THREE.Object3D(), new THREE.Object3D()];
+  const session: FakeSession = { inputSources: [] };
   return {
     xr: {
       getController: (i) => controllers[i]!,
       getControllerGrip: (i) => grips[i]!,
-      getSession: () => null,
+      getSession: () => session,
     },
+    session,
     controllers,
     grips,
   };
+}
+
+/** Connect an input source to both the `connected` event listener (which
+ * populates `this.inputSources[slot]`) AND the fake session's live
+ * `inputSources` array. Matches the real Quest Browser ordering where an
+ * `inputsourceschange` both seats the source into `session.inputSources`
+ * and fires `connected` on the matching controller. */
+function connectAndSeat(gl: FakeWebGL, slot: number, src: XRInputSource): void {
+  dispatchConnected(gl.controllers[slot]!, src);
+  gl.session.inputSources[slot] = src;
 }
 
 function fakeInputSource(handedness: 'left' | 'right'): XRInputSource {
@@ -197,37 +218,31 @@ describe('XrControllers — input source tracking', () => {
     expect(xr.inputSourceByHand('left')).toBe(null);
   });
 
-  // Haptic routing regression: the slot that detected a hit and the
-  // slot whose actuator we pulse must be THE SAME slot. An earlier
-  // iteration added a handedness-based lookup between the two that
-  // made hit detection slot-indexed but vibration handedness-indexed
-  // — any disagreement between the cached-slot handedness and the
-  // live-session handedness would buzz the wrong hand. The fix is to
-  // always read `inputSources[i]` directly in pulseHaptic, matching
-  // what captureSamples(i) does for hit detection.
+  // Cache identity: the `connected`-event cache must retain the exact
+  // XRInputSource reference per slot. Game.ts's face-button poller
+  // (leaveSong, loop-marker capture) reads `.gamepad.buttons` off this
+  // cached reference; `.buttons` is a live list per the Gamepad spec,
+  // so reading it off a stable cache is fine. (Haptic routing, by
+  // contrast, has stopped using this cache after PR #15 — see the
+  // session-inputSources live-lookup tests below for why.)
   it('currentInputSources[i] is the exact reference captured from slot i\'s connected event', () => {
     const { xr, gl } = makeStarted();
     const leftSrc = fakeInputSource('left');
     const rightSrc = fakeInputSource('right');
     dispatchConnected(gl.controllers[0]!, leftSrc);
     dispatchConnected(gl.controllers[1]!, rightSrc);
-    // Not just handedness-equal — REFERENCE-equal. pulseHaptic pulls
-    // `.gamepad.hapticActuators[0]` off this exact object; if the
-    // pulse path ever resolved through a different lookup (e.g. live
-    // iteration by handedness), a stale cache could drift and pulse
-    // the wrong actuator.
     expect(xr.currentInputSources[0]).toBe(leftSrc);
     expect(xr.currentInputSources[1]).toBe(rightSrc);
   });
 
   // Fallback path: runtimes that expose only the legacy hapticActuators
   // array (pre-`vibrationActuator` Chrome / non-Quest WebXR backends)
-  // must still pulse the correct slot's actuator. Each slot gets its
-  // own pulse spy; calling pulseHaptic(i) must hit slot i's spy and no
-  // other — this is the slot→actuator invariant the 6f5bca6
-  // `resolveHapticSource` helper broke. Verified here via the private
-  // method so we catch regressions even if the call site changes.
-  it('pulseHaptic(i) hits inputSources[i]\'s legacy actuator when vibrationActuator is absent', async () => {
+  // must still pulse the correct hand's actuator. Resolution goes
+  // slot → cachedHand → live session → matching live source → legacy
+  // actuator. Populate slot 0 with the RIGHT-handed source and slot 1
+  // with the LEFT-handed source (reversed on purpose) so an accidental
+  // regression to raw slot-indexed lookup would buzz the wrong hand.
+  it('pulseHaptic(i) bridges slot → cached handedness → live session → legacy actuator', async () => {
     const { xr, gl } = makeStarted();
     const leftCalls: Array<[number, number]> = [];
     const rightCalls: Array<[number, number]> = [];
@@ -239,15 +254,12 @@ describe('XrControllers — input source tracking', () => {
       rightCalls.push([intensity, durationMs]);
       return true;
     });
-    // Intentionally populate reversed: slot 0 gets the RIGHT-handed
-    // source, slot 1 gets the LEFT-handed one. A handedness-based
-    // reroute (the bug) would then send pulseHaptic(0) to the LEFT
-    // actuator. Slot-indexed routing (the fix) pulses slot 0's spy
-    // regardless of handedness label.
-    dispatchConnected(gl.controllers[0]!, rightSrc);
-    dispatchConnected(gl.controllers[1]!, leftSrc);
+    connectAndSeat(gl, 0, rightSrc);
+    connectAndSeat(gl, 1, leftSrc);
 
     const pulseHaptic = (xr as unknown as { pulseHaptic: (i: number) => void }).pulseHaptic.bind(xr);
+    // Slot 0's cached handedness is 'right' → live lookup finds rightSrc
+    // → rightCalls fires. leftCalls must stay empty.
     pulseHaptic(0);
     // Pulse resolves asynchronously; flush microtasks.
     await Promise.resolve();
@@ -260,12 +272,10 @@ describe('XrControllers — input source tracking', () => {
     expect(leftCalls).toEqual([[0.6, 40]]);
   });
 
-  // Primary haptic path: Quest Browser's legacy hapticActuators[0].pulse
-  // resolves with fired:true but routes to the wrong physical device (bug
-  // diagnosed via PR #12 / #13 in-VR logs). When the standards-compliant
-  // `gamepad.vibrationActuator.playEffect('dual-rumble', ...)` is present
-  // we prefer it; this test pins that preference — legacy pulse must NOT
-  // fire when vibrationActuator is available.
+  // Primary haptic path: the standards-compliant
+  // `gamepad.vibrationActuator.playEffect('dual-rumble', ...)`.
+  // When it's available on the live input source, it must run and the
+  // legacy fallback must stay inert.
   it('pulseHaptic prefers vibrationActuator.playEffect over legacy hapticActuators[0].pulse', async () => {
     const { xr, gl } = makeStarted();
     const playEffectCalls: Array<['dual-rumble', PlayEffectParams]> = [];
@@ -289,7 +299,7 @@ describe('XrControllers — input source tracking', () => {
         ],
       },
     } as unknown as XRInputSource;
-    dispatchConnected(gl.controllers[1]!, src);
+    connectAndSeat(gl, 1, src);
     const pulseHaptic = (xr as unknown as { pulseHaptic: (i: number) => void }).pulseHaptic.bind(xr);
     pulseHaptic(1);
     await Promise.resolve();
@@ -300,10 +310,11 @@ describe('XrControllers — input source tracking', () => {
     expect(pulseCalls).toEqual([]);
   });
 
-  // Parallel to the legacy-pulse routing test above, but for the
-  // vibrationActuator path. Each slot gets its own playEffect spy;
-  // pulseHaptic(i) must hit exactly slot i's spy and no other.
-  it('pulseHaptic(i) hits inputSources[i]\'s playEffect and no other slot\'s', async () => {
+  // Parallel to the legacy-path routing test above, but for the
+  // vibrationActuator path. Each hand gets its own playEffect spy;
+  // pulseHaptic(i) must resolve slot i to the matching-handedness live
+  // source and hit exactly that spy.
+  it('pulseHaptic(i) bridges slot → cached handedness → live session → playEffect', async () => {
     const { xr, gl } = makeStarted();
     const leftCalls: Array<['dual-rumble', PlayEffectParams]> = [];
     const rightCalls: Array<['dual-rumble', PlayEffectParams]> = [];
@@ -315,8 +326,8 @@ describe('XrControllers — input source tracking', () => {
       rightCalls.push([t, p]);
       return 'complete';
     });
-    dispatchConnected(gl.controllers[0]!, rightSrc);
-    dispatchConnected(gl.controllers[1]!, leftSrc);
+    connectAndSeat(gl, 0, rightSrc);
+    connectAndSeat(gl, 1, leftSrc);
     const pulseHaptic = (xr as unknown as { pulseHaptic: (i: number) => void }).pulseHaptic.bind(xr);
     pulseHaptic(0);
     await Promise.resolve();
@@ -326,6 +337,42 @@ describe('XrControllers — input source tracking', () => {
     await Promise.resolve();
     expect(rightCalls.length).toBe(1);
     expect(leftCalls.length).toBe(1);
+  });
+
+  // The point of PR #15: when Quest Browser retains our cached
+  // XRInputSource reference but swaps the live `session.inputSources`
+  // entry (same handedness, different object, different gamepad /
+  // actuator reference underneath), pulseHaptic MUST pulse the LIVE
+  // actuator, not the stale cached one. Before this fix, three PRs worth
+  // of diagnostic logs showed slot↔handedness was correct and both
+  // `hapticActuators[0].pulse` AND `vibrationActuator.playEffect` on the
+  // cached source routed to the wrong physical controller on Quest 3
+  // Touch Plus.
+  it('pulseHaptic follows the LIVE session.inputSources entry, not the cached one', async () => {
+    const { xr, gl } = makeStarted();
+    const staleCalls: Array<['dual-rumble', PlayEffectParams]> = [];
+    const liveCalls: Array<['dual-rumble', PlayEffectParams]> = [];
+    const staleRight = fakeInputSourceWithVibration('right', async (t, p) => {
+      staleCalls.push([t, p]);
+      return 'complete';
+    });
+    const liveRight = fakeInputSourceWithVibration('right', async (t, p) => {
+      liveCalls.push([t, p]);
+      return 'complete';
+    });
+    // Cache the STALE reference via the `connected` event listener.
+    dispatchConnected(gl.controllers[1]!, staleRight);
+    // Seat a DIFFERENT-object right-handed source as the live session
+    // entry — this is the Quest Browser behaviour we're guarding against
+    // (same handedness, different XRInputSource object, different
+    // gamepad/actuator references under the hood).
+    gl.session.inputSources[1] = liveRight;
+
+    const pulseHaptic = (xr as unknown as { pulseHaptic: (i: number) => void }).pulseHaptic.bind(xr);
+    pulseHaptic(1);
+    await Promise.resolve();
+    expect(liveCalls.length).toBe(1);
+    expect(staleCalls.length).toBe(0);
   });
 
   it('pulseHaptic no-ops silently when the slot is null (no double-buzz, no crash)', () => {
@@ -343,7 +390,7 @@ describe('XrControllers — input source tracking', () => {
       handedness: 'left',
       gamepad: {} as Gamepad,
     } as unknown as XRInputSource;
-    dispatchConnected(gl.controllers[0]!, src);
+    connectAndSeat(gl, 0, src);
     const pulseHaptic = (xr as unknown as { pulseHaptic: (i: number) => void }).pulseHaptic.bind(xr);
     expect(() => pulseHaptic(0)).not.toThrow();
   });
