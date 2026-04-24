@@ -76,6 +76,11 @@ const BD_HIT_HALF_M = 0.25;
  * don't fall between samples at typical swing speeds. */
 const STICK_SAMPLE_COUNT = 5;
 
+/** How many `pulse()` outcomes to log per slot per session before we
+ * stop — small enough to keep console noise bounded, large enough that
+ * one flaky `fired: false` can't dominate the diagnostic readout. */
+const PULSE_LOG_MAX_PER_SLOT = 3;
+
 export class XrControllers {
   private listener: XrLaneListener | null = null;
   private readonly addedToScene: THREE.Object3D[] = [];
@@ -103,10 +108,12 @@ export class XrControllers {
    * the very first-hit data the decision table needs. Reset in stop(). */
   private readonly hapticLogged: boolean[] = [false, false];
 
-  /** One-shot flag per slot for the `[pulse]` outcome diagnostic — logs
-   * the resolved/rejected value of the first `hapticActuators[0].pulse`
-   * call per slot per session. Reset in stop(). */
-  private readonly pulseLogged: boolean[] = [false, false];
+  /** Counter per slot for the `[pulse]` outcome diagnostic. Logs the
+   * first `PULSE_LOG_MAX_PER_SLOT` outcomes per slot per session so a
+   * single `fired: false` sample (which Quest has been known to emit
+   * during the first post-resume call before warm-up completes) can't
+   * latch and hide the eventual `fired: true`. Reset in stop(). */
+  private readonly pulseLogCount: number[] = [0, 0];
 
   private padsTexture: THREE.Texture | null = null;
 
@@ -444,7 +451,17 @@ export class XrControllers {
     const gp = src?.gamepad as
       | (Gamepad & {
           hapticActuators?: GamepadHapticActuator[];
-          vibrationActuator?: { playEffect(...args: unknown[]): Promise<string> };
+          vibrationActuator?: {
+            playEffect(
+              type: 'dual-rumble',
+              params: {
+                startDelay?: number;
+                duration: number;
+                weakMagnitude?: number;
+                strongMagnitude?: number;
+              },
+            ): Promise<string>;
+          };
         })
       | undefined;
 
@@ -457,6 +474,7 @@ export class XrControllers {
         slot: controllerIdx,
         cached,
         live,
+        hasGamepad: !!gp,
         gamepadId: gp?.id ?? 'null',
         hapticLen: gp?.hapticActuators?.length ?? 0,
         hasVibration: !!gp?.vibrationActuator,
@@ -471,15 +489,15 @@ export class XrControllers {
       })
         .pulse(0.6, 40)
         .then((fired) => {
-          if (!this.pulseLogged[controllerIdx]) {
-            this.pulseLogged[controllerIdx] = true;
+          if (this.pulseLogCount[controllerIdx]! < PULSE_LOG_MAX_PER_SLOT) {
+            this.pulseLogCount[controllerIdx]!++;
             console.info('[pulse]', { slot: controllerIdx, fired });
           }
         })
         .catch((e: unknown) => {
-          if (!this.pulseLogged[controllerIdx]) {
-            this.pulseLogged[controllerIdx] = true;
-            console.info('[pulse] rejected', {
+          if (this.pulseLogCount[controllerIdx]! < PULSE_LOG_MAX_PER_SLOT) {
+            this.pulseLogCount[controllerIdx]!++;
+            console.info('[pulse]', {
               slot: controllerIdx,
               error: e instanceof Error ? e.message : String(e),
             });
@@ -523,8 +541,8 @@ export class XrControllers {
     this.inputSources[1] = null;
     this.hapticLogged[0] = false;
     this.hapticLogged[1] = false;
-    this.pulseLogged[0] = false;
-    this.pulseLogged[1] = false;
+    this.pulseLogCount[0] = 0;
+    this.pulseLogCount[1] = 0;
     // Intentionally NOT nulling this.listener: Game wires it once at
     // construction via onHit(), and tick() already bails early when no
     // XR session is active, so there's no stale-dispatch risk. Clearing
