@@ -155,7 +155,32 @@ export class VrCalibrate {
       this.onConnectedHandlers.push(onConnected);
       this.onDisconnectedHandlers.push(onDisconnected);
     }
+
+    // Session-level backstop: if the runtime skips per-controller
+    // `connected` dispatches at session start (polyfill / emulator / no
+    // synthetic initial inputsourceschange), read session.inputSources
+    // directly so tick() has gamepad state to poll. Slot order matches
+    // Three.js because our array begins [null, null] and assignment is
+    // first-empty-slot; see xr-controllers.ts for the full rationale.
+    this.webgl.xr.addEventListener('sessionstart', this.onSessionStart);
+    this.webgl.xr.addEventListener('sessionend', this.onSessionEnd);
   }
+
+  private readonly onSessionStart = (): void => {
+    const session = this.webgl.xr.getSession();
+    if (!session) return;
+    const sources = session.inputSources;
+    for (let i = 0; i < Math.min(sources.length, 2); i++) {
+      if (this.inputSources[i] === null) {
+        this.inputSources[i] = sources[i] ?? null;
+      }
+    }
+  };
+
+  private readonly onSessionEnd = (): void => {
+    this.inputSources[0] = null;
+    this.inputSources[1] = null;
+  };
 
   show(onDone: (offsetMs: number | null) => void): void {
     this.onDone = onDone;
@@ -184,6 +209,8 @@ export class VrCalibrate {
 
   dispose(): void {
     this.hide();
+    this.webgl.xr.removeEventListener('sessionstart', this.onSessionStart);
+    this.webgl.xr.removeEventListener('sessionend', this.onSessionEnd);
     for (let i = 0; i < this.controllers.length; i++) {
       const c = this.controllers[i]!;
       c.removeEventListener('connected', this.onConnectedHandlers[i]!);

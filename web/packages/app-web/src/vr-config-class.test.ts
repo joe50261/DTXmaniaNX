@@ -74,16 +74,24 @@ interface FakeWebGL {
   xr: {
     getController: (i: number) => THREE.Object3D;
     getSession: () => XRSession | null;
+    addEventListener: (type: string, listener: (e: { type: string }) => void) => void;
+    removeEventListener: (type: string, listener: (e: { type: string }) => void) => void;
   };
   controllers: THREE.Object3D[];
 }
 
 function makeFakeWebGL(): FakeWebGL {
   const controllers = [new THREE.Object3D(), new THREE.Object3D()];
+  // VrConfig subscribes to `sessionstart` / `sessionend` on webgl.xr as
+  // a backstop for slot population; these tests never enter a session,
+  // so the listeners never fire — but the class calls addEventListener
+  // unconditionally from the ctor, so the fake must expose it.
   return {
     xr: {
       getController: (i) => controllers[i]!,
       getSession: () => null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
     },
     controllers,
   };

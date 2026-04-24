@@ -62,13 +62,24 @@ function installFakeCanvas2DContext(): void {
 }
 
 function makeFakeWebGL(): {
-  xr: { getController: (i: number) => THREE.Object3D; getSession: () => null };
+  xr: {
+    getController: (i: number) => THREE.Object3D;
+    getSession: () => null;
+    addEventListener: (type: string, listener: (e: { type: string }) => void) => void;
+    removeEventListener: (type: string, listener: (e: { type: string }) => void) => void;
+  };
 } {
   const controllers = [new THREE.Object3D(), new THREE.Object3D()];
+  // VrMenu subscribes to `sessionstart` / `sessionend` on webgl.xr as a
+  // backstop for slot population; these tests never enter a session, so
+  // the listeners never fire — but the class calls addEventListener
+  // unconditionally from the ctor, so the fake must expose it.
   return {
     xr: {
       getController: (i) => controllers[i]!,
       getSession: () => null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
     },
   };
 }

@@ -12,12 +12,28 @@ import { XrControllers } from './xr-controllers.js';
  * doc comment on `inputSources`).
  */
 
+interface FakeSession {
+  inputSources: XRInputSource[];
+}
+
+interface FakeXR {
+  getController: (i: number) => THREE.Object3D;
+  getControllerGrip: (i: number) => THREE.Object3D;
+  getSession: () => FakeSession | null;
+  addEventListener: (type: string, listener: (e: { type: string }) => void) => void;
+  removeEventListener: (type: string, listener: (e: { type: string }) => void) => void;
+  dispatchEvent: (e: { type: string }) => void;
+  /** Test helper: simulate Three.js calling `setSession`. The fake
+   * session is parked on `getSession()` and `sessionstart` is fired so
+   * the class under test can read `session.inputSources`. Mirrors what
+   * `webgl.xr.setSession()` does in Three.js's WebXRManager (see the
+   * `sessionstart` dispatch around line 362 in WebXRManager.js). */
+  startSession: (sources: XRInputSource[]) => void;
+  endSession: () => void;
+}
+
 interface FakeWebGL {
-  xr: {
-    getController: (i: number) => THREE.Object3D;
-    getControllerGrip: (i: number) => THREE.Object3D;
-    getSession: () => null;
-  };
+  xr: FakeXR;
   controllers: THREE.Object3D[];
   grips: THREE.Object3D[];
 }
@@ -25,15 +41,36 @@ interface FakeWebGL {
 function makeFakeWebGL(): FakeWebGL {
   const controllers = [new THREE.Object3D(), new THREE.Object3D()];
   const grips = [new THREE.Object3D(), new THREE.Object3D()];
-  return {
-    xr: {
-      getController: (i) => controllers[i]!,
-      getControllerGrip: (i) => grips[i]!,
-      getSession: () => null,
+  const listeners = new Map<string, Set<(e: { type: string }) => void>>();
+  let session: FakeSession | null = null;
+  const xr: FakeXR = {
+    getController: (i) => controllers[i]!,
+    getControllerGrip: (i) => grips[i]!,
+    getSession: () => session,
+    addEventListener: (type, listener) => {
+      let set = listeners.get(type);
+      if (!set) {
+        set = new Set();
+        listeners.set(type, set);
+      }
+      set.add(listener);
     },
-    controllers,
-    grips,
+    removeEventListener: (type, listener) => {
+      listeners.get(type)?.delete(listener);
+    },
+    dispatchEvent: (e) => {
+      for (const l of listeners.get(e.type) ?? []) l(e);
+    },
+    startSession: (sources) => {
+      session = { inputSources: sources };
+      xr.dispatchEvent({ type: 'sessionstart' });
+    },
+    endSession: () => {
+      session = null;
+      xr.dispatchEvent({ type: 'sessionend' });
+    },
   };
+  return { xr, controllers, grips };
 }
 
 function fakeInputSource(handedness: 'left' | 'right'): XRInputSource {
@@ -309,5 +346,95 @@ describe('XrControllers — input source tracking', () => {
     new XrControllers(gl as unknown as THREE.WebGLRenderer, scene);
     expect(scene.children).toContain(gl.controllers[0]);
     expect(scene.children).toContain(gl.controllers[1]);
+  });
+
+  // Session-level backstop: Three.js WebXRManager subscribes to the
+  // session's `inputsourceschange` event and relies on the runtime to
+  // deliver a synthetic initial event listing already-connected
+  // controllers. Some runtimes / polyfills / device emulators don't —
+  // slots stay null and pulseHaptic silently no-ops even though both
+  // physical controllers are on. Reading `session.inputSources` on
+  // `sessionstart` directly covers this gap without disturbing the
+  // primary per-controller connected/disconnected path.
+  it('syncs both slots from session.inputSources on sessionstart when per-controller connected events are missed', () => {
+    const { xr, gl } = makeStarted();
+    expect(Array.from(xr.currentInputSources)).toEqual([null, null]);
+    const leftSrc = fakeInputSource('left');
+    const rightSrc = fakeInputSource('right');
+    // Simulate Three.js's setSession: parks session on xr.getSession()
+    // and fires sessionstart — but does NOT dispatch per-controller
+    // connected events, matching the runtime quirk this backstop is
+    // for.
+    gl.xr.startSession([leftSrc, rightSrc]);
+    expect(xr.currentInputSources[0]).toBe(leftSrc);
+    expect(xr.currentInputSources[1]).toBe(rightSrc);
+  });
+
+  it('sessionstart fills only the empty slot when one connected event already fired', () => {
+    // A mixed scenario: runtime delivered one per-controller event but
+    // missed the other. The sessionstart sync must fill the null slot
+    // without clobbering the already-captured reference (the connected
+    // event's XRInputSource is the same object the runtime has in
+    // session.inputSources, but we defend against over-writing in case
+    // a test or future runtime delivers a distinct object).
+    const { xr, gl } = makeStarted();
+    const leftSrc = fakeInputSource('left');
+    const rightSrc = fakeInputSource('right');
+    dispatchConnected(gl.controllers[0]!, leftSrc);
+    expect(xr.currentInputSources[0]).toBe(leftSrc);
+    expect(xr.currentInputSources[1]).toBe(null);
+    gl.xr.startSession([leftSrc, rightSrc]);
+    expect(xr.currentInputSources[0]).toBe(leftSrc); // unchanged
+    expect(xr.currentInputSources[1]).toBe(rightSrc); // filled by backstop
+  });
+
+  it('sessionstart is a no-op when session.inputSources is empty', () => {
+    // Runtime entered XR with no controllers on (keyboard-only session,
+    // inline mode, or the player hasn't powered them on yet). Backstop
+    // must not crash or populate bogus slots; per-controller connected
+    // events will fire later as controllers wake up.
+    const { xr, gl } = makeStarted();
+    gl.xr.startSession([]);
+    expect(Array.from(xr.currentInputSources)).toEqual([null, null]);
+  });
+
+  it('sessionend clears both slots', () => {
+    // Player exits XR → slots must drop references so the next session
+    // starts clean and pulseHaptic can't accidentally fire against a
+    // stale XRInputSource whose gamepad is no longer live.
+    const { xr, gl } = makeStarted();
+    const leftSrc = fakeInputSource('left');
+    const rightSrc = fakeInputSource('right');
+    gl.xr.startSession([leftSrc, rightSrc]);
+    expect(xr.currentInputSources[0]).toBe(leftSrc);
+    expect(xr.currentInputSources[1]).toBe(rightSrc);
+    gl.xr.endSession();
+    expect(Array.from(xr.currentInputSources)).toEqual([null, null]);
+  });
+
+  it('pulseHaptic(i) routes to the slot sessionstart populated — slot↔actuator invariant holds across the backstop path', async () => {
+    // The whole reason the backstop exists is so pulseHaptic has a
+    // source to pulse. Verify slot alignment end-to-end: session
+    // backstop fills slot i, pulseHaptic(i) hits slot i's actuator.
+    const { xr, gl } = makeStarted();
+    const slot0Calls: Array<[number, number]> = [];
+    const slot1Calls: Array<[number, number]> = [];
+    const src0 = fakeInputSourceWithGamepad('left', async (intensity, durationMs) => {
+      slot0Calls.push([intensity, durationMs]);
+      return true;
+    });
+    const src1 = fakeInputSourceWithGamepad('right', async (intensity, durationMs) => {
+      slot1Calls.push([intensity, durationMs]);
+      return true;
+    });
+    gl.xr.startSession([src0, src1]);
+    const pulseHaptic = (xr as unknown as { pulseHaptic: (i: number) => void }).pulseHaptic.bind(xr);
+    pulseHaptic(0);
+    await Promise.resolve();
+    expect(slot0Calls).toEqual([[0.6, 40]]);
+    expect(slot1Calls).toEqual([]);
+    pulseHaptic(1);
+    await Promise.resolve();
+    expect(slot1Calls).toEqual([[0.6, 40]]);
   });
 });

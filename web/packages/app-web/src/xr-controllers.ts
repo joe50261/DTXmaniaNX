@@ -91,10 +91,25 @@ export class XrControllers {
   private readonly lastHitMs = new Map<LaneValue, number>();
 
   /**
-   * XRInputSource bound to controller index i, captured on `connected` event.
-   * Needed because `session.inputSources` iteration order is not guaranteed
-   * to match the Three.js controller index — pulsing the wrong entry made
-   * the left-hand strike rumble the right controller.
+   * XRInputSource bound to controller index i. Slot-indexed, kept aligned
+   * with Three.js's `getController(i)` / `getControllerGrip(i)` so that
+   * hit detection (reads grip i's pose) and `pulseHaptic(i)` (reads
+   * `inputSources[i].gamepad`) address the same physical controller.
+   *
+   * Populated by two paths that must stay slot-consistent:
+   *
+   * 1. Per-controller `connected` / `disconnected` listeners below — the
+   *    primary path, also handles mid-session power-cycles.
+   * 2. `sessionstart` backstop that reads `session.inputSources` directly.
+   *    Three.js's WebXRManager subscribes to the session's
+   *    `inputsourceschange` event and expects the runtime to deliver a
+   *    synthetic initial event listing the already-present controllers;
+   *    some runtimes / polyfills / device emulators don't, so only one
+   *    slot gets populated (or none) and `pulseHaptic` silently no-ops.
+   *    Directly iterating `session.inputSources` in order matches
+   *    Three.js's own "first empty slot" assignment (because our array
+   *    starts [null, null] at session start), so slots we fill here stay
+   *    aligned with the grip at the same index.
    */
   private readonly inputSources: (XRInputSource | null)[] = [null, null];
 
@@ -144,7 +159,26 @@ export class XrControllers {
       });
       this.scene.add(controller);
     }
+
+    this.webgl.xr.addEventListener('sessionstart', this.onSessionStart);
+    this.webgl.xr.addEventListener('sessionend', this.onSessionEnd);
   }
+
+  private readonly onSessionStart = (): void => {
+    const session = this.webgl.xr.getSession();
+    if (!session) return;
+    const sources = session.inputSources;
+    for (let i = 0; i < Math.min(sources.length, 2); i++) {
+      if (this.inputSources[i] === null) {
+        this.inputSources[i] = sources[i] ?? null;
+      }
+    }
+  };
+
+  private readonly onSessionEnd = (): void => {
+    this.inputSources[0] = null;
+    this.inputSources[1] = null;
+  };
 
   /** Expose input sources so other subsystems (e.g. the game layer's
    * mid-song cancel-squeeze polling) can read button state without
