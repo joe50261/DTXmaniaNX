@@ -76,6 +76,11 @@ const BD_HIT_HALF_M = 0.25;
  * don't fall between samples at typical swing speeds. */
 const STICK_SAMPLE_COUNT = 5;
 
+/** How many `pulse()` outcomes to log per slot per session before we
+ * stop — small enough to keep console noise bounded, large enough that
+ * one flaky `fired: false` can't dominate the diagnostic readout. */
+const PULSE_LOG_MAX_PER_SLOT = 3;
+
 export class XrControllers {
   private listener: XrLaneListener | null = null;
   private readonly addedToScene: THREE.Object3D[] = [];
@@ -102,6 +107,13 @@ export class XrControllers {
    * this, a roll fires the log ~10-20 times/sec on Quest and drowns out
    * the very first-hit data the decision table needs. Reset in stop(). */
   private readonly hapticLogged: boolean[] = [false, false];
+
+  /** Counter per slot for the `[pulse]` outcome diagnostic. Logs the
+   * first `PULSE_LOG_MAX_PER_SLOT` outcomes per slot per session so a
+   * single `fired: false` sample (which Quest has been known to emit
+   * during the first post-resume call before warm-up completes) can't
+   * latch and hide the eventual `fired: true`. Reset in stop(). */
+  private readonly pulseLogCount: number[] = [0, 0];
 
   private padsTexture: THREE.Texture | null = null;
 
@@ -421,39 +433,76 @@ export class XrControllers {
   // re-resolve by handedness — `handedness` can drift relative to
   // `inputSources[i]` across reconnects and produces wrong-hand buzz.
   private pulseHaptic(controllerIdx: number): void {
-    // Diagnostic: log the slot that fired vs. what's cached vs. what
-    // three.js sees live in session.inputSources. Gated to one line per
-    // slot per session (see hapticLogged) so a roll doesn't flood the
-    // console. Three possible patterns tell us where the bug is:
-    //   cached==live, both ordered right→left → bug is elsewhere
-    //     (grip coord frame / velocity sign), NOT haptic routing.
-    //   cached has the literal string 'null' in one slot, live has both
-    //     hands → one `connected` listener never fired; fix init
-    //     ordering. ('null' is the stringified sentinel for a
-    //     null slot entry, not the JS null — `cached` is all strings.)
-    //   cached and live disagree on handedness order → slot re-seat
-    //     left our cache stale; switch pulseHaptic to read live.
-    // Remove once the root cause is identified.
+    // Diagnostic round 1 (PR #12) confirmed cached == live, so the slot
+    // → XRInputSource binding is correct. The bug must be at the
+    // actuator layer. Round 2 (this code) logs the actuator inventory
+    // + the outcome of the pulse() promise so we can distinguish:
+    //   pulse resolves true on both, wrong hand still buzzes → Quest
+    //     maps hapticActuators[0] to the wrong physical device; fall
+    //     back to gamepad.vibrationActuator.playEffect and/or match by
+    //     iterating live session.inputSources.
+    //   pulse rejects on one slot, resolves on the other → missing or
+    //     broken actuator on the failing side; try vibrationActuator
+    //     for that slot only.
+    //   hapticLen === 0 on one slot → actuator simply not exposed;
+    //     must use vibrationActuator or skip.
+    // Both logs are gated to one line per slot per session.
+    const src = this.inputSources[controllerIdx];
+    const gp = src?.gamepad as
+      | (Gamepad & {
+          hapticActuators?: GamepadHapticActuator[];
+          vibrationActuator?: {
+            playEffect(
+              type: 'dual-rumble',
+              params: {
+                startDelay?: number;
+                duration: number;
+                weakMagnitude?: number;
+                strongMagnitude?: number;
+              },
+            ): Promise<string>;
+          };
+        })
+      | undefined;
+
     if (!this.hapticLogged[controllerIdx]) {
       this.hapticLogged[controllerIdx] = true;
       const session = this.webgl.xr.getSession();
       const cached = this.inputSources.map((s) => s?.handedness ?? 'null');
       const live = session ? Array.from(session.inputSources).map((s) => s.handedness) : [];
-      console.info('[haptic]', { slot: controllerIdx, cached, live });
+      console.info('[haptic]', {
+        slot: controllerIdx,
+        cached,
+        live,
+        hasGamepad: !!gp,
+        gamepadId: gp?.id ?? 'null',
+        hapticLen: gp?.hapticActuators?.length ?? 0,
+        hasVibration: !!gp?.vibrationActuator,
+      });
     }
 
-    const src = this.inputSources[controllerIdx];
-    if (!src?.gamepad) return;
-    const actuators = (src.gamepad as Gamepad & {
-      hapticActuators?: GamepadHapticActuator[];
-    }).hapticActuators;
-    const act = actuators?.[0];
+    if (!gp) return;
+    const act = gp.hapticActuators?.[0];
     if (act && 'pulse' in act) {
       (act as GamepadHapticActuator & {
         pulse(intensity: number, durationMs: number): Promise<boolean>;
       })
         .pulse(0.6, 40)
-        .catch(() => {});
+        .then((fired) => {
+          if (this.pulseLogCount[controllerIdx]! < PULSE_LOG_MAX_PER_SLOT) {
+            this.pulseLogCount[controllerIdx]!++;
+            console.info('[pulse]', { slot: controllerIdx, fired });
+          }
+        })
+        .catch((e: unknown) => {
+          if (this.pulseLogCount[controllerIdx]! < PULSE_LOG_MAX_PER_SLOT) {
+            this.pulseLogCount[controllerIdx]!++;
+            console.info('[pulse]', {
+              slot: controllerIdx,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        });
     }
   }
 
@@ -492,6 +541,8 @@ export class XrControllers {
     this.inputSources[1] = null;
     this.hapticLogged[0] = false;
     this.hapticLogged[1] = false;
+    this.pulseLogCount[0] = 0;
+    this.pulseLogCount[1] = 0;
     // Intentionally NOT nulling this.listener: Game wires it once at
     // construction via onHit(), and tick() already bails early when no
     // XR session is active, so there's no stale-dispatch risk. Clearing
