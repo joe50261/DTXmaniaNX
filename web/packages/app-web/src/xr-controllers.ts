@@ -400,25 +400,58 @@ export class XrControllers {
   }
 
   /**
-   * Pulse the actuator bound to the same slot that detected the hit.
-   * Grip pose and gamepad both live at `inputSources[i]`; slot-indexed
-   * routing was verified by PRs #12 / #13's diagnostic logs (`cached`
-   * matched `live` on every observed Quest session), so don't re-resolve
-   * by handedness — `handedness` can drift relative to `inputSources[i]`
-   * across reconnects and would produce wrong-hand buzz.
+   * Pulse the actuator for the hand that just struck.
    *
-   * Prefer the standard `gamepad.vibrationActuator.playEffect` path:
-   * Quest Browser's legacy `hapticActuators[0].pulse` resolves with
-   * `fired: true` but routes to the *wrong* physical device (right-slot
-   * pulse buzzed the left controller, left-slot pulse no-oped at all —
-   * in-VR reproduction captured in PR #13). `playEffect('dual-rumble')`
-   * addresses the correct per-controller vibrator on every Quest
-   * firmware we've tested, and falls back gracefully on older / non-
-   * Quest runtimes that only expose the legacy actuator array.
+   * Resolution chain:
+   *   slot index (from hit detection) → handedness (read off the cached
+   *   `inputSources[slot]`) → live `session.inputSources` iteration →
+   *   the LIVE `XRInputSource` matching that handedness → its
+   *   `gamepad.vibrationActuator.playEffect`.
+   *
+   * Why not `this.inputSources[slot].gamepad` directly: PRs #12-#14
+   * progressively eliminated every layer but this one. PR #12 confirmed
+   * slot↔handedness binding is correct. PR #13's `fired: true` +
+   * wrong-hand behaviour ruled out the legacy `hapticActuators[0].pulse`
+   * actuator mapping. PR #14 swapped to standards-compliant
+   * `vibrationActuator.playEffect('dual-rumble', ...)` and the symptom
+   * persisted — right-slot pulse still buzzed the left controller, left-
+   * slot pulse still no-op'd. The single remaining suspect is
+   * `XRInputSource.gamepad`'s reference staleness: Quest Browser appears
+   * to retain our cached `XRInputSource` object across an
+   * inputsourceschange such that its `.gamepad.vibrationActuator` keeps
+   * pointing at whatever actuator it was first paired with — which
+   * isn't necessarily the one now bound to that physical controller.
+   * Other WebXR games (and e.g. Paradiddle-style native apps) don't hit
+   * this because they either read `session.inputSources` live every
+   * frame or go through OpenXR directly; our `connected`-time cache was
+   * the odd one out.
+   *
+   * We still use the slot index for hit attribution (grip pose tracking
+   * is per-slot and verified correct by `captureSamples`), so the cached
+   * handedness at `this.inputSources[slot].handedness` is the stable
+   * bridge — it identifies which live input source to fetch without
+   * re-introducing the old \"handedness drift\" hazard (handedness of a
+   * given physical controller doesn't change across reconnects; its
+   * gamepad actuator reference does).
    */
   private pulseHaptic(controllerIdx: number): void {
-    const src = this.inputSources[controllerIdx];
-    const gp = src?.gamepad as
+    const cachedHand = this.inputSources[controllerIdx]?.handedness;
+    if (cachedHand !== 'left' && cachedHand !== 'right') return;
+    const session = this.webgl.xr.getSession();
+    if (!session) return;
+    let liveSrc: XRInputSource | null = null;
+    for (const s of session.inputSources) {
+      // Defensive: WebXR spec says session.inputSources is a
+      // FrozenArray<XRInputSource>, no holes — but guard anyway so a
+      // hand-tracking-only session (`handedness: 'none'`) or a sparse
+      // polyfill can't crash the haptic path.
+      if (!s) continue;
+      if (s.handedness === cachedHand) {
+        liveSrc = s;
+        break;
+      }
+    }
+    const gp = liveSrc?.gamepad as
       | (Gamepad & {
           vibrationActuator?: {
             playEffect(
