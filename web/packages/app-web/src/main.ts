@@ -47,15 +47,49 @@ import type { SkinTextures } from './renderer.js';
 import { runCalibration } from './calibrate.js';
 import { loadAudioOffsetMs, saveAudioOffsetMs } from './calibrate-model.js';
 import { activeToast, showToast } from './hud-toast.js';
+import type { FileSystemBackend } from '@dtxmania/dtx-core';
+
+/** Shape of the Playwright-only hook we expose on `window`. See the
+ * assignment further below for why it's installed in production builds. */
+interface DtxmaniaTestHook {
+  activeToast: typeof activeToast;
+  /** Seed the song wheel with a synthetic BoxNode tree + stub backend so
+   * e2e tests can drive keyboard nav / search / Enter-to-launch without a
+   * real Songs folder. Backend resolves any readText to the bundled
+   * demo.dtx so Enter can ride the real launchGame path to overlay-hidden. */
+  installFakeLibrary?: (spec: FakeLibrarySpec) => Promise<void>;
+  /** Re-run the XR button visibility check. Tests stub navigator.xr then
+   * call this to observe the button flipping visible/hidden — refresh is
+   * otherwise only wired to library-change events, not to navigator edits. */
+  refreshXrButton?: () => void;
+  /** Direct Game instance for VR-flow e2e specs that need to read
+   * `inXR` / end the current `navigator.xr` session / show the VR menu
+   * with a specific library. Exposed as-is rather than behind a narrow
+   * API surface because the in-VR specs probe several fields
+   * (`inXR`, `hasChart`, `display.webgl.xr.getSession`) and keeping
+   * parallel helpers in sync with every new test becomes noise. */
+  game?: Game | null;
+}
+
+/** Minimum shape the fake library needs. Kept dumb-data-only so the
+ * Playwright evaluate() closure doesn't have to import types. */
+interface FakeLibrarySpec {
+  songs: Array<{
+    title: string;
+    artist?: string;
+    charts: Array<{ slot: number; label: string; level?: number }>;
+  }>;
+}
 
 // Test hook for the Playwright e2e suite. Toast is painted onto the
 // HUD canvas rather than a DOM node Playwright can locate, so we
 // expose the module singleton directly. Always-installed (a single
 // function reference on window) because the e2e suite runs against
-// `vite preview` which matches a production build.
-(
-  window as unknown as { __dtxmaniaTest?: { activeToast: typeof activeToast } }
-).__dtxmaniaTest = { activeToast };
+// `vite preview` which matches a production build. The other hook
+// methods are filled in further down once their dependencies
+// (songWheel, refreshXrButton, library backend) are constructed.
+const testHook: DtxmaniaTestHook = { activeToast };
+(window as unknown as { __dtxmaniaTest: DtxmaniaTestHook }).__dtxmaniaTest = testHook;
 import { AudioEngine } from '@dtxmania/audio-engine';
 
 /**
@@ -250,6 +284,7 @@ try {
   // WebGL unavailable — page still usable for non-game actions if any.
   console.warn('Game init failed', e);
 }
+testHook.game = activeGame;
 
 // Song-select preview audio: rides on the Game's AudioContext so a single
 // user gesture resumes both, and the browser's AudioContext cap doesn't
@@ -328,13 +363,77 @@ function clearPreimage(): void {
 }
 
 interface Library {
+  /** Present for real File-System-Access-picked libraries; Rescan uses
+   * this. Playwright's `installFakeLibrary` sets it to a stub since the
+   * test never clicks Rescan. */
   handle: FileSystemDirectoryHandle;
-  backend: HandleFileSystemBackend;
+  /** Widened to the interface (rather than HandleFileSystemBackend)
+   * so a stub backend can be swapped in for e2e. All library readers
+   * only use the FileSystemBackend surface. */
+  backend: FileSystemBackend;
   root: BoxNode;
   songs: SongEntry[];
 }
 let library: Library | null = null;
 let onPick: () => Promise<void> = pickAndScan;
+
+// Finish installing the Playwright-only hooks now that their deps
+// (songWheel, library, refreshXrButton via hoisting) are in scope.
+testHook.refreshXrButton = () => refreshXrButton();
+testHook.installFakeLibrary = async (spec: FakeLibrarySpec): Promise<void> => {
+  const res = await fetch(`${import.meta.env.BASE_URL}demo.dtx`);
+  if (!res.ok) throw new Error(`installFakeLibrary: demo.dtx fetch failed ${res.status}`);
+  const demoText = await res.text();
+  const emptyBuf = new ArrayBuffer(0);
+  // Stub backend: every readText resolves to the demo chart (so Enter
+  // can drive the full launchGame path to overlay-hidden); readFile
+  // returns empty bytes (SampleBank logs a warn and falls back to
+  // synth voices — the existing demo-play spec follows the same no-
+  // real-WAV path, so no new failure modes).
+  const backend: FileSystemBackend = {
+    listDir: async () => [],
+    readFile: async () => emptyBuf,
+    readText: async () => demoText,
+    exists: async () => true,
+  };
+  const root: BoxNode = {
+    type: 'box',
+    name: 'test-root',
+    path: '',
+    parent: null,
+    children: [],
+  };
+  for (const songSpec of spec.songs) {
+    const entry: SongEntry = {
+      title: songSpec.title,
+      folderPath: '',
+      fromSetDef: false,
+      charts: [],
+    };
+    if (songSpec.artist !== undefined) entry.artist = songSpec.artist;
+    for (const c of songSpec.charts) {
+      const chart: ChartEntry = {
+        slot: c.slot,
+        label: c.label,
+        chartPath: `${songSpec.title}.dtx`,
+      };
+      if (c.level !== undefined) chart.drumLevel = c.level;
+      entry.charts.push(chart);
+    }
+    root.children.push({ type: 'song', entry, parent: root });
+  }
+  // Handle is unused outside Rescan (which tests never trigger); a cast
+  // to the native type keeps the Library shape intact without leaking
+  // test-only `null` into the production code path.
+  library = {
+    handle: null as unknown as FileSystemDirectoryHandle,
+    backend,
+    root,
+    songs: flattenSongs(root),
+  };
+  songWheel.setRoot(root);
+  refreshXrButton();
+};
 
 registerServiceWorker();
 

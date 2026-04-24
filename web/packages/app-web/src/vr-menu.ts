@@ -181,6 +181,14 @@ export class VrMenu {
   private onExit: (() => void) | null = null;
   private shown = false;
 
+  /** Read-only: menu currently visible? Used by Game to surface the
+   * flag for e2e specs that need to assert the in-VR menu appeared on
+   * session start (the underlying `shown` + mesh-visibility state is
+   * private to keep show/hide as the only mutation path). */
+  get isShown(): boolean {
+    return this.shown;
+  }
+
   private readonly raycaster = new THREE.Raycaster();
   /** Controllers the menu attached a laser + listeners to. Populated
    * once in the constructor — re-creating per show() was leaking Line

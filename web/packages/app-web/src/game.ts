@@ -290,6 +290,13 @@ export class Game {
     return this.renderer.inXR;
   }
 
+  /** True while the in-VR song picker panel is being painted. Mirrors
+   * `VrMenu.isShown`; used by e2e specs to assert the menu appeared on
+   * enterXR when a library was already loaded. */
+  get vrMenuShown(): boolean {
+    return this.vrMenu.isShown;
+  }
+
   /** True if loadAndStart has been called at least once. */
   get hasChart(): boolean {
     return this.song !== null;
