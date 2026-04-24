@@ -1,7 +1,14 @@
 import { parseDtx } from '../parser/parser.js';
 import type { ChartRecord } from '../scoring/record.js';
 import { parseBoxDef, type BoxDefMeta } from './boxdef.js';
-import { extname, joinPath, type DirEntry, type FileSystemBackend } from './fs-backend.js';
+import {
+  basename,
+  dirname,
+  extname,
+  joinPath,
+  type DirEntry,
+  type FileSystemBackend,
+} from './fs-backend.js';
 import { parseSetDef, type SetDefBlock } from './setdef.js';
 
 /**
@@ -134,6 +141,15 @@ export interface ScanOptions {
    * looking stuck on the opening frame.
    */
   onWalkProgress?: (dirsScanned: number, songsFound: number) => void;
+  /**
+   * Maximum in-flight backend I/O calls (listDir / readText). Above 1 the
+   * walk runs sibling subdirectories and meta-parse reads in parallel;
+   * on Quest 3's File System Access API this turns the cold scan from a
+   * latency-bound serial chain into a throughput-bound batch. Default 6
+   * — empirically the knee between diminishing returns and the FSA
+   * backend queueing up. Set to 1 to restore fully sequential behaviour.
+   */
+  concurrency?: number;
 }
 
 const DEFAULT_SKIP_DIRS = new Set(['system', '$recycle.bin', 'node_modules', '.git']);
@@ -146,6 +162,7 @@ export class SongScanner {
   private readonly onWalkProgress:
     | ((dirsScanned: number, songsFound: number) => void)
     | undefined;
+  private readonly sem: Semaphore;
   private dirsScanned = 0;
   private songsFound = 0;
 
@@ -157,6 +174,7 @@ export class SongScanner {
     this.parseMeta = options.parseMeta ?? true;
     this.onMetaProgress = options.onMetaProgress;
     this.onWalkProgress = options.onWalkProgress;
+    this.sem = new Semaphore(Math.max(1, options.concurrency ?? 6));
   }
 
   async scan(rootPath: string): Promise<SongIndex> {
@@ -176,20 +194,42 @@ export class SongScanner {
     await this.walk(root, 0, errors);
     const songs = flattenSongs(root);
     if (this.parseMeta) {
-      const total = songs.length;
-      this.onMetaProgress?.(0, total);
-      for (let i = 0; i < songs.length; i++) {
-        await this.fillSongMeta(songs[i]!, errors);
-        this.onMetaProgress?.(i + 1, total);
-      }
+      await this.fillAllMeta(songs, errors);
     }
     return { rootPath, root, songs, errors };
+  }
+
+  // Gated I/O: only the actual backend call holds a semaphore slot, not
+  // the surrounding recursion. Otherwise deeply nested walks all hold
+  // slots while awaiting children and deadlock the pool.
+  private listDir(path: string): Promise<DirEntry[]> {
+    return this.sem.run(() => this.fs.listDir(path));
+  }
+  private readText(path: string, encoding?: string): Promise<string> {
+    return this.sem.run(() => this.fs.readText(path, encoding));
+  }
+
+  private async fillAllMeta(songs: SongEntry[], errors: ScanError[]): Promise<void> {
+    const total = songs.length;
+    this.onMetaProgress?.(0, total);
+    if (total === 0) return;
+    let done = 0;
+    // Parallel across songs; within a song the 1-5 charts run sequentially
+    // (they cross-populate the same SongEntry fields, and the parallelism
+    // win comes from songs-level fanout anyway).
+    await Promise.all(
+      songs.map(async (song) => {
+        await this.fillSongMeta(song, errors);
+        done++;
+        this.onMetaProgress?.(done, total);
+      })
+    );
   }
 
   private async fillSongMeta(song: SongEntry, errors: ScanError[]): Promise<void> {
     for (const chart of song.charts) {
       try {
-        const text = await this.fs.readText(chart.chartPath);
+        const text = await this.readText(chart.chartPath);
         const parsed = parseDtx(text);
         chart.drumLevel = parsed.drumLevel;
         chart.bpm = parsed.baseBpm;
@@ -216,7 +256,7 @@ export class SongScanner {
 
     let entries: DirEntry[];
     try {
-      entries = await this.fs.listDir(box.path);
+      entries = await this.listDir(box.path);
     } catch (e) {
       errors.push({ path: box.path, message: errorMessage(e) });
       return;
@@ -224,9 +264,40 @@ export class SongScanner {
     this.dirsScanned++;
     this.onWalkProgress?.(this.dirsScanned, this.songsFound);
 
-    const setDefEntry = entries.find(
-      (e) => e.isFile && e.name.toLowerCase() === 'set.def'
-    );
+    // Single pass over entries: bucket into set.def / box.def / .dtx /
+    // subdirs, and build a lowercase fileSet for O(1) existence checks
+    // against set.def chart references later. This replaces three
+    // separate loops + a `fs.exists` per referenced chart.
+    let setDefEntry: DirEntry | undefined;
+    let boxDefEntry: DirEntry | undefined;
+    const dtxFiles: DirEntry[] = [];
+    const subdirs: DirEntry[] = [];
+    const fileSet = new Set<string>();
+    for (const entry of entries) {
+      const lower = entry.name.toLowerCase();
+      if (entry.isFile) {
+        fileSet.add(lower);
+        if (lower === 'set.def') setDefEntry = entry;
+        else if (lower === 'box.def') boxDefEntry = entry;
+        else if (extname(entry.name) === '.dtx') dtxFiles.push(entry);
+      } else if (entry.isDirectory) {
+        if (!this.skipDirs.has(lower)) subdirs.push(entry);
+      }
+    }
+
+    // box.def metadata (found in THIS listDir — no separate probe pass).
+    // Apply before recursion so hoist logic sees the correct `explicit`
+    // flag, and before children are populated so the order of side
+    // effects matches the old two-pass implementation.
+    if (boxDefEntry) {
+      try {
+        const text = await this.readText(boxDefEntry.path, 'shift-jis');
+        const meta = parseBoxDef(text);
+        applyBoxDefMeta(box, meta);
+      } catch (e) {
+        errors.push({ path: boxDefEntry.path, message: errorMessage(e) });
+      }
+    }
 
     const pushSong = (entry: SongEntry): void => {
       box.children.push({ type: 'song', entry, parent: box });
@@ -236,14 +307,18 @@ export class SongScanner {
     if (setDefEntry) {
       let pushedFromSetDef = 0;
       try {
-        const text = await this.fs.readText(setDefEntry.path, 'shift-jis');
+        const text = await this.readText(setDefEntry.path, 'shift-jis');
         const blocks = parseSetDef(text);
         for (const block of blocks) {
           const song = blockToSong(block, box.path);
-          // Only add the song if at least one referenced chart actually exists.
+          // Existence check: if the chart is in this directory (the
+          // overwhelmingly common case for set.def) use the O(1)
+          // fileSet we just built. If it references a subpath fall
+          // back to the backend's exists() — rare enough to eat the
+          // round trip.
           const survivingCharts: ChartEntry[] = [];
           for (const chart of song.charts) {
-            if (await this.fs.exists(chart.chartPath)) {
+            if (await this.chartExists(chart.chartPath, box.path, fileSet)) {
               survivingCharts.push(chart);
             }
           }
@@ -261,17 +336,13 @@ export class SongScanner {
       // references, wrong case on a case-sensitive FS), fall through to a
       // plain .dtx scan so the folder still shows up in the library.
       if (pushedFromSetDef === 0) {
-        for (const entry of entries) {
-          if (!entry.isFile) continue;
-          if (extname(entry.name) !== '.dtx') continue;
+        for (const entry of dtxFiles) {
           pushSong(singleDtxToSong(entry, box.path));
         }
       }
     } else {
       // No set.def: collect .dtx files as individual songs.
-      for (const entry of entries) {
-        if (!entry.isFile) continue;
-        if (extname(entry.name) !== '.dtx') continue;
+      for (const entry of dtxFiles) {
         pushSong(singleDtxToSong(entry, box.path));
       }
     }
@@ -289,10 +360,13 @@ export class SongScanner {
     //     with exactly one child after recursion, its parent's pushing
     //     step will hoist that too.
     //   - ≥2 descendants → keep the box.
-    for (const entry of entries) {
-      if (!entry.isDirectory) continue;
-      if (this.skipDirs.has(entry.name.toLowerCase())) continue;
-
+    //
+    // Subdir walks run concurrently through the shared semaphore; we
+    // pre-allocate subBoxes in filesystem order so children commit back
+    // in the same order regardless of which walk returns first. Commit
+    // order is what feeds flattenSongs / the song-wheel, and scan-cache
+    // keys depend on it being deterministic.
+    const subBoxes: BoxNode[] = subdirs.map((entry) => {
       const subBox: BoxNode = {
         type: 'box',
         name: entry.name,
@@ -300,16 +374,36 @@ export class SongScanner {
         parent: box,
         children: [],
       };
+      // `dtxfiles.` prefix is purely a filename convention, no I/O
+      // needed. Apply it up front so both the name and explicit flag
+      // are settled before walk's box.def discovery (which can override
+      // the title).
+      const prefix = 'dtxfiles.';
+      if (entry.name.toLowerCase().startsWith(prefix)) {
+        subBox.explicit = true;
+        subBox.name = entry.name.slice(prefix.length) || entry.name;
+      }
+      return subBox;
+    });
 
-      // Before descending, resolve the DTXmania "is this folder an
-      // explicit box?" rules. Order: (1) look at its children for a
-      // box.def file — if present parse + apply metadata + mark
-      // explicit. (2) Independently, the `dtxfiles.` folder-name prefix
-      // also counts as an explicit marker and provides a default title.
-      // Both can apply simultaneously; box.def wins on title conflicts.
-      await this.applyExplicitBoxMarkers(subBox, errors);
+    // Sibling isolation safety net: wrap each child walk in `.catch`
+    // so one rejected subtree can't fail-fast the whole Promise.all and
+    // cascade up to `scan()` — a deep leaf error would otherwise take
+    // the entire library scan down with it. Normal errors (listDir /
+    // readText / exists) are already routed into `errors` by the
+    // try/catch blocks above; this outer net only fires if a future
+    // change introduces a new uncaught async path inside walk. Sync
+    // throws before the first await bypass .catch, but walk has no
+    // plausible sync-throw path today.
+    await Promise.all(
+      subBoxes.map((subBox) =>
+        this.walk(subBox, depth + 1, errors).catch((e) => {
+          errors.push({ path: subBox.path, message: errorMessage(e) });
+        })
+      )
+    );
 
-      await this.walk(subBox, depth + 1, errors);
+    for (const subBox of subBoxes) {
       if (subBox.children.length === 0) continue;
       if (subBox.children.length === 1 && !subBox.explicit) {
         // Implicit single-child folders collapse into the parent so
@@ -325,55 +419,55 @@ export class SongScanner {
     }
   }
 
-  /**
-   * Probe a candidate sub-box for DTXmania's explicit-box markers and
-   * apply the resulting metadata in-place. No-op if neither marker is
-   * present; in that case the box still gets walked but is subject to
-   * the single-child hoist.
-   */
-  private async applyExplicitBoxMarkers(
-    subBox: BoxNode,
-    errors: ScanError[]
-  ): Promise<void> {
-    // 1. Check for box.def inside the directory.
-    let boxDefMeta: BoxDefMeta | null = null;
+  private async chartExists(
+    chartPath: string,
+    folderPath: string,
+    fileSet: Set<string>
+  ): Promise<boolean> {
+    // Same-directory chart: O(1) lookup against the listDir we already
+    // did. Covers the common set.def shape (every #LnFILE is a bare
+    // filename in the same folder).
+    if (dirname(chartPath) === folderPath) {
+      return fileSet.has(basename(chartPath).toLowerCase());
+    }
+    // Sub-path chart (rare): fall back to the backend. Still goes
+    // through the semaphore so it doesn't stampede parallel walks.
+    return this.sem.run(() => this.fs.exists(chartPath));
+  }
+}
+
+function applyBoxDefMeta(box: BoxNode, meta: BoxDefMeta): void {
+  // Presence of a parsed box.def always flips the box to explicit, even
+  // if none of the optional fields are set — matches the legacy
+  // applyExplicitBoxMarkers behaviour.
+  box.explicit = true;
+  if (meta.title) box.name = meta.title;
+  if (meta.fontColor) box.fontColor = meta.fontColor;
+  if (meta.comment) box.comment = meta.comment;
+  if (meta.preimage) box.preimage = meta.preimage;
+}
+
+/**
+ * Minimal async semaphore. Only gates the backend I/O call itself
+ * (listDir / readText / exists) — NOT the surrounding recursion, so
+ * deeply nested walks can't deadlock the pool by holding a slot while
+ * awaiting their children.
+ */
+class Semaphore {
+  private active = 0;
+  private readonly queue: Array<() => void> = [];
+  constructor(private readonly limit: number) {}
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.active >= this.limit) {
+      await new Promise<void>((resolve) => this.queue.push(resolve));
+    }
+    this.active++;
     try {
-      const inside = await this.fs.listDir(subBox.path);
-      const boxDefEntry = inside.find(
-        (e) => e.isFile && e.name.toLowerCase() === 'box.def'
-      );
-      if (boxDefEntry) {
-        try {
-          const text = await this.fs.readText(boxDefEntry.path, 'shift-jis');
-          boxDefMeta = parseBoxDef(text);
-          subBox.explicit = true;
-        } catch (e) {
-          errors.push({ path: boxDefEntry.path, message: errorMessage(e) });
-        }
-      }
-    } catch {
-      // listDir failure will be rediscovered by walk() and reported
-      // there; nothing to do here.
-    }
-
-    // 2. `dtxfiles.` prefix — case-insensitive, independent of box.def.
-    const prefix = 'dtxfiles.';
-    const lower = subBox.name.toLowerCase();
-    const hasDtxfilesPrefix = lower.startsWith(prefix);
-    if (hasDtxfilesPrefix) {
-      subBox.explicit = true;
-      // Default title: strip the prefix. box.def #TITLE still wins
-      // below if it supplied its own.
-      subBox.name = subBox.name.slice(prefix.length) || subBox.name;
-    }
-
-    // Apply box.def metadata last so authored values override any
-    // defaults we set from the `dtxfiles.` prefix.
-    if (boxDefMeta) {
-      if (boxDefMeta.title) subBox.name = boxDefMeta.title;
-      if (boxDefMeta.fontColor) subBox.fontColor = boxDefMeta.fontColor;
-      if (boxDefMeta.comment) subBox.comment = boxDefMeta.comment;
-      if (boxDefMeta.preimage) subBox.preimage = boxDefMeta.preimage;
+      return await fn();
+    } finally {
+      this.active--;
+      this.queue.shift()?.();
     }
   }
 }
