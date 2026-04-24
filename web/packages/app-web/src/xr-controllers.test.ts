@@ -58,6 +58,32 @@ function fakeInputSourceWithGamepad(
   return src as unknown as XRInputSource;
 }
 
+type PlayEffectParams = {
+  startDelay?: number;
+  duration: number;
+  weakMagnitude?: number;
+  strongMagnitude?: number;
+};
+type PlayEffectSpy = (type: 'dual-rumble', params: PlayEffectParams) => Promise<string>;
+interface FakeVibrationSource {
+  handedness: 'left' | 'right';
+  gamepad: {
+    vibrationActuator: { playEffect: PlayEffectSpy };
+    // hapticActuators intentionally absent so the fallback branch can't
+    // accidentally satisfy a playEffect-targeted assertion.
+  };
+}
+function fakeInputSourceWithVibration(
+  handedness: 'left' | 'right',
+  playEffect: PlayEffectSpy,
+): XRInputSource {
+  const src: FakeVibrationSource = {
+    handedness,
+    gamepad: { vibrationActuator: { playEffect } },
+  };
+  return src as unknown as XRInputSource;
+}
+
 /** Three.js EventDispatcher accepts arbitrary-shape event objects as long
  * as they carry a `type` string. The `data` field mirrors what Quest
  * Browser actually delivers with the XRInputSource. We go through `any`
@@ -194,13 +220,14 @@ describe('XrControllers — input source tracking', () => {
     expect(xr.currentInputSources[1]).toBe(rightSrc);
   });
 
-  // Directly exercise pulseHaptic's actuator resolution. Each slot gets
-  // its own pulse spy; calling pulseHaptic(i) must hit slot i's spy and
-  // no other. This is the slot→actuator invariant the 6f5bca6
-  // resolveHapticSource helper broke — verified here via the private
-  // method so we catch future regressions even if the call site
-  // changes.
-  it('pulseHaptic(i) hits inputSources[i]\'s actuator and no other slot\'s', async () => {
+  // Fallback path: runtimes that expose only the legacy hapticActuators
+  // array (pre-`vibrationActuator` Chrome / non-Quest WebXR backends)
+  // must still pulse the correct slot's actuator. Each slot gets its
+  // own pulse spy; calling pulseHaptic(i) must hit slot i's spy and no
+  // other — this is the slot→actuator invariant the 6f5bca6
+  // `resolveHapticSource` helper broke. Verified here via the private
+  // method so we catch regressions even if the call site changes.
+  it('pulseHaptic(i) hits inputSources[i]\'s legacy actuator when vibrationActuator is absent', async () => {
     const { xr, gl } = makeStarted();
     const leftCalls: Array<[number, number]> = [];
     const rightCalls: Array<[number, number]> = [];
@@ -231,6 +258,74 @@ describe('XrControllers — input source tracking', () => {
     await Promise.resolve();
     expect(rightCalls).toEqual([[0.6, 40]]);
     expect(leftCalls).toEqual([[0.6, 40]]);
+  });
+
+  // Primary haptic path: Quest Browser's legacy hapticActuators[0].pulse
+  // resolves with fired:true but routes to the wrong physical device (bug
+  // diagnosed via PR #12 / #13 in-VR logs). When the standards-compliant
+  // `gamepad.vibrationActuator.playEffect('dual-rumble', ...)` is present
+  // we prefer it; this test pins that preference — legacy pulse must NOT
+  // fire when vibrationActuator is available.
+  it('pulseHaptic prefers vibrationActuator.playEffect over legacy hapticActuators[0].pulse', async () => {
+    const { xr, gl } = makeStarted();
+    const playEffectCalls: Array<['dual-rumble', PlayEffectParams]> = [];
+    const pulseCalls: Array<[number, number]> = [];
+    const src = {
+      handedness: 'right',
+      gamepad: {
+        vibrationActuator: {
+          playEffect: async (type: 'dual-rumble', params: PlayEffectParams) => {
+            playEffectCalls.push([type, params]);
+            return 'complete';
+          },
+        },
+        hapticActuators: [
+          {
+            pulse: async (intensity: number, durationMs: number) => {
+              pulseCalls.push([intensity, durationMs]);
+              return true;
+            },
+          },
+        ],
+      },
+    } as unknown as XRInputSource;
+    dispatchConnected(gl.controllers[1]!, src);
+    const pulseHaptic = (xr as unknown as { pulseHaptic: (i: number) => void }).pulseHaptic.bind(xr);
+    pulseHaptic(1);
+    await Promise.resolve();
+    expect(playEffectCalls).toEqual([
+      ['dual-rumble', { duration: 40, strongMagnitude: 0.6, weakMagnitude: 0.6 }],
+    ]);
+    // Legacy path must be inert while playEffect is available.
+    expect(pulseCalls).toEqual([]);
+  });
+
+  // Parallel to the legacy-pulse routing test above, but for the
+  // vibrationActuator path. Each slot gets its own playEffect spy;
+  // pulseHaptic(i) must hit exactly slot i's spy and no other.
+  it('pulseHaptic(i) hits inputSources[i]\'s playEffect and no other slot\'s', async () => {
+    const { xr, gl } = makeStarted();
+    const leftCalls: Array<['dual-rumble', PlayEffectParams]> = [];
+    const rightCalls: Array<['dual-rumble', PlayEffectParams]> = [];
+    const leftSrc = fakeInputSourceWithVibration('left', async (t, p) => {
+      leftCalls.push([t, p]);
+      return 'complete';
+    });
+    const rightSrc = fakeInputSourceWithVibration('right', async (t, p) => {
+      rightCalls.push([t, p]);
+      return 'complete';
+    });
+    dispatchConnected(gl.controllers[0]!, rightSrc);
+    dispatchConnected(gl.controllers[1]!, leftSrc);
+    const pulseHaptic = (xr as unknown as { pulseHaptic: (i: number) => void }).pulseHaptic.bind(xr);
+    pulseHaptic(0);
+    await Promise.resolve();
+    expect(rightCalls.length).toBe(1);
+    expect(leftCalls.length).toBe(0);
+    pulseHaptic(1);
+    await Promise.resolve();
+    expect(rightCalls.length).toBe(1);
+    expect(leftCalls.length).toBe(1);
   });
 
   it('pulseHaptic no-ops silently when the slot is null (no double-buzz, no crash)', () => {
