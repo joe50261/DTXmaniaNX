@@ -443,6 +443,11 @@ export class XrControllers {
           strongMagnitude: 0.6,
           weakMagnitude: 0.6,
         })
+        // Deliberately do NOT chain-fallback to the legacy actuator on
+        // reject: that path has known wrong-device routing on Quest (the
+        // whole reason this PR exists). Silent no-op is the safer
+        // behaviour if a future Quest firmware starts rejecting
+        // `playEffect` — better no buzz than wrong-hand buzz.
         .catch(() => {});
       return;
     }
