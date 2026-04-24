@@ -10,7 +10,31 @@ import { decodeTextWithBom, type DirEntry, type FileSystemBackend } from '@dtxma
  * backend never escapes that root because navigation only uses
  * getDirectoryHandle / getFileHandle relative to the stored root.
  */
+/**
+ * Size of the LRU cache that maps already-resolved POSIX paths to their
+ * FileSystemDirectoryHandle. Scanning a large library re-visits each
+ * directory's ancestors over and over (listDir + readText + exists all
+ * walk from root); with the cache a `getDirectoryHandle` per ancestor
+ * turns into a Map hit. 256 entries comfortably covers the working set
+ * of a typical scan (breadth-first walks only ever hold one branch's
+ * ancestors live) without retaining handles forever.
+ */
+const DIR_HANDLE_CACHE_SIZE = 256;
+
 export class HandleFileSystemBackend implements FileSystemBackend {
+  /**
+   * POSIX path → resolved DirHandle. Insertion-order Map used as an LRU:
+   * on hit we re-insert to move-to-front; when over capacity we evict
+   * the oldest key (first entry in iteration order).
+   *
+   * Correctness note: a DirHandle is a stable reference to its entry —
+   * re-resolving from root yields the same handle object. Across a
+   * single scan nothing mutates the tree under us, so caching is safe.
+   * If the user changes folders the whole backend is recreated (see
+   * main.ts scanIntoLibrary), which throws this cache away with it.
+   */
+  private readonly dirCache = new Map<string, FileSystemDirectoryHandle>();
+
   constructor(private readonly root: FileSystemDirectoryHandle) {}
 
   async listDir(path: string): Promise<DirEntry[]> {
@@ -18,9 +42,17 @@ export class HandleFileSystemBackend implements FileSystemBackend {
     const prefix = normalize(path);
     const entries: DirEntry[] = [];
     for await (const handle of dir.values()) {
+      const childPath = prefix ? `${prefix}/${handle.name}` : handle.name;
+      if (handle.kind === 'directory') {
+        // Opportunistically populate the cache with every child dir
+        // handle we iterate — we had to fetch them anyway to produce
+        // the listing, so the subsequent walk's resolveDir on each
+        // sub-path becomes a Map hit instead of another round trip.
+        this.cacheDir(childPath, handle as FileSystemDirectoryHandle);
+      }
       entries.push({
         name: handle.name,
-        path: prefix ? `${prefix}/${handle.name}` : handle.name,
+        path: childPath,
         isDirectory: handle.kind === 'directory',
         isFile: handle.kind === 'file',
       });
@@ -67,15 +99,44 @@ export class HandleFileSystemBackend implements FileSystemBackend {
   private async resolveDirSegments(
     segments: string[]
   ): Promise<FileSystemDirectoryHandle | null> {
+    // Longest-prefix cache hit: walk segments from the full path down,
+    // stopping at the first cached ancestor. Then only the uncached
+    // tail segments need real getDirectoryHandle calls. For a deep tree
+    // during a depth-first scan this typically finds a hit at depth-1.
+    let startIdx = 0;
     let current: FileSystemDirectoryHandle = this.root;
-    for (const seg of segments) {
+    for (let i = segments.length; i > 0; i--) {
+      const key = segments.slice(0, i).join('/');
+      const cached = this.dirCache.get(key);
+      if (cached) {
+        // Move-to-front so cold ancestors don't evict hot branches.
+        this.dirCache.delete(key);
+        this.dirCache.set(key, cached);
+        current = cached;
+        startIdx = i;
+        break;
+      }
+    }
+    for (let i = startIdx; i < segments.length; i++) {
       try {
-        current = await current.getDirectoryHandle(seg);
+        current = await current.getDirectoryHandle(segments[i]!);
       } catch {
         return null;
       }
+      this.cacheDir(segments.slice(0, i + 1).join('/'), current);
     }
     return current;
+  }
+
+  private cacheDir(key: string, handle: FileSystemDirectoryHandle): void {
+    if (this.dirCache.has(key)) {
+      // Refresh LRU position.
+      this.dirCache.delete(key);
+    } else if (this.dirCache.size >= DIR_HANDLE_CACHE_SIZE) {
+      const oldest = this.dirCache.keys().next().value;
+      if (oldest !== undefined) this.dirCache.delete(oldest);
+    }
+    this.dirCache.set(key, handle);
   }
 
   private async getFile(path: string): Promise<File> {

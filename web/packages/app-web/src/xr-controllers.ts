@@ -399,17 +399,60 @@ export class XrControllers {
     return out;
   }
 
-  // Pulse the actuator bound to the SAME slot that detected the hit
-  // (grip pose and gamepad both live at `inputSources[i]`). Don't
-  // re-resolve by handedness — `handedness` can drift relative to
-  // `inputSources[i]` across reconnects and produces wrong-hand buzz.
+  /**
+   * Pulse the actuator bound to the same slot that detected the hit.
+   * Grip pose and gamepad both live at `inputSources[i]`; slot-indexed
+   * routing was verified by PRs #12 / #13's diagnostic logs (`cached`
+   * matched `live` on every observed Quest session), so don't re-resolve
+   * by handedness — `handedness` can drift relative to `inputSources[i]`
+   * across reconnects and would produce wrong-hand buzz.
+   *
+   * Prefer the standard `gamepad.vibrationActuator.playEffect` path:
+   * Quest Browser's legacy `hapticActuators[0].pulse` resolves with
+   * `fired: true` but routes to the *wrong* physical device (right-slot
+   * pulse buzzed the left controller, left-slot pulse no-oped at all —
+   * in-VR reproduction captured in PR #13). `playEffect('dual-rumble')`
+   * addresses the correct per-controller vibrator on every Quest
+   * firmware we've tested, and falls back gracefully on older / non-
+   * Quest runtimes that only expose the legacy actuator array.
+   */
   private pulseHaptic(controllerIdx: number): void {
     const src = this.inputSources[controllerIdx];
-    if (!src?.gamepad) return;
-    const actuators = (src.gamepad as Gamepad & {
-      hapticActuators?: GamepadHapticActuator[];
-    }).hapticActuators;
-    const act = actuators?.[0];
+    const gp = src?.gamepad as
+      | (Gamepad & {
+          vibrationActuator?: {
+            playEffect(
+              type: 'dual-rumble',
+              params: {
+                startDelay?: number;
+                duration: number;
+                weakMagnitude?: number;
+                strongMagnitude?: number;
+              },
+            ): Promise<string>;
+          };
+          hapticActuators?: GamepadHapticActuator[];
+        })
+      | undefined;
+    if (!gp) return;
+
+    if (gp.vibrationActuator?.playEffect) {
+      gp.vibrationActuator
+        .playEffect('dual-rumble', {
+          duration: 40,
+          strongMagnitude: 0.6,
+          weakMagnitude: 0.6,
+        })
+        // Deliberately do NOT chain-fallback to the legacy actuator on
+        // reject: that path has known wrong-device routing on Quest (the
+        // whole reason this PR exists). Silent no-op is the safer
+        // behaviour if a future Quest firmware starts rejecting
+        // `playEffect` — better no buzz than wrong-hand buzz.
+        .catch(() => {});
+      return;
+    }
+
+    const act = gp.hapticActuators?.[0];
     if (act && 'pulse' in act) {
       (act as GamepadHapticActuator & {
         pulse(intensity: number, durationMs: number): Promise<boolean>;
