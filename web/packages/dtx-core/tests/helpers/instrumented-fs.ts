@@ -136,7 +136,8 @@ export class RandomSlowFs implements FileSystemBackend {
 export class ThrowingFs implements FileSystemBackend {
   constructor(
     private readonly inner: FileSystemBackend,
-    private readonly throwOnListDir: ReadonlySet<string>
+    private readonly throwOnListDir: ReadonlySet<string>,
+    private readonly throwOnReadText: ReadonlySet<string> = new Set()
   ) {}
 
   async listDir(path: string): Promise<DirEntry[]> {
@@ -146,7 +147,8 @@ export class ThrowingFs implements FileSystemBackend {
   readFile(path: string): Promise<ArrayBuffer> {
     return this.inner.readFile(path);
   }
-  readText(path: string, encoding?: string): Promise<string> {
+  async readText(path: string, encoding?: string): Promise<string> {
+    if (this.throwOnReadText.has(path)) throw new Error(`EACCES: ${path}`);
     return this.inner.readText(path, encoding);
   }
   exists(path: string): Promise<boolean> {

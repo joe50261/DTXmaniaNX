@@ -386,8 +386,21 @@ export class SongScanner {
       return subBox;
     });
 
+    // Sibling isolation safety net: wrap each child walk in `.catch`
+    // so one rejected subtree can't fail-fast the whole Promise.all and
+    // cascade up to `scan()` — a deep leaf error would otherwise take
+    // the entire library scan down with it. Normal errors (listDir /
+    // readText / exists) are already routed into `errors` by the
+    // try/catch blocks above; this outer net only fires if a future
+    // change introduces a new uncaught async path inside walk. Sync
+    // throws before the first await bypass .catch, but walk has no
+    // plausible sync-throw path today.
     await Promise.all(
-      subBoxes.map((subBox) => this.walk(subBox, depth + 1, errors))
+      subBoxes.map((subBox) =>
+        this.walk(subBox, depth + 1, errors).catch((e) => {
+          errors.push({ path: subBox.path, message: errorMessage(e) });
+        })
+      )
     );
 
     for (const subBox of subBoxes) {

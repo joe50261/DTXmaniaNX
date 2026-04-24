@@ -289,6 +289,41 @@ describe('scanner optimization / error isolation', () => {
     expect(idx.errors.some((e) => e.path === 'Songs/Bad')).toBe(true);
   });
 
+  it('a deep-subtree readText failure does not abort siblings — "walk is total" contract', async () => {
+    // Pins the invariant that walk() never rejects: a box.def readText
+    // failure inside a deep subtree today is caught by the try/catch in
+    // walk, but ALSO guarded by the outer .catch around Promise.all so
+    // that if the inner try/catch were ever removed, the scan still
+    // completes and the error surfaces. Both nets together contain
+    // the blast radius to the single failing subBox.
+    const mem = makeFs({
+      'Songs/Good/a.dtx': '#TITLE A',
+      'Songs/Good/b.dtx': '#TITLE B',
+      'Songs/Bad/box.def': '#TITLE Will Not Be Read',
+      'Songs/Bad/x.dtx': '#TITLE X',
+      'Songs/Bad/y.dtx': '#TITLE Y',
+      'Songs/AlsoGood/c.dtx': '#TITLE C',
+      'Songs/AlsoGood/d.dtx': '#TITLE D',
+    });
+    const fs: FileSystemBackend = new ThrowingFs(
+      mem,
+      new Set(),
+      new Set(['Songs/Bad/box.def'])
+    );
+    const idx = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    // Siblings survive with their full content.
+    expect(
+      idx.songs.map((s) => s.folderPath).filter((p) => p !== 'Songs/Bad').sort()
+    ).toEqual([
+      'Songs/AlsoGood',
+      'Songs/AlsoGood',
+      'Songs/Good',
+      'Songs/Good',
+    ]);
+    // Error is reported with the exact offending path.
+    expect(idx.errors.some((e) => e.path === 'Songs/Bad/box.def')).toBe(true);
+  });
+
   it('rejected listDir does not serialise the rest of the walk', async () => {
     // Combine SlowFs + ThrowingFs so we can both break a sibling and
     // measure inflightMax. If Promise.all's fail-fast semantics had
