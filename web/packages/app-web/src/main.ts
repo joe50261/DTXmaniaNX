@@ -62,6 +62,13 @@ interface DtxmaniaTestHook {
    * call this to observe the button flipping visible/hidden — refresh is
    * otherwise only wired to library-change events, not to navigator edits. */
   refreshXrButton?: () => void;
+  /** Direct Game instance for VR-flow e2e specs that need to read
+   * `inXR` / end the current `navigator.xr` session / show the VR menu
+   * with a specific library. Exposed as-is rather than behind a narrow
+   * API surface because the in-VR specs probe several fields
+   * (`inXR`, `hasChart`, `display.webgl.xr.getSession`) and keeping
+   * parallel helpers in sync with every new test becomes noise. */
+  game?: Game | null;
 }
 
 /** Minimum shape the fake library needs. Kept dumb-data-only so the
@@ -277,6 +284,7 @@ try {
   // WebGL unavailable — page still usable for non-game actions if any.
   console.warn('Game init failed', e);
 }
+testHook.game = activeGame;
 
 // Song-select preview audio: rides on the Game's AudioContext so a single
 // user gesture resumes both, and the browser's AudioContext cap doesn't

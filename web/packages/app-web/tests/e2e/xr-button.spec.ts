@@ -1,6 +1,5 @@
-import { readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import { test, expect } from '@playwright/test';
+import { installIwerRuntime } from './iwer-helper';
 
 /**
  * `#enter-xr` button visibility across two environments:
@@ -31,17 +30,6 @@ import { test, expect } from '@playwright/test';
  * covered by `xr-controllers.test.ts` and `vr-lifecycle.test.ts`.
  */
 
-// Iwer ships a UMD bundle under `build/iwer.min.js` that self-assigns to
-// `window.IWER`. Resolved via createRequire so ESM test contexts pick up
-// the same path the Node bundler would — works regardless of whether pnpm
-// hoists the package to the root node_modules or leaves it in .pnpm.
-const require_ = createRequire(import.meta.url);
-const IWER_BUNDLE_PATH = require_.resolve('iwer/build/iwer.min.js');
-
-async function readIwerBundle(): Promise<string> {
-  return readFile(IWER_BUNDLE_PATH, 'utf8');
-}
-
 test.describe('#enter-xr visibility', () => {
   test('hidden on vanilla Chromium (no headset ⇒ isSessionSupported resolves false)', async ({
     page,
@@ -69,32 +57,7 @@ test.describe('#enter-xr visibility', () => {
   });
 
   test('visible when iwer emulates a Meta Quest 3 XRSystem', async ({ context, page }) => {
-    const iwerBundle = await readIwerBundle();
-
-    // Inject the iwer runtime and bootstrap a Quest 3-shaped device
-    // BEFORE any page script evaluates. `addInitScript` runs per new
-    // document, so this applies to the upcoming `goto('/')`.
-    //
-    // We use two separate scripts rather than concatenating so any
-    // syntax issue in our installer surfaces with a clear stack
-    // (instead of pretending iwer itself threw).
-    await context.addInitScript(iwerBundle);
-    await context.addInitScript(() => {
-      // Iwer's UMD exposes `window.IWER` with XRDevice + headset presets.
-      // Constructing with `metaQuest3` installs an `immersive-vr`-capable
-      // session surface; `installRuntime` patches `navigator.xr` onto
-      // the window the test page shares.
-      const iwer = (
-        window as unknown as {
-          IWER: {
-            XRDevice: new (cfg: unknown) => { installRuntime: () => void };
-            metaQuest3: unknown;
-          };
-        }
-      ).IWER;
-      new iwer.XRDevice(iwer.metaQuest3).installRuntime();
-    });
-
+    await installIwerRuntime(context);
     await page.goto('/');
     await expect(page.locator('#overlay')).toBeVisible();
 
