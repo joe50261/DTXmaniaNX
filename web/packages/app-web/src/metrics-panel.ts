@@ -28,7 +28,11 @@ export function installMetricsBadge(): void {
   Object.assign(panel.style, {
     position: 'fixed',
     top: '8px',
-    right: '8px',
+    // Top-left because the existing #enter-xr button sits at top-right
+    // (top:16,right:16) and a top-right badge — even with
+    // pointer-events: none — visually covers it so reviewers can't aim
+    // at the click target.
+    left: '8px',
     width: '170px',
     padding: '6px 8px',
     background: 'rgba(15, 23, 42, 0.85)',
