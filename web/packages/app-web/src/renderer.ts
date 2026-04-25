@@ -5,11 +5,18 @@ import { PAD_ATLAS, PAD_SIZE, padRect } from './pad-atlas.js';
 import { CHIP_ATLAS_Y, CHIP_ATLAS_H, chipRect } from './chip-atlas.js';
 import { JUDGE_ROWS, JUDGE_SPRITE_W, JUDGE_SPRITE_H } from './judge-atlas.js';
 import { linearFadeIn, linearFadeOut, padBounceOffset } from './renderer-math.js';
+import { HudText } from './hud-text.js';
 import type { JudgmentKind, Rank } from '@dtxmania/dtx-core';
 import type { LaneValue } from '@dtxmania/input';
 
 export const CANVAS_W = 1280;
 export const CANVAS_H = 720;
+/**
+ * Visual centre y (canvas px, top-down) of the toast text inside the
+ * 28-px-top, 40-px-tall rounded box. Keeps the SDF text mesh aligned
+ * with the canvas-painted background.
+ */
+const TOAST_TEXT_CENTER_Y = 49;
 /** Default judgment line y. Renderer carries a mutable instance field
  * so the Settings panel can move it live; this constant is just the
  * initial value. */
@@ -123,6 +130,14 @@ export class Renderer {
 
   private readonly hudTexture: THREE.CanvasTexture;
   private readonly hudMesh: THREE.Mesh;
+  /**
+   * SDF-based toast text. Sits above the HUD plane in the playfield
+   * group so it inherits the desktop ortho ⇄ VR scale switch in
+   * enterXR(). The toast's rounded background box still renders to the
+   * HUD canvas underneath; only the glyphs move to GPU SDF for
+   * crispness in VR.
+   */
+  private readonly toastText: HudText;
   private bgMesh: THREE.Mesh | null = null;
   /** Dim quad that sits between bg and HUD so the busy background doesn't eat chips. */
   private dimMesh: THREE.Mesh | null = null;
@@ -205,6 +220,19 @@ export class Renderer {
     this.hudMesh.position.z = 1; // in front of background / pads
     this.hudMesh.renderOrder = 4;
     this.playfield.add(this.hudMesh);
+
+    // Top-of-canvas toast text — rendered as an SDF mesh so it stays
+    // crisp on the VR floating panel. The toast's background rounded
+    // rect still paints to the HUD canvas underneath.
+    this.toastText = new HudText({
+      fontSize: 18,
+      color: 0xffffff,
+      anchorX: 'center',
+      anchorY: 'middle',
+      renderOrder: 5,
+    });
+    this.toastText.setPosition(0, CANVAS_H / 2 - TOAST_TEXT_CENTER_Y, 2);
+    this.playfield.add(this.toastText.object);
 
     this.applySkin(skin);
 
@@ -489,8 +517,9 @@ export class Renderer {
     this.drawHitFlashes(state);
     this.drawHUD(state);
     this.drawJudgmentFlash(state);
-    this.drawToast(state);        // highest z — pinned top-center, both desktop & VR
+    this.drawToastBox(state);     // rounded background only — text is an SDF mesh
     ctx.restore();
+    this.updateToastText(state);
   }
 
   /**
@@ -836,15 +865,15 @@ export class Renderer {
   }
 
   /**
-   * Pinned-top toast band for mid-play feedback ("Loop A: measure 8",
-   * etc.). Painted onto the HUD canvas so it's visible on both the
-   * desktop ortho quad AND the VR floating playfield panel (a DOM
-   * overlay would be invisible inside an immersive WebXR session).
+   * Pinned-top toast background (rounded rect). Sized off the same
+   * 18px monospace measurement that the SDF text mesh effectively
+   * uses for layout, so the box hugs the glyphs both in canvas px and
+   * after lens distortion in VR.
    *
-   * Fades out over the last 250 ms of its lifetime. Expired toasts
-   * auto-clear inside `activeToast()` so we don't double-check here.
+   * Expired toasts auto-clear inside `activeToast()` so we don't
+   * double-check here.
    */
-  private drawToast(state: RenderState): void {
+  private drawToastBox(state: RenderState): void {
     const toast = state.toast;
     if (!toast) return;
     const now = performance.now();
@@ -859,7 +888,6 @@ export class Renderer {
     ctx.font = '18px ui-monospace, monospace';
     ctx.textAlign = 'center';
     const padX = 24;
-    const padY = 14;
     const textWidth = ctx.measureText(toast.text).width;
     const boxW = textWidth + padX * 2;
     const boxH = 40;
@@ -870,9 +898,6 @@ export class Renderer {
     ctx.strokeStyle = 'rgba(80, 120, 255, 0.55)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    // Rounded rectangle (no Path2D.roundRect fallback needed — all
-    // supported browsers have it, but the manual path keeps us safe
-    // on older WebView builds Quest Browser sometimes lags on).
     const r = 6;
     ctx.moveTo(boxX + r, boxY);
     ctx.lineTo(boxX + boxW - r, boxY);
@@ -886,10 +911,27 @@ export class Renderer {
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
-
-    ctx.fillStyle = '#fff';
-    ctx.fillText(toast.text, CANVAS_W / 2, boxY + padY + 12);
     ctx.restore();
+  }
+
+  /** Mirror toast state into the SDF text mesh (text + opacity + visibility). */
+  private updateToastText(state: RenderState): void {
+    const toast = state.toast;
+    if (!toast) {
+      this.toastText.setVisible(false);
+      return;
+    }
+    const now = performance.now();
+    const remaining = toast.expiresAtMs - now;
+    if (remaining <= 0) {
+      this.toastText.setVisible(false);
+      return;
+    }
+    const fadeMs = 250;
+    const alpha = remaining >= fadeMs ? 1 : Math.max(0, remaining / fadeMs);
+    this.toastText.setText(toast.text);
+    this.toastText.setOpacity(alpha);
+    this.toastText.setVisible(true);
   }
 
   /**
@@ -973,6 +1015,7 @@ export class Renderer {
 
   dispose(): void {
     this.webgl.setAnimationLoop(null);
+    this.toastText.dispose();
     this.webgl.dispose();
   }
 }
