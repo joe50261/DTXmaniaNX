@@ -975,6 +975,7 @@ export class SongSelectCanvas {
       '5_bpm font.png',
       '5_header panel.png',
       '5_footer panel.png',
+      '5_skill point panel.png',
       '5_comment bar.png',
       '5_scrollbar.png',
     ];
@@ -1318,6 +1319,14 @@ export class SongSelectCanvas {
         });
       }
     }
+
+    // Skill-point panel chrome — `5_skill point panel.png` (187×62)
+    // at (32, 180), per C# `CActSelectStatusPanel` line 408. The
+    // panel framing the per-instrument SP totals (DR/GT/BS), which
+    // we don't have data for yet — the chrome itself still helps
+    // the song-select stage read as canonical.
+    const skillPanel = this.getAsset('5_skill point panel.png');
+    if (skillPanel) ctx.drawImage(skillPanel, 32, 180);
 
     // BPM block — canonical position (90, 275) for the
     // `5_BPM.png` label (Length / BPM stacked) and (135, 298) for
