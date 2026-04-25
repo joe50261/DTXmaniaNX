@@ -957,6 +957,7 @@ export class SongSelectCanvas {
       '5_status panel.png',
       '5_difficulty panel.png',
       '5_difficulty frame.png',
+      '5_level number.png',
       '5_comment bar.png',
       '5_scrollbar.png',
     ];
@@ -1269,18 +1270,27 @@ export class SongSelectCanvas {
       } else if (isSelected) {
         if (frame) ctx.drawImage(frame, cellX, rowY);
       }
-      // Drum level — bottom-right of the DR cell. The level number is
-      // the only chart-data we have yet; everything else (rank icon,
-      // skill % gauge) waits on the chart layer.
+      // Drum level — bottom-right of the DR cell, painted from
+      // `5_level number.png` (the canonical glyph sprite the C#
+      // reference uses for the difficulty Lv display, see
+      // `CActSelectStatusPanel.tDrawDifficulty`). Sprite layout:
+      // digits 0-9 at (i*20, 0) sized 20×28, period at (200, 0)
+      // sized 10×28. Position from the C# reference: nBoxX +
+      // nPanelW - 77, nBoxY + nPanelH - 35.
+      const levelSprite = this.getAsset('5_level number.png');
       if (chart?.drumLevel !== undefined && chart.drumLevel > 0) {
-        ctx.font = 'bold 18px ui-monospace, monospace';
-        ctx.fillStyle = '#fde047';
-        ctx.textAlign = 'right';
-        ctx.fillText(
-          (chart.drumLevel / 100).toFixed(2),
-          cellX + PART_W - 6,
-          rowY + ROW_H - 8,
-        );
+        const text = (chart.drumLevel / 100).toFixed(2);
+        const lvX = cellX + PART_W - 77;
+        const lvY = rowY + ROW_H - 35;
+        if (levelSprite) {
+          drawLevelGlyphs(ctx, levelSprite, text, lvX, lvY);
+        } else {
+          // Fallback: hand-drawn font when the sprite hasn't loaded.
+          ctx.font = 'bold 18px ui-monospace, monospace';
+          ctx.fillStyle = '#fde047';
+          ctx.textAlign = 'right';
+          ctx.fillText(text, cellX + PART_W - 6, rowY + ROW_H - 8);
+        }
       }
       // DR cells with a chart are direct chart launchers (laser ray +
       // desktop pointer alike) — clicking one starts the chart at
@@ -1499,4 +1509,31 @@ function clampSlot(i: number): number {
   if (i < 0) return 0;
   if (i >= WHEEL_VISIBLE_BARS) return WHEEL_VISIBLE_BARS - 1;
   return i;
+}
+
+/** Paint a numeric string (digits + optional period) using the
+ *  canonical `5_level number.png` glyph sprite. Per C# DTXMania's
+ *  CActSelectStatusPanel.stDifficultyNumber table:
+ *    digit i → source rect (i*20, 0, 20, 28)
+ *    '.'    → source rect (200, 0, 10, 28)
+ *  Stride matches glyph width (digits advance 20 px, period 10 px).
+ *  Unknown chars are skipped without drawing or advancing. */
+function drawLevelGlyphs(
+  ctx: CanvasRenderingContext2D,
+  sprite: HTMLImageElement,
+  text: string,
+  x: number,
+  y: number,
+): void {
+  const GLYPH_H = 28;
+  for (const ch of text) {
+    if (ch >= '0' && ch <= '9') {
+      const idx = ch.charCodeAt(0) - '0'.charCodeAt(0);
+      ctx.drawImage(sprite, idx * 20, 0, 20, GLYPH_H, x, y, 20, GLYPH_H);
+      x += 20;
+    } else if (ch === '.') {
+      ctx.drawImage(sprite, 200, 0, 10, GLYPH_H, x, y, 10, GLYPH_H);
+      x += 10;
+    }
+  }
 }
