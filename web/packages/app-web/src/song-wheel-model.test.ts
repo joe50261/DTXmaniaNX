@@ -20,7 +20,7 @@ import {
 
 /**
  * Exercises the shared model module that both `song-wheel.ts` (DOM)
- * and `vr-menu.ts` (Canvas) subscribe to. These tests are the contract
+ * and `song-select-canvas.ts` (Canvas) subscribe to. These tests are the contract
  * the two views agree on — if one of them starts doing its own thing,
  * it should instead extend this module.
  *

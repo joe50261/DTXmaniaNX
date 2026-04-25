@@ -767,7 +767,7 @@ async function launchGame(
       if (game.inXR) {
         // In VR: re-show the menu panel so the player can pick again without
         // taking off the headset.
-        showVrMenuForActive(fs);
+        showSongSelectForActive(fs);
       } else {
         overlay.style.display = 'grid';
         setStatus('Pick another chart or change folder.');
@@ -821,7 +821,7 @@ async function launchGame(
   }
   previewPlayer?.stop(120);
   try {
-    game.hideVrMenu();
+    game.hideSongSelect();
     await game.loadAndStart(dtxText, startOpts);
     overlay.style.display = 'none';
     refreshXrButton();
@@ -831,10 +831,10 @@ async function launchGame(
   }
 }
 
-function showVrMenuForActive(fs?: GameFsContext): void {
+function showSongSelectForActive(fs?: GameFsContext): void {
   if (!activeGame || !library) return;
   const lib = library;
-  activeGame.showVrMenu(
+  activeGame.showSongSelect(
     lib.root,
     (pick) => {
       run(async () => {
@@ -867,23 +867,23 @@ function showVrMenuForActive(fs?: GameFsContext): void {
         // Stop the preview clip so its tail doesn't overlap the metronome
         // clicks while the player is listening for beats.
         schedulePreview(null);
-        activeGame.hideVrMenu();
+        activeGame.hideSongSelect();
         activeGame.showVrCalibrate((offsetMs) => {
           if (offsetMs !== null) {
             saveAudioOffsetMs(offsetMs);
             showToast(`Latency offset: ${Math.round(offsetMs)} ms`);
           }
           activeGame?.hideVrCalibrate();
-          showVrMenuForActive(fs);
+          showSongSelectForActive(fs);
         });
       },
       onConfig: () => {
         if (!activeGame) return;
         schedulePreview(null);
-        activeGame.hideVrMenu();
+        activeGame.hideSongSelect();
         activeGame.showVrConfig(() => {
           activeGame?.hideVrConfig();
-          showVrMenuForActive(fs);
+          showSongSelectForActive(fs);
         });
       },
     }
@@ -943,7 +943,7 @@ xrBtn.addEventListener('click', () => {
     .then(() => {
       console.info('[xr] session started');
       setStatus('In VR — use controllers to play.');
-      if (library && !game.hasChart) showVrMenuForActive();
+      if (library && !game.hasChart) showSongSelectForActive();
     })
     .catch((e) => {
       console.error('[xr] enterXR failed', e);

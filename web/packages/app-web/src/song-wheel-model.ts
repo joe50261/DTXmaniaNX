@@ -3,8 +3,8 @@ import type { BoxNode, ChartEntry, LibraryNode, SongEntry } from '@dtxmania/dtx-
 /**
  * Pure data/logic model for the song-selection wheel.
  *
- * Shared by the desktop DOM view (`song-wheel.ts`) and the VR canvas
- * panel view (`vr-menu.ts`). Nothing in this module touches DOM,
+ * Shared by the desktop DOM view (`song-wheel.ts`) and the canvas
+ * panel view (`song-select-canvas.ts`). Nothing in this module touches DOM,
  * Three.js, or Canvas — the same concepts (wheel size, difficulty slots,
  * entry list, focus/slot cycling, sort, breadcrumb path) were previously
  * copy-pasted across both views and drifted on small details. A single

@@ -52,7 +52,7 @@ is used by both the desktop DOM view and the VR canvas view, move it into
 a `*-model.ts` module that depends on nothing view-specific. The views then
 become thin subscribers. Examples:
 
-- `song-wheel-model.ts` — shared by `song-wheel.ts` (DOM) and `vr-menu.ts`
+- `song-wheel-model.ts` — shared by `song-wheel.ts` (DOM) and `song-select-canvas.ts`
   (canvas). Constants like `WHEEL_VISIBLE_ROWS`, the `DisplayEntry` type,
   `buildDisplayEntries()`, `cycleFocus()`, `buildBreadcrumbPath()`, etc.
 
@@ -67,7 +67,7 @@ it's demonstrably cheaper than the alternative and doesn't re-implement
 the code under test.
 
 - **Pure model functions** (`song-wheel-model.ts`, `hud-toast.ts`,
-  `tick-state.ts`, `vr-menu-input.ts`, `vr-lifecycle.ts`, …) → **unit
+  `tick-state.ts`, `song-select-input.ts`, `vr-lifecycle.ts`, …) → **unit
   tests** (`*.test.ts` via `vitest`). Full branch coverage expected;
   no DOM / canvas / Three.js dependencies, so they're cheap.
 - **Pure geometry / layout constants** exported from view modules

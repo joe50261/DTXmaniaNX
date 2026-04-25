@@ -50,7 +50,7 @@ export interface SongWheelCallbacks {
  *
  * All shared data/logic (wheel size, entry list building, sort mode,
  * breadcrumb path) lives in `song-wheel-model.ts` so the VR canvas view
- * (`vr-menu.ts`) can subscribe to the same model.
+ * (`song-select-canvas.ts`) can subscribe to the same model.
  */
 export class SongWheel {
   private root: BoxNode | null = null;

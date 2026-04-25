@@ -54,7 +54,7 @@ const FOOTER_TOP = PANEL_H_PX - FOOTER_H;
 /** Exported layout so the "Back button doesn't sit on top of the hint
  * text" invariant and the "content never overflows into the footer
  * strip" invariant can be asserted independently of the canvas paint.
- * Mirrors VR_MENU_FOOTER's role for the song-picker panel. */
+ * Mirrors SONG_SELECT_FOOTER's role for the song-picker panel. */
 export const VR_CONFIG_LAYOUT = Object.freeze({
   PANEL_W_PX,
   PANEL_H_PX,

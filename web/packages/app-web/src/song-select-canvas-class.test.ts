@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { BoxNode, ChartEntry, SongEntry } from '@dtxmania/dtx-core';
-import { VrMenu, type VrMenuDeps } from './vr-menu.js';
-import { VR_MENU_FOOTER } from './vr-menu.js';
+import { SongSelectCanvas, type SongSelectDeps } from './song-select-canvas.js';
+import { SONG_SELECT_FOOTER } from './song-select-canvas.js';
 
 /**
- * VrMenu is canvas-2D view code (mirrors VrConfig). Same test recipe:
+ * SongSelectCanvas is canvas-2D view code (mirrors VrConfig). Same test recipe:
  * real happy-dom canvas, stubbed `getContext('2d')` so paint() doesn't
  * throw, fake Three.js renderer that only implements the two methods
  * the class touches from its constructor + show().
@@ -74,7 +74,7 @@ function makeFakeWebGL(): {
 }
 
 /** Minimal library: root box containing a single song with one chart.
- * VrMenu walks this tree on show(); we only need enough for paint()
+ * SongSelectCanvas walks this tree on show(); we only need enough for paint()
  * to emit its hit-rects — the focus entries are covered by the
  * dedicated song-wheel-model tests. */
 function makeLibrary(): BoxNode {
@@ -102,7 +102,7 @@ function makeLibrary(): BoxNode {
   return root;
 }
 
-function makeDeps(overrides: Partial<VrMenuDeps> = {}): VrMenuDeps {
+function makeDeps(overrides: Partial<SongSelectDeps> = {}): SongSelectDeps {
   return {
     loadBytes: async () => new ArrayBuffer(0),
     joinPath: (folder, rel) => `${folder}/${rel}`,
@@ -111,7 +111,7 @@ function makeDeps(overrides: Partial<VrMenuDeps> = {}): VrMenuDeps {
   };
 }
 
-describe('VrMenu — canvas-2D panel wiring', () => {
+describe('SongSelectCanvas — canvas-2D panel wiring', () => {
   beforeAll(() => {
     installFakeCanvas2DContext();
   });
@@ -119,7 +119,7 @@ describe('VrMenu — canvas-2D panel wiring', () => {
   it('constructs + mounts a plane + two laser Lines under the scene', () => {
     const gl = makeFakeWebGL();
     const scene = new THREE.Scene();
-    const menu = new VrMenu(gl as unknown as THREE.WebGLRenderer, scene);
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
     void menu;
     const meshes = scene.children.filter((c): c is THREE.Mesh => c.type === 'Mesh');
     expect(meshes.length).toBeGreaterThanOrEqual(1);
@@ -135,7 +135,7 @@ describe('VrMenu — canvas-2D panel wiring', () => {
   it('show() paints a full hit-list including Exit VR when deps provided', () => {
     const gl = makeFakeWebGL();
     const scene = new THREE.Scene();
-    const menu = new VrMenu(gl as unknown as THREE.WebGLRenderer, scene);
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
     menu.show(
       makeLibrary(),
       () => {},
@@ -151,7 +151,7 @@ describe('VrMenu — canvas-2D panel wiring', () => {
   it('Settings button only appears when onConfig dep is wired (explicit opt-in)', () => {
     const gl = makeFakeWebGL();
     const scene = new THREE.Scene();
-    const menu = new VrMenu(gl as unknown as THREE.WebGLRenderer, scene);
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
 
     // No onConfig → no 'config' hit.
     menu.show(
@@ -178,7 +178,7 @@ describe('VrMenu — canvas-2D panel wiring', () => {
   it('Calibrate button only appears when onCalibrate dep is wired', () => {
     const gl = makeFakeWebGL();
     const scene = new THREE.Scene();
-    const menu = new VrMenu(gl as unknown as THREE.WebGLRenderer, scene);
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
 
     menu.show(
       makeLibrary(),
@@ -194,7 +194,7 @@ describe('VrMenu — canvas-2D panel wiring', () => {
   it('clicking the Settings rect fires deps.onConfig', () => {
     const gl = makeFakeWebGL();
     const scene = new THREE.Scene();
-    const menu = new VrMenu(gl as unknown as THREE.WebGLRenderer, scene);
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
     let configCount = 0;
     menu.show(
       makeLibrary(),
@@ -212,7 +212,7 @@ describe('VrMenu — canvas-2D panel wiring', () => {
   it('clicking the Exit VR rect fires the onExit callback exactly once', () => {
     const gl = makeFakeWebGL();
     const scene = new THREE.Scene();
-    const menu = new VrMenu(gl as unknown as THREE.WebGLRenderer, scene);
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
     let exitCount = 0;
     menu.show(
       makeLibrary(),
@@ -228,13 +228,13 @@ describe('VrMenu — canvas-2D panel wiring', () => {
 
   it('hint-text baseline sits strictly above the Exit VR + utility button tops', () => {
     // Spot-check the geometry invariant at the integration layer —
-    // VR_MENU_FOOTER.hintBaselineY() already has its own unit test,
+    // SONG_SELECT_FOOTER.hintBaselineY() already has its own unit test,
     // but this catches a refactor that moves paintFooter to paint
     // hints somewhere OTHER than hintBaselineY and would overlap the
     // buttons in practice.
     const gl = makeFakeWebGL();
     const scene = new THREE.Scene();
-    const menu = new VrMenu(gl as unknown as THREE.WebGLRenderer, scene);
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
     menu.show(
       makeLibrary(),
       () => {},
@@ -246,6 +246,6 @@ describe('VrMenu — canvas-2D panel wiring', () => {
     const config = hits.find((h) => h.kind === 'config')!;
     const calibrate = hits.find((h) => h.kind === 'calibrate')!;
     const buttonTop = Math.min(exit.y, config.y, calibrate.y);
-    expect(VR_MENU_FOOTER.hintBaselineY() + 3).toBeLessThan(buttonTop);
+    expect(SONG_SELECT_FOOTER.hintBaselineY() + 3).toBeLessThan(buttonTop);
   });
 });

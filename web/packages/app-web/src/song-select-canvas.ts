@@ -4,7 +4,7 @@ import {
   findButtonAtPoint,
   stepStickAxis,
   type StickAxisState,
-} from './vr-menu-input.js';
+} from './song-select-input.js';
 import {
   buildBreadcrumbPath,
   buildDisplayEntries,
@@ -68,7 +68,7 @@ const STATUS_W = PANEL_W_PX - STATUS_X - 40;
  * regression the constants guard against is visible in the repo's bug
  * reports: the Settings / Calibrate / Exit VR buttons were painted on
  * top of the control-hint line, making it unreadable in VR. */
-export const VR_MENU_FOOTER = Object.freeze({
+export const SONG_SELECT_FOOTER = Object.freeze({
   PANEL_W_PX,
   PANEL_H_PX,
   EXIT_W: 200,
@@ -76,27 +76,27 @@ export const VR_MENU_FOOTER = Object.freeze({
   UTIL_BTN_W: 180,
   UTIL_BTN_H: 36,
   /** Baseline of the 13-px hint text (canvas fillText y = baseline). */
-  hintBaselineY: (): number => VR_MENU_FOOTER.UTIL_BTN_Y - 14,
+  hintBaselineY: (): number => SONG_SELECT_FOOTER.UTIL_BTN_Y - 14,
   /** 16 px margin below the button rectangle to the bottom edge. */
   EXIT_Y: PANEL_H_PX - 16 - 50,
   UTIL_BTN_Y: PANEL_H_PX - 16 - 50 + (50 - 36) / 2,
 });
 
-const EXIT_W = VR_MENU_FOOTER.EXIT_W;
-const EXIT_H = VR_MENU_FOOTER.EXIT_H;
+const EXIT_W = SONG_SELECT_FOOTER.EXIT_W;
+const EXIT_H = SONG_SELECT_FOOTER.EXIT_H;
 const EXIT_X = PANEL_W_PX - 40 - EXIT_W;
-const EXIT_Y = VR_MENU_FOOTER.EXIT_Y;
+const EXIT_Y = SONG_SELECT_FOOTER.EXIT_Y;
 
-const UTIL_BTN_W = VR_MENU_FOOTER.UTIL_BTN_W;
-const UTIL_BTN_H = VR_MENU_FOOTER.UTIL_BTN_H;
+const UTIL_BTN_W = SONG_SELECT_FOOTER.UTIL_BTN_W;
+const UTIL_BTN_H = SONG_SELECT_FOOTER.UTIL_BTN_H;
 // Utility row sits on the same baseline as the Exit VR button so the
 // bottom strip reads as one control bar. Hint text is painted ABOVE
 // this row (see paintFooter) — the previous layout put hint text and
 // buttons at the same y, covering the text with the button rectangles.
-const UTIL_BTN_Y = VR_MENU_FOOTER.UTIL_BTN_Y;
+const UTIL_BTN_Y = SONG_SELECT_FOOTER.UTIL_BTN_Y;
 const CONFIG_BTN_X = 40;
 const CALIB_BTN_X = CONFIG_BTN_X + UTIL_BTN_W + 16;
-const FOOTER_HINT_Y = VR_MENU_FOOTER.hintBaselineY();
+const FOOTER_HINT_Y = SONG_SELECT_FOOTER.hintBaselineY();
 
 interface ButtonHit {
   /** Canvas rectangle. */
@@ -113,14 +113,14 @@ interface ButtonHit {
     | { kind: 'config' };
 }
 
-export interface VrMenuPick {
+export interface SongSelectPick {
   song: SongEntry;
   chart: ChartEntry;
 }
 
 /** Callbacks injected by main.ts so the menu can drive preview audio + load
  * cover-art bytes without knowing about the FS backend. */
-export interface VrMenuDeps {
+export interface SongSelectDeps {
   /** Resolve a path relative to the backend's root to raw bytes. */
   loadBytes: (path: string) => Promise<ArrayBuffer>;
   /** Join a folder + relative file path. Same helper as the scanner. */
@@ -138,7 +138,7 @@ export interface VrMenuDeps {
   onConfig?: () => void;
 }
 
-export class VrMenu {
+export class SongSelectCanvas {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private readonly texture: THREE.CanvasTexture;
@@ -177,7 +177,7 @@ export class VrMenu {
   private coverBitmap: ImageBitmap | null = null;
   /** Latest cover-load request token; stale responses are dropped. */
   private coverRequestId = 0;
-  private onPick: ((pick: VrMenuPick) => void) | null = null;
+  private onPick: ((pick: SongSelectPick) => void) | null = null;
   private onExit: (() => void) | null = null;
   private shown = false;
 
@@ -197,7 +197,7 @@ export class VrMenu {
 
   /** Supplied at show() time so the Game class doesn't need to know about
    * backends at construction. Cleared on hide. */
-  private deps: VrMenuDeps | null = null;
+  private deps: SongSelectDeps | null = null;
 
   constructor(
     private readonly webgl: THREE.WebGLRenderer,
@@ -207,7 +207,7 @@ export class VrMenu {
     this.canvas.width = PANEL_W_PX;
     this.canvas.height = PANEL_H_PX;
     const c = this.canvas.getContext('2d');
-    if (!c) throw new Error('VrMenu: 2D context unavailable');
+    if (!c) throw new Error('SongSelectCanvas: 2D context unavailable');
     this.ctx = c;
     this.texture = new THREE.CanvasTexture(this.canvas);
     this.texture.minFilter = THREE.LinearFilter;
@@ -265,9 +265,9 @@ export class VrMenu {
 
   show(
     root: BoxNode,
-    onPick: (pick: VrMenuPick) => void,
+    onPick: (pick: SongSelectPick) => void,
     onExit: () => void,
-    deps: VrMenuDeps
+    deps: SongSelectDeps
   ): void {
     this.root = root;
     // Try to restore the box the player was last browsing. Path match
@@ -593,7 +593,7 @@ export class VrMenu {
       this.paint();
     } catch (e) {
       if (myId !== this.coverRequestId) return;
-      console.warn('[vr-menu] cover load failed', path, e);
+      console.warn('[song-select] cover load failed', path, e);
       this.coverBitmap?.close();
       this.coverBitmap = null;
       this.paint();
