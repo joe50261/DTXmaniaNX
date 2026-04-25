@@ -1208,35 +1208,38 @@ export class SongSelectCanvas {
       return;
     }
 
-    // 5 difficulties × 3 instruments grid. Geometry mirrors C# Stage 05
-    // (`5_difficulty frame.png` cells, y-baseline = 391 + (4-i)*60 - 2),
-    // but most data slots are still wired to the per-row drum-level
-    // only — Guitar/Bass + skill % stay [WIP] until the chart layer
-    // exposes them.
+    // 5 difficulties × 3 instruments grid. `5_difficulty frame.png`
+    // is ONE 187×60 row showing all three instrument columns side by
+    // side — drawn once per difficulty, not three times. Y-baseline =
+    // 391 + (4-i)*60 - 2; row 4 (Master) sits at the top, row 0
+    // (Basic) at the bottom. Per-row Guitar / Bass + skill % stay
+    // [WIP] until the chart layer exposes them.
     const slotsUsed = new Map<number, ChartEntry>();
     for (const c of song.charts) slotsUsed.set(c.slot, c);
     const selected = this.chartForPreferred(song);
     const frame = this.getAsset('5_difficulty frame.png');
-    const cellW = frame?.width ?? 110;
-    const cellH = frame?.height ?? 56;
+    const ROW_W = frame?.width ?? 187;
+    const ROW_H = frame?.height ?? 60;
+    const PART_W = Math.floor(ROW_W / 3);
     const PARTS = ['DR', 'GT', 'BS'] as const;
     for (let i = 0; i < 5; i++) {
-      const cellY = STATUS_Y + 41 + (4 - i) * 60 - 2;
+      const rowY = STATUS_Y + 41 + (4 - i) * 60 - 2;
+      const rowX = STATUS_X + 5;
+      // Translucent dark backing under the whole row — the BG image
+      // (5_background.jpg) is a busy guitar/yellow scene that makes
+      // the thin pink frame border + dim text unreadable. Painted
+      // FIRST so the frame texture sits on top of it.
+      ctx.fillStyle = 'rgba(11, 15, 26, 0.62)';
+      ctx.fillRect(rowX, rowY, ROW_W, ROW_H);
+      if (frame) {
+        ctx.drawImage(frame, rowX, rowY);
+      } else {
+        ctx.strokeStyle = '#94a3b8';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(rowX + 0.5, rowY + 0.5, ROW_W - 1, ROW_H - 1);
+      }
       for (let p = 0; p < PARTS.length; p++) {
-        const cellX = STATUS_X + 5 + p * (cellW + 4);
-        // Translucent dark backing — the BG image (5_background.jpg) is
-        // a busy guitar/yellow scene that makes the thin pink frame
-        // border + dim text unreadable. Painted FIRST so the frame
-        // texture (or fallback stroke) sits on top.
-        ctx.fillStyle = 'rgba(11, 15, 26, 0.62)';
-        ctx.fillRect(cellX, cellY, cellW, cellH);
-        if (frame) {
-          ctx.drawImage(frame, cellX, cellY);
-        } else {
-          ctx.strokeStyle = '#94a3b8';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(cellX + 0.5, cellY + 0.5, cellW - 1, cellH - 1);
-        }
+        const cellX = rowX + p * PART_W;
         const chart = p === 0 ? slotsUsed.get(i) : undefined;
         const isSelected = chart !== undefined && chart.slot === selected.slot;
         // Hover only on the DR column for now — GT/BS are [WIP] data
@@ -1245,31 +1248,31 @@ export class SongSelectCanvas {
         const isHovered = p === 0 && i === hoveredSlot && chart !== undefined;
         if (isHovered) {
           ctx.fillStyle = 'rgba(251, 191, 36, 0.38)';
-          ctx.fillRect(cellX, cellY, cellW, cellH);
+          ctx.fillRect(cellX, rowY, PART_W, ROW_H);
           ctx.strokeStyle = '#fbbf24';
           ctx.lineWidth = 2;
-          ctx.strokeRect(cellX + 1, cellY + 1, cellW - 2, cellH - 2);
+          ctx.strokeRect(cellX + 1, rowY + 1, PART_W - 2, ROW_H - 2);
         } else if (isSelected) {
           ctx.fillStyle = 'rgba(251, 191, 36, 0.28)';
-          ctx.fillRect(cellX, cellY, cellW, cellH);
+          ctx.fillRect(cellX, rowY, PART_W, ROW_H);
         }
         // Empty-cell label tone — still dim but legible against the
         // dark backing instead of dissolving into the BG.
         ctx.fillStyle = chart ? '#fff' : '#94a3b8';
         ctx.font = 'bold 13px ui-monospace, monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(PARTS[p]!, cellX + 6, cellY + 16);
+        ctx.fillText(PARTS[p]!, cellX + 6, rowY + 16);
         if (p === 0 && chart?.drumLevel !== undefined && chart.drumLevel > 0) {
           ctx.font = 'bold 18px ui-monospace, monospace';
           ctx.fillStyle = '#fde047';
           ctx.textAlign = 'right';
           ctx.fillText(
             (chart.drumLevel / 100).toFixed(2),
-            cellX + cellW - 6,
-            cellY + cellH - 8,
+            cellX + PART_W - 6,
+            rowY + ROW_H - 8,
           );
         } else if (p > 0 && chart) {
-          drawWipLabel(ctx, '[WIP]', cellX + 6, cellY + cellH - 6);
+          drawWipLabel(ctx, '[WIP]', cellX + 6, rowY + ROW_H - 6);
         }
         // DR cells with a chart are clickable (laser ray + desktop
         // pointer alike) — tapping one snaps preferredSlot to that
@@ -1278,9 +1281,9 @@ export class SongSelectCanvas {
         if (p === 0 && chart) {
           this.hits.push({
             x: cellX,
-            y: cellY,
-            w: cellW,
-            h: cellH,
+            y: rowY,
+            w: PART_W,
+            h: ROW_H,
             action: { kind: 'difficulty', slot: i },
           });
         }
