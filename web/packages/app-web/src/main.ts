@@ -840,8 +840,20 @@ function showSongSelectForActive(fs?: GameFsContext): void {
   activeGame.showSongSelect(
     lib.root,
     (pick) => {
+      console.info(
+        '[main] onPick received',
+        'slot=', pick.chart.slot,
+        'path=', pick.chart.chartPath,
+        'songTitle=', pick.song.title,
+      );
       run(async () => {
         const text = await lib.backend.readText(pick.chart.chartPath);
+        console.info(
+          '[main] readText returned',
+          'requestedPath=', pick.chart.chartPath,
+          'textBytes=', text.length,
+          'textHead=', text.slice(0, 80).replace(/[\r\n]/g, ' '),
+        );
         await launchGame(
           text,
           { backend: lib.backend, folder: dirname(pick.chart.chartPath) },

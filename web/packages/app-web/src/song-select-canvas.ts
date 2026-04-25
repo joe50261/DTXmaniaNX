@@ -827,7 +827,16 @@ export class SongSelectCanvas {
       return;
     }
     if (this.onPick) {
-      this.onPick({ song: node.entry, chart: this.chartForPreferred(node.entry) });
+      const chart = this.chartForPreferred(node.entry);
+      console.info(
+        '[song-select] activateFocused → onPick',
+        'preferredSlot=', this.preferredSlot,
+        'chosenSlot=', chart.slot,
+        'path=', chart.chartPath,
+        'songTitle=', node.entry.title,
+        'availableSlots=', node.entry.charts.map((c) => c.slot),
+      );
+      this.onPick({ song: node.entry, chart });
     }
   }
 
@@ -886,6 +895,12 @@ export class SongSelectCanvas {
         // turned out to be where the desync was hiding. preferredSlot
         // still tracks for ←/→ keyboard cycling + visual highlight
         // on the next focus.
+        console.info(
+          '[song-select] chart-hit fired',
+          'slot=', hit.action.chart.slot,
+          'path=', hit.action.chart.chartPath,
+          'songTitle=', hit.action.song.title,
+        );
         this.preferredSlot = hit.action.chart.slot;
         if (this.onPick) {
           this.onPick({ song: hit.action.song, chart: hit.action.chart });
