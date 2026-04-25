@@ -7,6 +7,7 @@ import { JUDGE_ROWS, JUDGE_SPRITE_W, JUDGE_SPRITE_H } from './judge-atlas.js';
 import { linearFadeIn, linearFadeOut, padBounceOffset } from './renderer-math.js';
 import { HudText } from './hud-text.js';
 import { XrLayerManager } from './xr-layer-manager.js';
+import { recordFrame, recordPaint, setLayerStatus } from './metrics-model.js';
 import type { JudgmentKind, Rank } from '@dtxmania/dtx-core';
 import type { LaneValue } from '@dtxmania/input';
 
@@ -426,8 +427,10 @@ export class Renderer {
 
   /** Submit new game state for the next frame's HUD paint. */
   render(state: RenderState): void {
+    const t0 = performance.now();
     this.paintHud(state);
     this.hudTexture.needsUpdate = true;
+    recordPaint(performance.now() - t0);
   }
 
   /** Wipe the HUD canvas to transparent and flag the texture for upload.
@@ -451,6 +454,7 @@ export class Renderer {
     if (this.xrFrame && this.xrLayers.isActive()) {
       this.xrLayers.blit(this.xrFrame);
     }
+    recordFrame(performance.now());
   }
 
   /**
@@ -519,7 +523,7 @@ export class Renderer {
       const refSpace = await session.requestReferenceSpace('local-floor');
       if (this.xrLayers.attach(this.webgl, session)) {
         const heightMeters = 2.4 * (CANVAS_H / CANVAS_W);
-        this.xrLayers.registerPanel({
+        const ok = this.xrLayers.registerPanel({
           canvas: this.hud,
           mesh: this.hudMesh,
           refSpace,
@@ -527,13 +531,18 @@ export class Renderer {
           widthMeters: 2.4,
           heightMeters,
         });
+        setLayerStatus(ok, ok ? 1 : 0);
+      } else {
+        setLayerStatus(false, 0);
       }
     } catch (err) {
       console.warn('[xr] layer promotion failed; using mesh path', err);
+      setLayerStatus(false, 0);
     }
 
     session.addEventListener('end', () => {
       this.xrLayers.dispose();
+      setLayerStatus(false, 0);
       this.xrSession = null;
       this.xrFrame = null;
       this.playfield.scale.setScalar(1);

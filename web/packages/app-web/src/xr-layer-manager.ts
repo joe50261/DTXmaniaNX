@@ -28,6 +28,7 @@
  * non-VR or pre-layers user experience.
  */
 import * as THREE from 'three';
+import { recordLayerBlit } from './metrics-model.js';
 
 export interface PanelInit {
   /** Source canvas — same one currently feeding the panel's CanvasTexture. */
@@ -210,6 +211,7 @@ export class XrLayerManager {
     if (!this.active || !this.binding || !this.gl) return;
     if (this.panels.length === 0) return;
     const gl = this.gl;
+    const blitT0 = performance.now();
     try {
       // Save state we touch — three.js's WebGLState cache will be
       // invalidated via resetState() but we still want minimal
@@ -293,6 +295,7 @@ export class XrLayerManager {
       if (prevCull) gl.enable(gl.CULL_FACE);
       if (prevScissor) gl.enable(gl.SCISSOR_TEST);
       this.renderer?.resetState();
+      recordLayerBlit(performance.now() - blitT0);
     } catch (err) {
       console.warn('[xr-layers] blit failed; falling back to mesh path', err);
       this.deactivate();

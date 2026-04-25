@@ -9,6 +9,9 @@ await maybeInstallXrEmulator();
 import { installOnScreenLog } from './on-screen-log.js';
 installOnScreenLog();
 
+import { installMetricsBadge } from './metrics-panel.js';
+installMetricsBadge();
+
 import {
   deserializeIndex,
   dirname,
