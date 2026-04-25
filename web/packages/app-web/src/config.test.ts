@@ -138,6 +138,34 @@ describe('loadConfig — migrations', () => {
     expect(cfg.volumeBgm).toBe(0.75); // surrounding fields survive merge
     expect(cfg.scrollSpeed).toBe(0.5);
   });
+
+  it('kit-preset defaults: GITADORA Galaxy Wave + zero seat offset on clean storage', () => {
+    const cfg = loadConfig();
+    expect(cfg.kitPresetId).toBe('gitadora-galaxy-wave');
+    expect(cfg.seatYOffset).toBe(0);
+  });
+
+  it('pre-arcade-preset blobs (no kitPresetId / seatYOffset) get the new defaults without losing surrounding fields', () => {
+    localStorage.setItem(
+      'dtxmania.config',
+      JSON.stringify({ volumeBgm: 0.6, scrollSpeed: 0.55 }),
+    );
+    const cfg = loadConfig();
+    expect(cfg.kitPresetId).toBe('gitadora-galaxy-wave');
+    expect(cfg.seatYOffset).toBe(0);
+    expect(cfg.volumeBgm).toBe(0.6);
+    expect(cfg.scrollSpeed).toBe(0.55);
+  });
+
+  it('a stored kitPresetId / seatYOffset survives the merge', () => {
+    localStorage.setItem(
+      'dtxmania.config',
+      JSON.stringify({ kitPresetId: 'compact', seatYOffset: 0.4 }),
+    );
+    const cfg = loadConfig();
+    expect(cfg.kitPresetId).toBe('compact');
+    expect(cfg.seatYOffset).toBe(0.4);
+  });
 });
 
 describe('isPracticeRun — best-score gate', () => {

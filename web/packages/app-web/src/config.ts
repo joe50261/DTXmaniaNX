@@ -12,6 +12,8 @@
  *   4. Optionally subscribe(...) somewhere to apply it live
  */
 
+import { DEFAULT_KIT_PRESET_ID } from './kit-preset.js';
+
 /** Per-lane auto-play toggles. Each key is a lane identifier matching
  * the Lane enum names from @dtxmania/input; `true` means Game auto-
  * fires chips on that lane. Mirrors DTXmania's bAutoPlay struct
@@ -125,6 +127,18 @@ export interface Config {
    * scene. Off by default — the panel adds visual clutter; players only
    * turn it on when actively diagnosing a VR-only issue. */
   vrLogEnabled: boolean;
+  /** Identifier of the active drum-kit preset (see kit-preset.ts).
+   * Defaults to the GITADORA Galaxy Wave arcade kit so muscle memory
+   * transfers between the sim and a real cabinet. Unknown / removed ids
+   * fall back to the first preset at lookup time. */
+  kitPresetId: string;
+  /** Uniform Y shift applied to the entire kit, in metres. Standing
+   * players raise this (~+0.5 m) so the kit lifts to hand-comfortable
+   * height; sitting players keep it at 0. The pad-to-pad relative
+   * geometry never changes — only the global offset moves — so muscle
+   * memory transfers between sit and stand. Clamped to
+   * [SEAT_Y_OFFSET_MIN, SEAT_Y_OFFSET_MAX] (kit-preset.ts). */
+  seatYOffset: number;
 }
 
 const EMPTY_AUTO_PLAY: AutoPlayMap = Object.freeze({
@@ -160,6 +174,8 @@ export const DEFAULT_CONFIG: Config = Object.freeze({
   practiceLoopStartMeasure: 0,
   practiceLoopEndMeasure: null,
   vrLogEnabled: false,
+  kitPresetId: DEFAULT_KIT_PRESET_ID,
+  seatYOffset: 0,
 });
 
 /** True when the current run should NOT commit a best-score record.
