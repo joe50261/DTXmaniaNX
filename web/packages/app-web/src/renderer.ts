@@ -7,7 +7,12 @@ import { JUDGE_ROWS, JUDGE_SPRITE_W, JUDGE_SPRITE_H } from './judge-atlas.js';
 import { linearFadeIn, linearFadeOut, padBounceOffset } from './renderer-math.js';
 import { HudText } from './hud-text.js';
 import { XrLayerManager } from './xr-layer-manager.js';
-import { recordFrame, recordPaint, setLayerStatus } from './metrics-model.js';
+import {
+  recordFrame,
+  recordPaint,
+  setLayerStatus,
+  snapshotMetrics,
+} from './metrics-model.js';
 import type { JudgmentKind, Rank } from '@dtxmania/dtx-core';
 import type { LaneValue } from '@dtxmania/input';
 
@@ -572,6 +577,7 @@ export class Renderer {
     this.drawHUD(state);
     this.drawJudgmentFlash(state);
     this.drawToastBox(state);     // rounded background only — text is an SDF mesh
+    this.drawMetrics();           // VR-visible mirror of the DOM badge — last so it sits on top
     ctx.restore();
     this.updateToastText(state);
   }
@@ -1065,6 +1071,44 @@ export class Renderer {
       ctx.textAlign = 'left';
       ctx.fillText(`GAUGE ${Math.round(clamped * 100)}%`, gx, gy - 4);
     }
+  }
+
+  /**
+   * In-VR mirror of the DOM metrics badge. The HUD canvas is the
+   * texture source for both the desktop ortho quad and the VR quad
+   * layer, so drawing here shows up in-headset (where the DOM badge
+   * is invisible) without any new mesh / panel / layer plumbing.
+   *
+   * Pinned to the bottom-left of the canvas so it can't conflict with
+   * combo / score / max-combo readouts. Two-line layout to keep the
+   * footprint small; the DOM badge has more detail for reviewers
+   * who can read it.
+   */
+  private drawMetrics(): void {
+    const m = snapshotMetrics();
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.font = '11px ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
+    const x = 8;
+    const y = CANVAS_H - 38;
+    ctx.fillRect(x, y, 240, 32);
+    ctx.fillStyle = '#e5e7eb';
+    const layerStr = m.layerActive
+      ? `layer ${m.layerPanels}p ${m.layerBlits}× ${m.layerBlitMs.toFixed(2)}ms`
+      : 'layer mesh';
+    ctx.fillText(
+      `fps ${m.fps} Δ${m.frameMs.toFixed(1)} worst ${m.worstFrameMs.toFixed(1)}`,
+      x + 4,
+      y + 13,
+    );
+    ctx.fillText(
+      `${layerStr}  paint ${m.paintMode} ${m.paintMs.toFixed(2)}ms`,
+      x + 4,
+      y + 27,
+    );
+    ctx.restore();
   }
 
   dispose(): void {
