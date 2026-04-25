@@ -98,7 +98,25 @@ assertions are satisfied by any implementation that compiles. If the
 mock is longer than the code it's testing, do it in Playwright
 instead.
 
+## Lint — `pnpm lint`
+
+Two tools enforce the architecture rules above so they don't drift:
+
+- **`eslint-plugin-check-file`** (config: `web/eslint.config.mjs`) —
+  pins source filenames + folders to kebab-case. A file like
+  `SongWheel.ts` or `vrConfig.ts` fails here.
+- **`dependency-cruiser`** (config: `web/.dependency-cruiser.cjs`) —
+  rejects circular imports, prevents production code from importing
+  `*.test.ts`, blocks `*-model.ts` / `*-layout.ts` /
+  `*-animations.ts` / pure-helper modules from importing view code
+  (`*-canvas.ts`, `renderer.ts`, `game.ts`, `xr-controllers.ts`,
+  `main.ts`) or `three`.
+
+CI runs `pnpm --dir web run lint` between audit and typecheck. Run
+locally with `pnpm lint` (or `lint:files` / `lint:deps` for the
+individual tools) before pushing.
+
 ## Branch expectations
 
 Default development branch is whatever the session is assigned to. Do not
-push to `master` directly; open a PR. Never use `--no-verify` to skip hooks.
+push to `master` directly; never use `--no-verify` to skip hooks.

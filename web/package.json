@@ -7,11 +7,18 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm run lint:files && pnpm run lint:deps",
+    "lint:files": "eslint packages",
+    "lint:deps": "depcruise --config .dependency-cruiser.cjs packages/app-web/src packages/audio-engine/src packages/dtx-core/src packages/input/src",
     "audit": "pnpm audit --audit-level=moderate",
     "audit:high": "pnpm audit --audit-level=high",
     "prepare": "git -C .. config --local core.hooksPath .githooks 2>/dev/null || true"
   },
   "devDependencies": {
+    "@typescript-eslint/parser": "^8.59.0",
+    "dependency-cruiser": "^17.3.10",
+    "eslint": "^10.2.1",
+    "eslint-plugin-check-file": "^3.3.1",
     "typescript": "^5.4.0",
     "vitest": "^3.0.0"
   },

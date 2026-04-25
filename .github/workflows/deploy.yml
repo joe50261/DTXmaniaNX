@@ -39,6 +39,9 @@ jobs:
       - name: Audit (fail on high+)
         run: pnpm --dir web run audit:high
 
+      - name: Lint (filenames + dependency rules)
+        run: pnpm --dir web run lint
+
       - name: Typecheck
         run: pnpm --dir web -r typecheck
 
