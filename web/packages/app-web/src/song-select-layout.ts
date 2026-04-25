@@ -101,6 +101,11 @@ export const FOOTER_UTIL_BTN_Y =
   FOOTER_EXIT_Y + (FOOTER_EXIT_H - FOOTER_UTIL_BTN_H) / 2;
 export const FOOTER_CONFIG_X = 40;
 export const FOOTER_CALIB_X = FOOTER_CONFIG_X + FOOTER_UTIL_BTN_W + 16;
+// Sort button sits between Calibrate and the right-side Exit VR rect.
+// In VR the player has no other surface to change sort modes, so this
+// is the canonical home (DTXMania proper exposes sort inside the
+// wheel via dedicated controller buttons).
+export const FOOTER_SORT_X = FOOTER_CALIB_X + FOOTER_UTIL_BTN_W + 16;
 export const FOOTER_HINT_BASELINE_Y = FOOTER_UTIL_BTN_Y - 14;
 
 // Frozen view of the footer geometry, used by song-select-canvas.test.ts

@@ -392,6 +392,69 @@ describe('SongSelectCanvas — canvas-2D panel wiring', () => {
     expect(menu.dispatchPointerDown(0, 0)).toBe(false);
   });
 
+  it('dispatchPointerDown on an unfocused row moves focus only (does NOT activate)', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    let pickCount = 0;
+    menu.show(makeMultiSongLibrary(), () => pickCount++, () => {}, makeDeps());
+    const before = menu.focusedSong();
+    // Find any 'activate' hit that isn't the currently-focused one.
+    // Wheel rows wrap the entry list, so the bar at the focus slot is
+    // the focused entry; pick a different bar's rect.
+    const activateHits = menu.__testHits().filter((h) => h.kind === 'activate');
+    expect(activateHits.length).toBeGreaterThan(1);
+    // Click somewhere visibly NOT the focused entry. The focus row's
+    // anchor sits at (464, 270) per song-select-layout; click into a
+    // row well below that.
+    const target = activateHits.find((h) => h.y > 400);
+    expect(target).toBeTruthy();
+    expect(
+      menu.dispatchPointerDown(target!.x + target!.w / 2, target!.y + target!.h / 2),
+    ).toBe(true);
+    // No song picked yet — focus moved, but activation did NOT fire.
+    expect(pickCount).toBe(0);
+    expect(menu.focusedSong()).not.toBe(before);
+  });
+
+  it('Sort button hit appears in VR mode and cycling fires from the rect', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    menu.show(makeLibrary(), () => {}, () => {}, makeDeps());
+    // Default mode = VR (footer painted, sort button included).
+    const sortHit = menu.__testHits().find((h) => h.kind === 'sort');
+    expect(sortHit).toBeTruthy();
+    expect(menu.getSortMode()).toBe('title');
+    menu.__testClickAt(sortHit!.x + sortHit!.w / 2, sortHit!.y + sortHit!.h / 2);
+    expect(menu.getSortMode()).toBe('artist');
+  });
+
+  it('setDesktopMode(true) suppresses the sort + footer hits', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    menu.show(makeLibrary(), () => {}, () => {}, makeDeps({ onConfig: () => {}, onCalibrate: () => {} }));
+    menu.setDesktopMode(true);
+    const hits = menu.__testHits();
+    expect(hits.some((h) => h.kind === 'sort')).toBe(false);
+    expect(hits.some((h) => h.kind === 'config')).toBe(false);
+    expect(hits.some((h) => h.kind === 'calibrate')).toBe(false);
+    expect(hits.some((h) => h.kind === 'exit')).toBe(false);
+  });
+
+  it('paint() emits no chart-button hits anymore (canonical layout)', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    menu.show(makeMultiSongLibrary(), () => {}, () => {}, makeDeps());
+    const hits = menu.__testHits();
+    // The legacy DOM-style floating chart buttons under the focused
+    // bar are gone — difficulty selection lives in the status panel
+    // grid + ←/→ keys. No 'chart'-kind hit should ever be emitted.
+    expect(hits.some((h) => h.kind === ('chart' as never))).toBe(false);
+  });
+
   it('hint-text baseline sits strictly above the Exit VR + utility button tops', () => {
     // Spot-check the geometry invariant at the integration layer —
     // SONG_SELECT_FOOTER.hintBaselineY() already has its own unit test,

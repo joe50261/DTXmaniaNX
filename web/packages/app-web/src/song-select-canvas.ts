@@ -10,10 +10,7 @@ import {
   buildDisplayEntries,
   cycleDifficultySlot,
   cycleFocus,
-  DIFFICULTY_SLOT_LABELS,
   findBoxByPath,
-  formatBestRecordLine,
-  lampTier,
   pickChartForSlot,
   pickRandomSongIn,
   rowTitle,
@@ -37,6 +34,7 @@ import {
   FOOTER_EXIT_X,
   FOOTER_EXIT_Y,
   FOOTER_HINT_BASELINE_Y,
+  FOOTER_SORT_X,
   FOOTER_UTIL_BTN_H,
   FOOTER_UTIL_BTN_W,
   FOOTER_UTIL_BTN_Y,
@@ -123,7 +121,7 @@ interface ButtonHit {
   /** What happens on trigger/click. */
   action:
     | { kind: 'activate'; entryIdx: number }
-    | { kind: 'chart'; song: SongEntry; chart: ChartEntry }
+    | { kind: 'sort' }
     | { kind: 'exit' }
     | { kind: 'calibrate' }
     | { kind: 'config' };
@@ -522,13 +520,33 @@ export class SongSelectCanvas {
     this.paint();
   }
 
-  /** Desktop pointer-down (click). Returns `true` if a hit-rect was
-   * activated. Same rect-table the XR raycaster consults via tickXr. */
+  /** Desktop pointer-down (click). Returns `true` if the click landed
+   * on a hit-rect.
+   *
+   * Semantics differ from the XR trigger path: an XR trigger says
+   * "do whatever I'm pointing at right now" (point-and-shoot, the
+   * VR norm). A desktop click on a wheel row should *only move focus*
+   * the first time and only activate when the player clicks the
+   * already-focused row — that's the long-standing DOM SongWheel
+   * behaviour and prevents an accidental click-while-skimming from
+   * launching a chart. Footer / chart-button hits still fire
+   * immediately. */
   dispatchPointerDown(px: number, py: number): boolean {
     if (!this.shown) return false;
     const idx = findButtonAtPoint(this.hits, px, py);
     if (idx < 0) return false;
-    this.invokeHit(this.hits[idx]!);
+    const hit = this.hits[idx]!;
+    if (hit.action.kind === 'activate' && hit.action.entryIdx !== this.focusIdx) {
+      // Move focus only — second click on the same row activates.
+      const delta = hit.action.entryIdx - this.focusIdx;
+      this.focusIdx = hit.action.entryIdx;
+      this.wheelScroll = startWheelScroll(this.wheelScroll, Math.abs(delta) === 1 ? (delta > 0 ? 1 : -1) : 0);
+      this.onFocusedSongChanged();
+      void this.loadCoverForFocused();
+      this.paint();
+      return true;
+    }
+    this.invokeHit(hit);
     return true;
   }
 
@@ -838,9 +856,8 @@ export class SongSelectCanvas {
         void this.loadCoverForFocused();
         this.activateFocused();
         return;
-      case 'chart':
-        this.preferredSlot = hit.action.chart.slot;
-        if (this.onPick) this.onPick({ song: hit.action.song, chart: hit.action.chart });
+      case 'sort':
+        this.cycleSortMode();
         return;
       case 'exit':
         if (this.onExit) this.onExit();
@@ -945,8 +962,12 @@ export class SongSelectCanvas {
     this.paintBackground();
     this.paintPreimage();
     this.paintStatusPanel();
-    this.paintWheel();
+    // Comment bar sits behind the wheel — its y-strip (257..287)
+    // overlaps the focus row's bar (270..320) and the canonical C#
+    // order paints the wheel ON TOP so the focused bar punches
+    // through the comment ribbon.
     this.paintCommentBar();
+    this.paintWheel();
     this.paintScrollbar();
     this.paintHeaderAndBreadcrumb();
     if (!this.desktopMode) this.paintFooter();
@@ -1066,54 +1087,10 @@ export class SongSelectCanvas {
       : '16px ui-monospace, monospace';
     ctx.fillText(title, anchor.x + WHEEL_TITLE_X_OFFSET, anchor.y + barH * 0.62);
 
-    if (!focused) return;
-    if (entry.kind !== 'node' || entry.node.type !== 'song') return;
-
-    // Focused song row: chart buttons stack just below the focus bar so
-    // the player's instrument-difficulty pick is one click away.
-    const song = entry.node.entry;
-    const selected = this.chartForPreferred(song);
-    const btnH = 32;
-    const btnW = 96;
-    const btnGap = 6;
-    const charts = [...song.charts].sort((a, b) => a.slot - b.slot);
-    let btnX = anchor.x + WHEEL_TITLE_X_OFFSET;
-    const btnY = anchor.y + barH + 6;
-    for (const chart of charts) {
-      const isSelected = chart.slot === selected.slot;
-      ctx.fillStyle = isSelected ? '#3355ff' : 'rgba(30, 42, 85, 0.85)';
-      ctx.fillRect(btnX, btnY, btnW, btnH);
-      if (isSelected) {
-        ctx.strokeStyle = '#fbbf24';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(btnX + 1, btnY + 1, btnW - 2, btnH - 2);
-      }
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 13px ui-monospace, monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(chart.label, btnX + btnW / 2, btnY + 14);
-      if (chart.drumLevel !== undefined && chart.drumLevel > 0) {
-        ctx.font = '11px ui-monospace, monospace';
-        ctx.fillStyle = '#cbd5e1';
-        ctx.fillText(`L.${(chart.drumLevel / 100).toFixed(2)}`, btnX + btnW / 2, btnY + 27);
-      }
-      const lampColor = canvasLampColor(chart);
-      if (lampColor) {
-        ctx.fillStyle = lampColor;
-        ctx.beginPath();
-        ctx.arc(btnX + btnW - 6, btnY + 6, 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      this.hits.push({
-        x: btnX,
-        y: btnY,
-        w: btnW,
-        h: btnH,
-        action: { kind: 'chart', song, chart },
-      });
-      btnX += btnW + btnGap;
-    }
-    ctx.textAlign = 'left';
+    // Difficulty selection lives in the status panel grid + ←/→ keys.
+    // Canonical DTXMania doesn't paint floating chart buttons under
+    // the focused bar, and the floats also overlapped the comment bar
+    // (y=257) and the next wheel row (y=320+) on the curved layout.
   }
 
   private paintPreimage(): void {
@@ -1188,20 +1165,28 @@ export class SongSelectCanvas {
       const cellY = STATUS_Y + 41 + (4 - i) * 60 - 2;
       for (let p = 0; p < PARTS.length; p++) {
         const cellX = STATUS_X + 5 + p * (cellW + 4);
+        // Translucent dark backing — the BG image (5_background.jpg) is
+        // a busy guitar/yellow scene that makes the thin pink frame
+        // border + dim text unreadable. Painted FIRST so the frame
+        // texture (or fallback stroke) sits on top.
+        ctx.fillStyle = 'rgba(11, 15, 26, 0.62)';
+        ctx.fillRect(cellX, cellY, cellW, cellH);
         if (frame) {
           ctx.drawImage(frame, cellX, cellY);
         } else {
-          ctx.strokeStyle = '#475569';
+          ctx.strokeStyle = '#94a3b8';
           ctx.lineWidth = 1;
           ctx.strokeRect(cellX + 0.5, cellY + 0.5, cellW - 1, cellH - 1);
         }
         const chart = p === 0 ? slotsUsed.get(i) : undefined;
         const isSelected = chart !== undefined && chart.slot === selected.slot;
         if (isSelected) {
-          ctx.fillStyle = 'rgba(251, 191, 36, 0.18)';
+          ctx.fillStyle = 'rgba(251, 191, 36, 0.28)';
           ctx.fillRect(cellX, cellY, cellW, cellH);
         }
-        ctx.fillStyle = chart ? '#fff' : '#475569';
+        // Empty-cell label tone — still dim but legible against the
+        // dark backing instead of dissolving into the BG.
+        ctx.fillStyle = chart ? '#fff' : '#94a3b8';
         ctx.font = 'bold 13px ui-monospace, monospace';
         ctx.textAlign = 'left';
         ctx.fillText(PARTS[p]!, cellX + 6, cellY + 16);
@@ -1337,12 +1322,16 @@ export class SongSelectCanvas {
       const x = this.deps?.onConfig ? FOOTER_CALIB_X : FOOTER_CONFIG_X;
       this.paintUtilityButton('Calibrate Latency', x, 'calibrate');
     }
+    // Sort button — always painted in VR mode so the player can re-
+    // order the wheel without removing the headset. The label tracks
+    // the current mode so the button doubles as a state readout.
+    this.paintUtilityButton(`Sort: ${this.sortMode}`, FOOTER_SORT_X, 'sort');
   }
 
   private paintUtilityButton(
     label: string,
     x: number,
-    actionKind: 'config' | 'calibrate',
+    actionKind: 'config' | 'calibrate' | 'sort',
   ): void {
     const ctx = this.ctx;
     const hovered =
@@ -1413,21 +1402,6 @@ function drawWipLabel(
   ctx.textAlign = 'left';
   ctx.fillText(label, x, y);
   ctx.restore();
-}
-
-/** Canvas palette for lamp dots. Matches the DOM palette except the
- * "played" tier is a lighter slate (canvas background is darker than the
- * DOM button background, so the dot needs more contrast). */
-function canvasLampColor(chart: ChartEntry): string | null {
-  const tier = lampTier(chart);
-  if (tier === null) return null;
-  if (tier === 'excellent') return '#fde047';
-  if (tier === 'fullCombo') return '#7dd3fc';
-  return '#94a3b8';
-}
-
-function truncate(s: string, max: number): string {
-  return s.length <= max ? s : s.slice(0, max - 1) + '…';
 }
 
 function clampSlot(i: number): number {
