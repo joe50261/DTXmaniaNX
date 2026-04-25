@@ -9,6 +9,9 @@ import {
   SEAT_Y_OFFSET_MIN,
   SEAT_Y_OFFSET_SIT,
   SEAT_Y_OFFSET_STAND,
+  seatOffsetToStandingHeightCm,
+  SNARE_REFERENCE_Y_M,
+  STANDING_ELBOW_RATIO,
   type PadSpec,
 } from './kit-preset.js';
 import { Lane } from '@dtxmania/input';
@@ -158,5 +161,62 @@ describe('kit-preset — clampSeatYOffset', () => {
     expect(SEAT_Y_OFFSET_STAND).toBeGreaterThanOrEqual(SEAT_Y_OFFSET_MIN);
     expect(SEAT_Y_OFFSET_STAND).toBeLessThanOrEqual(SEAT_Y_OFFSET_MAX);
     expect(SEAT_Y_OFFSET_STAND).toBeGreaterThan(SEAT_Y_OFFSET_SIT);
+  });
+
+  it('STAND default is +0.30 m (≈ 177 cm player) — not the over-tall +0.50 m the first iteration shipped', () => {
+    // The previous +0.50 m put the snare at world Y 1.30 m, which the
+    // 0.62 × stature elbow-height model ties to a ~210 cm player —
+    // way taller than typical adults, so most players ended up
+    // playing with raised arms. +0.30 m maps to ~177 cm which is in
+    // the centre of typical adult range; players can fine-tune ±5 cm
+    // via the slider.
+    expect(SEAT_Y_OFFSET_STAND).toBeCloseTo(0.30, 6);
+    expect(seatOffsetToStandingHeightCm(SEAT_Y_OFFSET_STAND)).toBe(177);
+  });
+});
+
+describe('kit-preset — seatOffsetToStandingHeightCm', () => {
+  it('returns null at offset 0 — sit mode is about the stool, not the player stature', () => {
+    expect(seatOffsetToStandingHeightCm(0)).toBeNull();
+  });
+
+  it('matches the documented model: stature_cm = round(100 × (snare_ref + offset) / elbow_ratio)', () => {
+    for (const offset of [0.10, 0.20, 0.25, 0.30, 0.35, 0.45]) {
+      const expected = Math.round(
+        ((SNARE_REFERENCE_Y_M + offset) / STANDING_ELBOW_RATIO) * 100,
+      );
+      expect(seatOffsetToStandingHeightCm(offset)).toBe(expected);
+    }
+  });
+
+  it('produces sensible adult-height numbers across the slider range', () => {
+    // Sanity span: small positive offset is ~child / very short adult,
+    // mid is typical adult, large is tall adult. If a future tweak
+    // re-pegs the constants the labels mustn't go negative or wildly
+    // out of human range.
+    const small = seatOffsetToStandingHeightCm(0.10)!;
+    const mid = seatOffsetToStandingHeightCm(0.30)!;
+    const tall = seatOffsetToStandingHeightCm(0.50)!;
+    expect(small).toBeGreaterThan(120);
+    expect(small).toBeLessThan(160);
+    expect(mid).toBeGreaterThan(165);
+    expect(mid).toBeLessThan(185);
+    expect(tall).toBeGreaterThan(195);
+    expect(tall).toBeLessThan(220);
+    // Monotonic: bigger offset → taller corresponding player.
+    expect(small).toBeLessThan(mid);
+    expect(mid).toBeLessThan(tall);
+  });
+
+  it('handles negative offsets symmetrically (short / child sitter on a high stool)', () => {
+    const neg = seatOffsetToStandingHeightCm(-0.10);
+    expect(neg).not.toBeNull();
+    // -0.10 → snare 0.70 → stature ~113 cm. Test the model end, not
+    // the meaningfulness — the UI may choose to skip the label in this
+    // range.
+    expect(neg).toBeCloseTo(
+      Math.round(((SNARE_REFERENCE_Y_M - 0.10) / STANDING_ELBOW_RATIO) * 100),
+      0,
+    );
   });
 });

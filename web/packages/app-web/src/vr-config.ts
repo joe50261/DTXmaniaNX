@@ -17,6 +17,7 @@ import {
   SEAT_Y_OFFSET_SIT,
   SEAT_Y_OFFSET_STAND,
   SEAT_Y_OFFSET_STEP,
+  seatOffsetToStandingHeightCm,
 } from './kit-preset.js';
 
 /**
@@ -596,6 +597,9 @@ export class VrConfig {
     y += 22;
 
     // Seat-Y slider — −/+ step buttons identical to other sliders.
+    // Slider value formatter appends the standing-player height the
+    // current offset is tuned for (omitted at offset 0 because that's
+    // "sit on the stool" — no standing-height implied).
     y = this.paintSlider(
       y,
       'Seat height',
@@ -605,30 +609,34 @@ export class VrConfig {
       SEAT_Y_OFFSET_STEP,
       2,
       (v) => updateConfig({ seatYOffset: clampSeatYOffset(v) }),
-      (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)} m`,
+      formatSeatOffsetWithHeight,
     );
 
     // Sit / Stand quick-set buttons — left-aligned next to the slider's
     // label gutter so they read as shortcuts that DRIVE the slider above
-    // them, not as a separate setting.
-    const QW = 84;
+    // them, not as a separate setting. Stand pill carries its tuned
+    // height in the label so a player can sanity-check whether the
+    // default matches their stature before tapping it.
+    const QW_SIT = 84;
+    const QW_STAND = 132;
     const QH = 32;
     const sitX = 60;
-    const standX = sitX + QW + gap;
+    const standX = sitX + QW_SIT + gap;
     this.drawQuickSetButton(
       'Sit',
       sitX,
       y,
-      QW,
+      QW_SIT,
       QH,
       cfg.seatYOffset === SEAT_Y_OFFSET_SIT,
       () => updateConfig({ seatYOffset: SEAT_Y_OFFSET_SIT }),
     );
+    const standCm = seatOffsetToStandingHeightCm(SEAT_Y_OFFSET_STAND);
     this.drawQuickSetButton(
-      'Stand',
+      standCm !== null ? `Stand · ${standCm} cm` : 'Stand',
       standX,
       y,
-      QW,
+      QW_STAND,
       QH,
       cfg.seatYOffset === SEAT_Y_OFFSET_STAND,
       () => updateConfig({ seatYOffset: SEAT_Y_OFFSET_STAND }),
@@ -808,4 +816,17 @@ function clamp(v: number, lo: number, hi: number): number {
  * invariant can be asserted independently of the VR view. */
 export function roundToStep(v: number, step: number): number {
   return Math.round(v / step) * step;
+}
+
+/** Slider value formatter for the Drum kit → Seat height row. Shows the
+ *  raw offset in metres plus the standing-player stature it's tuned for
+ *  (in cm) so players can sight-check the dragger against their own
+ *  height. Omits the height annotation at offset 0 because that's "sit
+ *  on the stool" — the player's standing stature isn't what's being
+ *  modelled there. Exported for unit-test scope. */
+export function formatSeatOffsetWithHeight(offsetM: number): string {
+  const sign = offsetM >= 0 ? '+' : '';
+  const base = `${sign}${offsetM.toFixed(2)} m`;
+  const cm = seatOffsetToStandingHeightCm(offsetM);
+  return cm === null ? base : `${base} ≈${cm}cm`;
 }

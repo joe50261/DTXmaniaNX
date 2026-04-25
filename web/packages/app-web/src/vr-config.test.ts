@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatSeatOffsetWithHeight,
   roundToStep,
   VR_CONFIG_FOOTER_HINTS,
   VR_CONFIG_LAYOUT,
@@ -42,6 +43,30 @@ describe('roundToStep — slider step snap', () => {
   it('handles negative values symmetrically', () => {
     expect(roundToStep(-0.47, 0.05)).toBeCloseTo(-0.45, 10);
     expect(roundToStep(-0.48, 0.05)).toBeCloseTo(-0.5, 10);
+  });
+});
+
+describe('formatSeatOffsetWithHeight — Drum kit slider value', () => {
+  it('shows just the metres reading at offset 0 (sit mode — stature is not implied)', () => {
+    expect(formatSeatOffsetWithHeight(0)).toBe('+0.00 m');
+  });
+
+  it('appends the standing-stature reference for positive offsets', () => {
+    // +0.30 → 177 cm via the documented model (kit-preset.test.ts pins
+    // the model exactly). Just check the format and that the cm
+    // number is present.
+    const out = formatSeatOffsetWithHeight(0.30);
+    expect(out.startsWith('+0.30 m')).toBe(true);
+    expect(out).toContain('177cm');
+  });
+
+  it('uses an explicit minus sign for negative offsets and still annotates with the corresponding (short) stature', () => {
+    const out = formatSeatOffsetWithHeight(-0.10);
+    expect(out.startsWith('-0.10 m')).toBe(true);
+    // The cm portion must be present and parseable as an integer.
+    const match = out.match(/≈(\d+)cm/);
+    expect(match).not.toBeNull();
+    expect(Number.parseInt(match![1]!, 10)).toBeGreaterThan(0);
   });
 });
 

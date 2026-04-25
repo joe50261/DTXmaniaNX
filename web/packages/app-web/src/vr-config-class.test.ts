@@ -319,19 +319,21 @@ describe('VrConfig — canvas-2D panel wiring', () => {
     updateConfig({ seatYOffset: 0.25 });
     panel.show(() => {}); // re-paint with new value
 
-    // The quick buttons are 84×32 pills sitting at x=60 and x=152
-    // beneath the seat-Y slider. We don't have an exact y here without
-    // walking the section paint; instead, identify them by their
-    // distinctive width (84) — auto-play cells are >= 180 wide and
-    // step buttons are 56 wide, so 84-wide pills are uniquely the
-    // quick-set buttons.
+    // Sit / Stand are the only 32-px-tall pills in the Drum kit
+    // section (auto-play cells are 36 px tall, step buttons are
+    // ~36 px). Identify them by row geometry: same y, h=32, and
+    // h-rect width either 84 (Sit) or 132 (Stand · NNN cm) — Stand
+    // is wider because its label carries the standing-stature hint.
     const hits = panel.__testHits();
-    const pills = hits.filter((h) => h.w === 84 && h.h === 32);
+    const pills = hits.filter(
+      (h) => h.h === 32 && (h.w === 84 || h.w === 132),
+    );
     expect(pills.length).toBe(2);
 
-    // Sit is on the left (smaller x) by construction.
-    const sit = pills[0]!.x < pills[1]!.x ? pills[0]! : pills[1]!;
-    const stand = pills[0]!.x < pills[1]!.x ? pills[1]! : pills[0]!;
+    // Sit is the narrower one (no embedded cm number).
+    const sit = pills.find((p) => p.w === 84)!;
+    const stand = pills.find((p) => p.w === 132)!;
+    expect(sit.y).toBe(stand.y); // same row
 
     panel.__testClickAt(sit.x + sit.w / 2, sit.y + sit.h / 2);
     expect(getConfig().seatYOffset).toBe(SEAT_Y_OFFSET_SIT);

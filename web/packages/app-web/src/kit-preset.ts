@@ -119,9 +119,34 @@ export const SEAT_Y_OFFSET_MIN = -0.20;
 export const SEAT_Y_OFFSET_MAX = 0.60;
 export const SEAT_Y_OFFSET_STEP = 0.05;
 
-/** Quick presets the VR config exposes as one-tap buttons. */
+/** Quick presets the VR config exposes as one-tap buttons.
+ *
+ *  STAND default = +0.30 m: lifts the kit so the snare lands at
+ *  ~1.10 m world Y, which corresponds (per the standing-elbow-height
+ *  ≈ 0.62 × stature anthropometric model) to a ~177 cm player. The
+ *  picker labels surface this number so players can sanity-check
+ *  before they swing — see seatOffsetToStandingHeightCm() below. */
 export const SEAT_Y_OFFSET_SIT = 0;
-export const SEAT_Y_OFFSET_STAND = 0.5;
+export const SEAT_Y_OFFSET_STAND = 0.3;
+
+/** Anthropometric model for the standing-height label.
+ *
+ *  Snare in every preset sits at world Y ≈ 0.80 m (sitting-drummer
+ *  reference). For a comfortable standing-drummer posture — forearms
+ *  roughly parallel to the ground — the snare wants to land at the
+ *  player's elbow-rest height, which empirical anthropometric data
+ *  (ISO 7250 / NASA-STD-3000 tables for adults) places at about 62 %
+ *  of stature. So
+ *
+ *    target_snare_y = 0.80 + offset = 0.62 × stature
+ *    stature = (0.80 + offset) / 0.62
+ *
+ *  Constants are exported so the VR slider's reference label and any
+ *  future auto-calibrate helper share a single source of truth — and
+ *  so the tests can pin the model rather than asserting on a magic
+ *  string. */
+export const SNARE_REFERENCE_Y_M = 0.80;
+export const STANDING_ELBOW_RATIO = 0.62;
 
 /** Apply a uniform Y shift to every pad in the preset, returning a new
  *  array (never mutates input). Used by xr-controllers when building
@@ -144,4 +169,15 @@ export function clampSeatYOffset(v: number): number {
   if (v < SEAT_Y_OFFSET_MIN) return SEAT_Y_OFFSET_MIN;
   if (v > SEAT_Y_OFFSET_MAX) return SEAT_Y_OFFSET_MAX;
   return v;
+}
+
+/** Convert a seat-Y offset into the approximate standing-player
+ *  stature it's tuned for, in centimetres. See SNARE_REFERENCE_Y_M /
+ *  STANDING_ELBOW_RATIO for the model. Returns null at offset 0 ("Sit
+ *  on an arcade stool" — no standing-player height implied) so the
+ *  VR config UI can hide the label cleanly in sit mode. */
+export function seatOffsetToStandingHeightCm(offsetM: number): number | null {
+  if (offsetM === 0) return null;
+  const heightM = (SNARE_REFERENCE_Y_M + offsetM) / STANDING_ELBOW_RATIO;
+  return Math.round(heightM * 100);
 }
