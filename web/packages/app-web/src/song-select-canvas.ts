@@ -24,6 +24,10 @@ import {
   ARTIST_Y,
   COMMENT_BAR_X,
   COMMENT_BAR_Y,
+  COMMENT_CLIP_H_PX,
+  COMMENT_CLIP_W_PX,
+  COMMENT_TEXT_OFFSET_X,
+  COMMENT_TEXT_OFFSET_Y,
   FOOTER_CALIB_X,
   FOOTER_CONFIG_X,
   FOOTER_EXIT_H,
@@ -54,7 +58,27 @@ import {
   WHEEL_TITLE_X_OFFSET,
   WHEEL_VISIBLE_BARS,
   SONG_SELECT_FOOTER,
+  type BarAnchor,
 } from './song-select-layout.js';
+import {
+  COMMENT_SCROLL_GAP_PX,
+  PREIMAGE_FADE_MS,
+  lerp,
+  newCommentScrollState,
+  newPreimageFadeState,
+  newWheelScrollState,
+  preimageOpacity,
+  restartCommentScroll,
+  restartPreimageFade,
+  startWheelScroll,
+  tickCommentScroll,
+  tickPreimageFade,
+  tickWheelScroll,
+  wheelScrollProgress,
+  type CommentScrollState,
+  type PreimageFadeState,
+  type WheelScrollState,
+} from './song-select-animations.js';
 import { skinUrl } from './skin-url.js';
 
 export { SONG_SELECT_FOOTER };
@@ -193,6 +217,24 @@ export class SongSelectCanvas {
    * backends at construction. Cleared on hide. */
   private deps: SongSelectDeps | null = null;
 
+  // ---- Animation state (C# Stage 05 parity) ----
+  /** performance.now() of the previous tick(), or null if we haven't
+   * ticked yet this show() — animations are paused while hidden so dt
+   * doesn't include the time the panel was off-screen. */
+  private lastTickMs: number | null = null;
+  /** Wheel scroll easing — ticks down after a single-step focus change
+   * so the bars look like they slid into place rather than teleporting. */
+  private wheelScroll: WheelScrollState = newWheelScrollState();
+  /** Preimage fade-in — restarts whenever the focused song changes. */
+  private preimageFade: PreimageFadeState = newPreimageFadeState();
+  /** Horizontal scroll on the focused song's #COMMENT text. Only
+   * advances when the rendered width exceeds the bar's clip width. */
+  private commentScroll: CommentScrollState = newCommentScrollState();
+  /** Cached comment text width measured the last time we painted, so
+   * tick() can decide whether to advance the scroll without re-running
+   * measureText every frame. Cleared when the focused song changes. */
+  private commentTextWidthPx = 0;
+
   constructor(
     private readonly webgl: THREE.WebGLRenderer,
     private readonly scene: THREE.Scene
@@ -290,6 +332,15 @@ export class SongSelectCanvas {
     this.mesh.visible = true;
     for (const l of this.lasers) l.visible = true;
 
+    // Reset all animation state — show() can land on any song (resumed
+    // breadcrumb position) and we want the fade/scroll to play from
+    // their start points the first time the player sees the panel.
+    this.lastTickMs = null;
+    this.wheelScroll = newWheelScrollState();
+    this.preimageFade = restartPreimageFade();
+    this.commentScroll = restartCommentScroll();
+    this.commentTextWidthPx = 0;
+
     this.emitFocusedSong();
     void this.loadCoverForFocused();
     this.paint();
@@ -377,6 +428,15 @@ export class SongSelectCanvas {
     const session = this.webgl.xr.getSession();
     if (!session) return;
 
+    // Animation timers run once per tick. dt is wall-clock so a frame
+    // hitch doesn't stretch a fade. First tick after show() seeds
+    // lastTickMs without advancing — animations start fresh on the
+    // first paint after the panel comes up.
+    const now = performance.now();
+    const dtMs = this.lastTickMs === null ? 0 : Math.max(0, now - this.lastTickMs);
+    this.lastTickMs = now;
+    if (dtMs > 0) this.advanceAnimations(dtMs);
+
     // Hover + ray-cast trigger-click
     let hovered = -1;
     for (let i = 0; i < 2; i++) {
@@ -428,6 +488,11 @@ export class SongSelectCanvas {
     if (hovered !== this.hoveredIdx) {
       this.hoveredIdx = hovered;
       this.paint();
+    } else if (this.isAnimating()) {
+      // Repaint while any timer is running so the wheel slide,
+      // preimage fade-in, and comment scroll all visibly advance even
+      // when nothing else changed this frame.
+      this.paint();
     }
 
     // Both sticks drive Y=focus, X=difficulty. Symmetric because Quest
@@ -456,12 +521,52 @@ export class SongSelectCanvas {
     }
   }
 
+  private advanceAnimations(dtMs: number): void {
+    this.wheelScroll = tickWheelScroll(this.wheelScroll, dtMs);
+    this.preimageFade = tickPreimageFade(this.preimageFade, dtMs);
+    if (this.commentTextWidthPx > 0) {
+      // Clip width matches the rect we draw the comment text into in
+      // paintCommentBar. Cached width is set after each paint so this
+      // tick already knows whether to scroll.
+      this.commentScroll = tickCommentScroll(
+        this.commentScroll,
+        dtMs,
+        this.commentTextWidthPx,
+        COMMENT_CLIP_W_PX,
+      );
+    }
+  }
+
+  private isAnimating(): boolean {
+    if (this.wheelScroll.dir !== 0) return true;
+    if (this.preimageFade.elapsedMs < PREIMAGE_FADE_MS) return true;
+    if (this.commentTextWidthPx > COMMENT_CLIP_W_PX) return true;
+    return false;
+  }
+
   private moveFocus(delta: number): void {
     if (this.entries.length === 0) return;
+    const prev = this.focusIdx;
     this.focusIdx = cycleFocus(this.focusIdx, this.entries.length, delta);
-    this.emitFocusedSong();
+    if (this.focusIdx !== prev) {
+      // Animate the slide only on single-step jumps — multi-step (rare,
+      // would need Page Up/Down) would visually overshoot one slot.
+      const dir: 1 | -1 | 0 = delta > 0 ? 1 : delta < 0 ? -1 : 0;
+      this.wheelScroll = startWheelScroll(this.wheelScroll, Math.abs(delta) === 1 ? dir : 0);
+      this.onFocusedSongChanged();
+    }
     void this.loadCoverForFocused();
     this.paint();
+  }
+
+  /** Called whenever the focused entry changes (focus move, enter box,
+   * back). Re-emits to host (preview audio) and resets the per-song
+   * animations so the new song starts from t=0. */
+  private onFocusedSongChanged(): void {
+    this.emitFocusedSong();
+    this.preimageFade = restartPreimageFade();
+    this.commentScroll = restartCommentScroll();
+    this.commentTextWidthPx = 0;
   }
 
   private cycleDifficulty(delta: number): void {
@@ -509,7 +614,11 @@ export class SongSelectCanvas {
     this.currentBox = box;
     this.focusIdx = 0;
     this.rebuildEntries();
-    this.emitFocusedSong();
+    // Box change is a context jump — skip the wheel slide animation
+    // and just snap. The entry list is a different list of entries,
+    // so a slide between them would be meaningless.
+    this.wheelScroll = newWheelScrollState();
+    this.onFocusedSongChanged();
     void this.loadCoverForFocused();
     this.paint();
   }
@@ -524,7 +633,8 @@ export class SongSelectCanvas {
       (e) => e.kind === 'node' && e.node.type === 'box' && e.node === cur
     );
     this.focusIdx = returnIdx >= 0 ? returnIdx : 0;
-    this.emitFocusedSong();
+    this.wheelScroll = newWheelScrollState();
+    this.onFocusedSongChanged();
     void this.loadCoverForFocused();
     this.paint();
   }
@@ -700,11 +810,28 @@ export class SongSelectCanvas {
       return;
     }
     const n = this.entries.length;
+    // Scroll easing: each visible bar interpolates between its previous
+    // anchor (the one the same entry occupied before the focus change)
+    // and its current anchor. Progress 1 = animation complete = static
+    // anchors. dir=+1 means focus moved DOWN, so the entry that's now
+    // at slot `i` was previously at slot `i+1`.
+    const progress = wheelScrollProgress(this.wheelScroll);
+    const dir = this.wheelScroll.dir;
     for (let i = 0; i < WHEEL_VISIBLE_BARS; i++) {
       const offset = i - WHEEL_FOCUS_INDEX;
       const idx = ((this.focusIdx + offset) % n + n) % n;
       const entry = this.entries[idx]!;
-      this.paintWheelBar(entry, i, offset === 0, idx);
+      const target = WHEEL_BAR_ANCHORS[i]!;
+      let anchor = target;
+      if (dir !== 0 && progress < 1) {
+        const fromIdx = clampSlot(i + dir);
+        const from = WHEEL_BAR_ANCHORS[fromIdx]!;
+        anchor = {
+          x: lerp(from.x, target.x, progress),
+          y: lerp(from.y, target.y, progress),
+        };
+      }
+      this.paintWheelBar(entry, i, offset === 0, idx, anchor);
     }
   }
 
@@ -713,9 +840,9 @@ export class SongSelectCanvas {
     barIdx: number,
     focused: boolean,
     entryIdx: number,
+    anchor: BarAnchor,
   ): void {
     const ctx = this.ctx;
-    const anchor = WHEEL_BAR_ANCHORS[barIdx]!;
     const tex = this.getAsset(barTextureName(entry, focused));
     const barW = tex?.width ?? 360;
     const barH = tex?.height ?? 50;
@@ -810,10 +937,15 @@ export class SongSelectCanvas {
     const frame = this.getAsset('5_preimage panel.png');
     const fallback = this.getAsset('5_preimage default.png');
 
-    // Frame first (decorative — sits behind the actual image).
+    // Frame first (decorative — sits behind the actual image and is
+    // drawn at full opacity so the bezel stays visible during the fade).
     if (frame) {
       ctx.drawImage(frame, PREIMAGE_X - 8, PREIMAGE_Y - 8);
     }
+
+    const alpha = preimageOpacity(this.preimageFade);
+    const prevAlpha = ctx.globalAlpha;
+    ctx.globalAlpha = prevAlpha * alpha;
     if (this.coverBitmap) {
       ctx.drawImage(
         this.coverBitmap,
@@ -837,6 +969,7 @@ export class SongSelectCanvas {
       );
       ctx.textAlign = 'left';
     }
+    ctx.globalAlpha = prevAlpha;
   }
 
   private paintStatusPanel(): void {
@@ -929,15 +1062,38 @@ export class SongSelectCanvas {
       ctx.textAlign = 'right';
       ctx.fillText(song.artist, ARTIST_RIGHT_EDGE, ARTIST_Y);
     }
-    // Comment text — scrolling animation is [WIP] until C3.
-    if (song?.comment) {
-      ctx.font = '14px ui-monospace, monospace';
-      ctx.fillStyle = '#fff';
-      ctx.textAlign = 'left';
-      ctx.fillText(truncate(song.comment, 70), COMMENT_BAR_X + 123, COMMENT_BAR_Y + 82);
-    } else {
-      drawWipLabel(ctx, '[WIP] comment scroll', COMMENT_BAR_X + 123, COMMENT_BAR_Y + 82);
+    // Comment text — clipped to the bar's interior. If the rendered
+    // width exceeds the clip, advanceAnimations() steps the scroll
+    // offset and we draw the text twice (with a gap) so it loops.
+    if (!song?.comment) {
+      this.commentTextWidthPx = 0;
+      return;
     }
+    const text = song.comment;
+    const textX = COMMENT_BAR_X + COMMENT_TEXT_OFFSET_X;
+    const textY = COMMENT_BAR_Y + COMMENT_TEXT_OFFSET_Y;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(textX, textY - COMMENT_CLIP_H_PX + 6, COMMENT_CLIP_W_PX, COMMENT_CLIP_H_PX);
+    ctx.clip();
+    ctx.font = '14px ui-monospace, monospace';
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
+    const widthPx = ctx.measureText(text).width;
+    this.commentTextWidthPx = widthPx;
+
+    if (widthPx <= COMMENT_CLIP_W_PX) {
+      ctx.fillText(text, textX, textY);
+    } else {
+      const offset = this.commentScroll.offsetPx;
+      ctx.fillText(text, textX - offset, textY);
+      // Wrap copy: when the head of the text has scrolled out, the tail
+      // should already be visible from the right edge.
+      ctx.fillText(text, textX - offset + widthPx + COMMENT_SCROLL_GAP_PX, textY);
+    }
+    ctx.restore();
   }
 
   private paintScrollbar(): void {
@@ -1088,4 +1244,10 @@ function canvasLampColor(chart: ChartEntry): string | null {
 
 function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 1) + '…';
+}
+
+function clampSlot(i: number): number {
+  if (i < 0) return 0;
+  if (i >= WHEEL_VISIBLE_BARS) return WHEEL_VISIBLE_BARS - 1;
+  return i;
 }

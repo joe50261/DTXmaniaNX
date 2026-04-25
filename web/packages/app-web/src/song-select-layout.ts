@@ -64,6 +64,17 @@ export const WHEEL_TITLE_X_OFFSET = 55;
 // Comment bar — bottom strip that scrolls the focused song's #COMMENT.
 export const COMMENT_BAR_X = 560;
 export const COMMENT_BAR_Y = 257;
+/** X-offset inside the comment bar where the text rect starts (matches
+ *  C# `5_comment bar.png` interior). */
+export const COMMENT_TEXT_OFFSET_X = 123;
+/** Y-offset inside the comment bar for the text baseline. */
+export const COMMENT_TEXT_OFFSET_Y = 82;
+/** Horizontal clip width applied to the comment text. Long comments
+ *  scroll left across this rect; short ones sit static at the left. */
+export const COMMENT_CLIP_W_PX = 750;
+/** Vertical clip height — the comment bar is single-line so we just
+ *  match the bar texture's interior. */
+export const COMMENT_CLIP_H_PX = 30;
 
 // Artist name — right of the focused row.
 export const ARTIST_RIGHT_EDGE = 1260;

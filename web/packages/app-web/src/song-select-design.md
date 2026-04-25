@@ -141,11 +141,9 @@ file first.
 1. **Difficulty grid** is rendered with `[WIP]` overlays on cells
    whose data isn't yet routed (skill %, gauge bars). Geometry must
    still be canonical so the eventual fill drops in cleanly.
-2. **Comment field** is not yet wired but the bar background and
-   clipping rect must exist in the right place.
-3. **Performance history** is currently shown as an empty 5-line
+2. **Performance history** is currently shown as an empty 5-line
    stub.
-4. **VR floating panel** uses the same 1280×720 canvas as the desktop
+3. **VR floating panel** uses the same 1280×720 canvas as the desktop
    render — the C# game targets a single-resolution skin and we
    inherit that. The Three.js plane is sized so the panel reads at
    roughly the same arc-minutes as the desktop view at 2 m.
