@@ -268,6 +268,17 @@ export class XrLayerManager {
         gl.viewport(0, 0, w, h);
 
         gl.bindTexture(gl.TEXTURE_2D, panel.srcTex);
+        // WebXR composition layers expect premultiplied-alpha pixel
+        // data: the runtime's compositor blends with the formula
+        // `dst * (1 - srcA) + srcRGB`, treating srcRGB as already
+        // attenuated by srcA. Canvas pixels are stored premultiplied
+        // internally, but WebGL's default UNPACK_PREMULTIPLY_ALPHA_WEBGL
+        // is FALSE, which makes the upload UN-premultiply on the way
+        // in — so a `rgba(255,255,255,0.04)` lane fill arrives at the
+        // runtime as (1, 1, 1, 0.04) and composites as nearly-opaque
+        // white instead of a 4 % tint. Flip the flag so the texture
+        // stays premultiplied end-to-end.
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
         if (panel.texW !== w || panel.texH !== h) {
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, panel.canvas);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -282,6 +293,10 @@ export class XrLayerManager {
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
 
+      // Restore the global pixel-store flag — three.js relies on the
+      // default `false` for its own texture uploads and we'd corrupt
+      // any subsequent skin / chip texture upload by leaving it on.
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
       gl.bindVertexArray(prevVao as WebGLVertexArrayObject | null);
       gl.bindTexture(gl.TEXTURE_2D, prevTex2d as WebGLTexture | null);
       gl.useProgram(prevProgram as WebGLProgram | null);
