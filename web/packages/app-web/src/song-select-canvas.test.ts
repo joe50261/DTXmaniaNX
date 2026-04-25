@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { VR_MENU_FOOTER } from './vr-menu.js';
+import { SONG_SELECT_FOOTER } from './song-select-layout.js';
 
 /**
  * Geometry invariants for the in-VR song-picker footer strip.
@@ -16,7 +16,7 @@ import { VR_MENU_FOOTER } from './vr-menu.js';
  * geometric; the paint code itself is exercised by the Playwright e2e
  * pass (boot.spec.ts keeps the canvas mounted).
  */
-describe('VR_MENU_FOOTER — song-picker footer geometry', () => {
+describe('SONG_SELECT_FOOTER — song-picker footer geometry', () => {
   const {
     PANEL_W_PX,
     PANEL_H_PX,
@@ -26,14 +26,17 @@ describe('VR_MENU_FOOTER — song-picker footer geometry', () => {
     UTIL_BTN_H,
     EXIT_Y,
     UTIL_BTN_Y,
-  } = VR_MENU_FOOTER;
+  } = SONG_SELECT_FOOTER;
 
   it('Exit VR button fits inside the panel with margin', () => {
     expect(EXIT_Y).toBeGreaterThan(0);
     expect(EXIT_Y + EXIT_H).toBeLessThanOrEqual(PANEL_H_PX);
     expect(EXIT_W).toBeGreaterThan(0);
-    // 16 px bottom margin so the button doesn't touch the panel edge.
-    expect(PANEL_H_PX - (EXIT_Y + EXIT_H)).toBeGreaterThanOrEqual(12);
+    // ≥4 px bottom margin so the button doesn't touch the panel edge.
+    // Tightened from 12 to 4 when the footer row was shrunk to share
+    // the `5_footer panel.png` chrome strip (y=690..720) and clear
+    // wheel slot 11 (y=617..665) above.
+    expect(PANEL_H_PX - (EXIT_Y + EXIT_H)).toBeGreaterThanOrEqual(4);
   });
 
   it('Utility row shares a baseline band with Exit VR (single control strip)', () => {
@@ -46,7 +49,7 @@ describe('VR_MENU_FOOTER — song-picker footer geometry', () => {
   });
 
   it('hint text baseline sits above the button row (no visual overlap)', () => {
-    const hintY = VR_MENU_FOOTER.hintBaselineY();
+    const hintY = SONG_SELECT_FOOTER.hintBaselineY();
     // 13-px text: baseline y means glyph bottom ≈ y + 3, top ≈ y - 10.
     // The button row starts at min(EXIT_Y, UTIL_BTN_Y) — the text's
     // bottom edge must land strictly above that.
@@ -56,7 +59,7 @@ describe('VR_MENU_FOOTER — song-picker footer geometry', () => {
   });
 
   it('hint text stays inside the panel (no clipping below the panel edge)', () => {
-    const hintY = VR_MENU_FOOTER.hintBaselineY();
+    const hintY = SONG_SELECT_FOOTER.hintBaselineY();
     expect(hintY).toBeGreaterThan(0);
     expect(hintY).toBeLessThan(PANEL_H_PX);
   });

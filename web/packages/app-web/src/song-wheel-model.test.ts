@@ -20,7 +20,7 @@ import {
 
 /**
  * Exercises the shared model module that both `song-wheel.ts` (DOM)
- * and `vr-menu.ts` (Canvas) subscribe to. These tests are the contract
+ * and `song-select-canvas.ts` (Canvas) subscribe to. These tests are the contract
  * the two views agree on — if one of them starts doing its own thing,
  * it should instead extend this module.
  *
@@ -66,8 +66,15 @@ describe('SORT_MODES — advancement order', () => {
   // The desktop SongWheel `cycleSortMode` button steps through this
   // tuple in order; changing the order shuffles the player's muscle
   // memory, so pin it down.
-  it('steps title → artist → bpm → level', () => {
-    expect([...SORT_MODES]).toEqual(['title', 'artist', 'bpm', 'level']);
+  it('steps title → level → bestRank → playCount → artist → bpm (matches C# CActSortSongs.EOrder for the canonical modes, with bpm appended)', () => {
+    expect([...SORT_MODES]).toEqual([
+      'title',
+      'level',
+      'bestRank',
+      'playCount',
+      'artist',
+      'bpm',
+    ]);
   });
 });
 
@@ -158,6 +165,65 @@ describe('buildDisplayEntries — flat list for one box', () => {
       return n.type === 'box' ? n.name : n.entry.title;
     });
     expect(realChildren).toEqual(['A', 'B', 'Y', 'X']);
+  });
+
+  it('sort: bestRank — songs with a higher record rank float to the top', () => {
+    const root = makeBox('/', 'Songs');
+    const make = (title: string, rank: ChartRecord['bestRank'] | null) => {
+      const chart = makeChart(2, 'E');
+      if (rank) {
+        chart.record = {
+          chartPath: chart.chartPath,
+          bestScore: 0,
+          bestRank: rank,
+          bestAchievement: 0,
+          fullCombo: false,
+          excellent: false,
+          plays: 1,
+          lastPlayedMs: 0,
+        };
+      }
+      return songNode(root, makeSong(title, [chart]));
+    };
+    const sUnplayed = make('Z-unplayed', null);
+    const sC = make('Y-C', 'C');
+    const sSS = make('X-SS', 'SS');
+    root.children = [sUnplayed, sC, sSS];
+    const out = buildDisplayEntries(root, { sort: 'bestRank' });
+    const titles = out
+      .filter((e) => e.kind === 'node')
+      .map((e) => ((e as { kind: 'node'; node: SongNode }).node).entry.title);
+    // SS first (best), then C, then unplayed last.
+    expect(titles).toEqual(['X-SS', 'Y-C', 'Z-unplayed']);
+  });
+
+  it('sort: playCount — most-played songs float to the top', () => {
+    const root = makeBox('/', 'Songs');
+    const make = (title: string, plays: number) => {
+      const chart = makeChart(2, 'E');
+      if (plays > 0) {
+        chart.record = {
+          chartPath: chart.chartPath,
+          bestScore: 0,
+          bestRank: 'C',
+          bestAchievement: 0,
+          fullCombo: false,
+          excellent: false,
+          plays,
+          lastPlayedMs: 0,
+        };
+      }
+      return songNode(root, makeSong(title, [chart]));
+    };
+    const s0 = make('Z-zero', 0);
+    const s5 = make('Y-five', 5);
+    const s99 = make('X-ninety-nine', 99);
+    root.children = [s0, s5, s99];
+    const out = buildDisplayEntries(root, { sort: 'playCount' });
+    const titles = out
+      .filter((e) => e.kind === 'node')
+      .map((e) => ((e as { kind: 'node'; node: SongNode }).node).entry.title);
+    expect(titles).toEqual(['X-ninety-nine', 'Y-five', 'Z-zero']);
   });
 
   it('search filter: only children whose title contains the query survive; BACK + Random stay', () => {

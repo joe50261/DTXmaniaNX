@@ -1,9 +1,9 @@
 /**
- * Pure helpers for VrMenu's input handling. Extracted so the stick-
+ * Pure helpers for SongSelectCanvas's input handling. Extracted so the stick-
  * axis state machine and the raycast→button hit-test can be unit-
  * tested without standing up Three.js + a WebXR session.
  *
- * These are the parts of vr-menu that hold UX-sensitive rules:
+ * These are the parts of song-select that hold UX-sensitive rules:
  * stick edge-triggering (don't spam focus changes when a thumbstick
  * is held); dead-band release (don't jitter at the threshold); rect
  * hit test (a 1-pixel UV error drops a chart-button press).

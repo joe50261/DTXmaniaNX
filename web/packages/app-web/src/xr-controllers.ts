@@ -131,7 +131,7 @@ export class XrControllers {
     // no-opping ("right stick hit → nothing, left stick hit → left
     // buzz" was the reported symptom — the cached slot that DID
     // populate was the only one ever pulsed). Mirrors the pattern
-    // VrMenu / VrConfig / VrCalibrate already use.
+    // SongSelectCanvas / VrConfig / VrCalibrate already use.
     for (let i = 0; i < 2; i++) {
       const controller = this.webgl.xr.getController(i);
       const idx = i;

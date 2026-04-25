@@ -4,10 +4,10 @@ import {
   stepStickAxis,
   STICK_RELEASE,
   STICK_THRESHOLD,
-} from './vr-menu-input.js';
+} from './song-select-input.js';
 
 /**
- * Tests for the two pure seams of VrMenu.tick(): the stick-axis
+ * Tests for the two pure seams of SongSelectCanvas.tick(): the stick-axis
  * Schmitt trigger (focus / difficulty cycling) and the raycast →
  * button rect hit test. Regression-silent if they drift: focus
  * spams, or jitters at the threshold, or a laser hit a few pixels

@@ -52,8 +52,9 @@ is used by both the desktop DOM view and the VR canvas view, move it into
 a `*-model.ts` module that depends on nothing view-specific. The views then
 become thin subscribers. Examples:
 
-- `song-wheel-model.ts` — shared by `song-wheel.ts` (DOM) and `vr-menu.ts`
-  (canvas). Constants like `WHEEL_VISIBLE_ROWS`, the `DisplayEntry` type,
+- `song-wheel-model.ts` — consumed by `song-select-canvas.ts`, which renders
+  the wheel for both desktop (mounted into the overlay) and VR (CanvasTexture).
+  Constants like `WHEEL_VISIBLE_ROWS`, the `DisplayEntry` type,
   `buildDisplayEntries()`, `cycleFocus()`, `buildBreadcrumbPath()`, etc.
 
 Don't copy-paste navigation logic into the VR view "because it's shorter" —
@@ -67,7 +68,7 @@ it's demonstrably cheaper than the alternative and doesn't re-implement
 the code under test.
 
 - **Pure model functions** (`song-wheel-model.ts`, `hud-toast.ts`,
-  `tick-state.ts`, `vr-menu-input.ts`, `vr-lifecycle.ts`, …) → **unit
+  `tick-state.ts`, `song-select-input.ts`, `vr-lifecycle.ts`, …) → **unit
   tests** (`*.test.ts` via `vitest`). Full branch coverage expected;
   no DOM / canvas / Three.js dependencies, so they're cheap.
 - **Pure geometry / layout constants** exported from view modules
@@ -97,7 +98,25 @@ assertions are satisfied by any implementation that compiles. If the
 mock is longer than the code it's testing, do it in Playwright
 instead.
 
+## Lint — `pnpm lint`
+
+Two tools enforce the architecture rules above so they don't drift:
+
+- **`eslint-plugin-check-file`** (config: `web/eslint.config.mjs`) —
+  pins source filenames + folders to kebab-case. A file like
+  `SongWheel.ts` or `vrConfig.ts` fails here.
+- **`dependency-cruiser`** (config: `web/.dependency-cruiser.cjs`) —
+  rejects circular imports, prevents production code from importing
+  `*.test.ts`, blocks `*-model.ts` / `*-layout.ts` /
+  `*-animations.ts` / pure-helper modules from importing view code
+  (`*-canvas.ts`, `renderer.ts`, `game.ts`, `xr-controllers.ts`,
+  `main.ts`) or `three`.
+
+CI runs `pnpm --dir web run lint` between audit and typecheck. Run
+locally with `pnpm lint` (or `lint:files` / `lint:deps` for the
+individual tools) before pushing.
+
 ## Branch expectations
 
 Default development branch is whatever the session is assigned to. Do not
-push to `master` directly; open a PR. Never use `--no-verify` to skip hooks.
+push to `master` directly; never use `--no-verify` to skip hooks.

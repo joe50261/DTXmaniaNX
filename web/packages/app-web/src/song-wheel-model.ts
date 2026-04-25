@@ -3,13 +3,15 @@ import type { BoxNode, ChartEntry, LibraryNode, SongEntry } from '@dtxmania/dtx-
 /**
  * Pure data/logic model for the song-selection wheel.
  *
- * Shared by the desktop DOM view (`song-wheel.ts`) and the VR canvas
- * panel view (`vr-menu.ts`). Nothing in this module touches DOM,
- * Three.js, or Canvas — the same concepts (wheel size, difficulty slots,
- * entry list, focus/slot cycling, sort, breadcrumb path) were previously
- * copy-pasted across both views and drifted on small details. A single
- * model keeps them in lock-step and means adding a new sort mode or
- * synthetic entry is a one-line change instead of two.
+ * Consumed by `song-select-canvas.ts`, which is the single view used
+ * for both desktop (mounted into the overlay) and VR (uploaded as a
+ * Three.js CanvasTexture). Nothing in this module touches DOM,
+ * Three.js, or Canvas — the same concepts (wheel size, difficulty
+ * slots, entry list, focus/slot cycling, sort, breadcrumb path) used
+ * to be copy-pasted between a DOM SongWheel and the canvas, and drifted
+ * on small details. A single model keeps the rendering paths in
+ * lock-step and means adding a new sort mode or synthetic entry is a
+ * one-line change.
  */
 
 /** Number of visible rows. Odd so there's one focused center row. */
@@ -27,9 +29,28 @@ export type SyntheticEntry =
 
 export type DisplayEntry = { kind: 'node'; node: LibraryNode } | SyntheticEntry;
 
-export type SortMode = 'title' | 'artist' | 'bpm' | 'level';
+/** Sort modes the player can cycle through. Order + names mirror C#
+ *  `CActSortSongs.EOrder`: Title, Level, BestRank, PlayCount, Author,
+ *  ..., Date. We omit `SkillPoint` (needs cross-chart aggregator) and
+ *  `Date` (needs scanner mtime), and add `bpm` at the end as a
+ *  web-port extension — useful and cheap, kept after the canonical
+ *  set so a player cycling through hits the C# names first. */
+export type SortMode =
+  | 'title'
+  | 'level'
+  | 'bestRank'
+  | 'playCount'
+  | 'artist'
+  | 'bpm';
 
-export const SORT_MODES: readonly SortMode[] = ['title', 'artist', 'bpm', 'level'];
+export const SORT_MODES: readonly SortMode[] = [
+  'title',
+  'level',
+  'bestRank',
+  'playCount',
+  'artist',
+  'bpm',
+];
 
 /** A single breadcrumb hop, from root to current. `current: true` marks
  * the terminal segment so the DOM view can style it differently and the
@@ -211,6 +232,34 @@ function levelKey(node: LibraryNode): number {
   return Math.max(...levels);
 }
 
+/** Best rank across the song's charts, mapped to a numeric tier so
+ *  higher = better. Songs with no record get -1 so they sort below
+ *  every played one when descending. Mirrors C# `t曲リストのソート5_BestRank順`
+ *  which sorts by `BestRank[i]` per instrument. */
+function bestRankKey(node: LibraryNode): number {
+  if (node.type === 'box') return -2;
+  // Rank order: SS=6 (best) → E=0 (worst). Matches the inverse of the
+  // C# `ERANK` enum (SS=0..E=6) — we want higher = better for sort.
+  const RANK_TO_KEY: Record<string, number> = {
+    SS: 6, S: 5, A: 4, B: 3, C: 2, D: 1, E: 0,
+  };
+  let best = -1;
+  for (const c of node.entry.charts) {
+    const k = c.record ? (RANK_TO_KEY[c.record.bestRank] ?? -1) : -1;
+    if (k > best) best = k;
+  }
+  return best;
+}
+
+/** Total play count across the song's charts. Songs the player has
+ *  never touched stay at 0. Mirrors C# `t曲リストのソート3_演奏回数の多い順`. */
+function playCountKey(node: LibraryNode): number {
+  if (node.type === 'box') return 0;
+  let total = 0;
+  for (const c of node.entry.charts) total += c.record?.plays ?? 0;
+  return total;
+}
+
 /** Comparator for sorting library nodes. Boxes always sort above songs
  * within the same tier so the folder layout stays visually obvious —
  * mirrors DTXmania's habit of listing BOX nodes at the top of a wheel. */
@@ -233,6 +282,17 @@ export function compareNodes(a: LibraryNode, b: LibraryNode, mode: SortMode): nu
     }
     case 'level': {
       const primary = levelKey(a) - levelKey(b);
+      return primary !== 0 ? primary : displayTitle(a).localeCompare(displayTitle(b));
+    }
+    case 'bestRank': {
+      // Higher rank first (descending) — players want to see their
+      // best-cleared songs at the top.
+      const primary = bestRankKey(b) - bestRankKey(a);
+      return primary !== 0 ? primary : displayTitle(a).localeCompare(displayTitle(b));
+    }
+    case 'playCount': {
+      // Most-played first (descending) — same reasoning.
+      const primary = playCountKey(b) - playCountKey(a);
       return primary !== 0 ? primary : displayTitle(a).localeCompare(displayTitle(b));
     }
   }

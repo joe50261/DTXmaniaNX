@@ -49,7 +49,11 @@ import {
   updateCancelEdgeState,
   type ResolvedLoopWindow,
 } from './tick-state.js';
-import { VrMenu, type VrMenuDeps, type VrMenuPick } from './vr-menu.js';
+import {
+  SongSelectCanvas,
+  type SongSelectDeps,
+  type SongSelectPick,
+} from './song-select-canvas.js';
 import { VrCalibrate } from './vr-calibrate.js';
 import { VrConfig } from './vr-config.js';
 import { VrOnScreenLog } from './vr-on-screen-log.js';
@@ -111,7 +115,7 @@ export class Game {
   /** Edge state for the in-song "squeeze to quit" poller. Indexed by
    * controller. Kept in Game (not XrControllers) because the button's
    * meaning depends on Game's status — during play it aborts, during
-   * the VR menu it's a back press handled by VrMenu itself. */
+   * the VR menu it's a back press handled by SongSelectCanvas itself. */
   private cancelSqueezed: boolean[] = [false, false];
   /** Rising-edge latches for the right-controller A/B face buttons that
    * capture loop A/B markers in VR. Independent from cancelSqueezed
@@ -157,7 +161,10 @@ export class Game {
   private autoPlayLanes = new Set<LaneValue>();
   private bgmSources: AudioBufferSourceNode[] = [];
   private readonly xrControllers: XrControllers;
-  private readonly vrMenu: VrMenu;
+  /** Exposed read-only so main.ts can mount its canvas into the
+   *  desktop overlay and wire keyboard/pointer events directly. The
+   *  Game still owns lifetime + show/hide. */
+  readonly songSelect: SongSelectCanvas;
   private readonly vrCalibrate: VrCalibrate;
   private readonly vrConfig: VrConfig;
   private readonly vrLog: VrOnScreenLog;
@@ -182,7 +189,7 @@ export class Game {
     this.xrControllers = new XrControllers(this.renderer.webgl, this.renderer.scene);
     this.xrControllers.setPadsTexture(skin.pads);
     this.xrControllers.onHit((e) => this.handleLaneHit(e));
-    this.vrMenu = new VrMenu(this.renderer.webgl, this.renderer.scene);
+    this.songSelect = new SongSelectCanvas(this.renderer.webgl, this.renderer.scene);
     this.vrCalibrate = new VrCalibrate(this.renderer.webgl, this.renderer.scene, this.engine);
     this.vrConfig = new VrConfig(this.renderer.webgl, this.renderer.scene);
     this.vrLog = new VrOnScreenLog(this.renderer.scene);
@@ -200,7 +207,7 @@ export class Game {
   async enterXR(onEnded: () => void): Promise<void> {
     await this.renderer.enterXR(() => {
       this.xrControllers.stop();
-      this.vrMenu.hide();
+      this.songSelect.hide();
       this.vrCalibrate.hide();
       this.vrConfig.hide();
       this.vrLog.hide();
@@ -235,26 +242,26 @@ export class Game {
    * Show the in-VR song picker. Renderer.onFrame already ticks xrControllers
    * and the menu every frame so raycast updates while this is visible.
    */
-  showVrMenu(
+  showSongSelect(
     root: BoxNode,
-    onPick: (pick: VrMenuPick) => void,
+    onPick: (pick: SongSelectPick) => void,
     onExit: () => void,
-    deps: VrMenuDeps
+    deps: SongSelectDeps
   ): void {
     // Hide playfield while the menu is up. Without this the result HUD +
     // scrolling pads (renderOrder 2/4, depthTest:off) keep painting over
     // the menu panel (renderOrder 0) and the player can't see what they
     // picked — and thinks auto-return / pad-hit-skip "didn't fire".
     this.renderer.setPlayfieldVisible(false);
-    this.vrMenu.show(root, onPick, onExit, deps);
+    this.songSelect.show(root, onPick, onExit, deps);
   }
 
-  hideVrMenu(): void {
+  hideSongSelect(): void {
     this.renderer.setPlayfieldVisible(true);
-    this.vrMenu.hide();
+    this.songSelect.hide();
   }
 
-  /** Show the VR calibration panel. Call `hideVrMenu()` first if the
+  /** Show the VR calibration panel. Call `hideSongSelect()` first if the
    * menu is currently up — the two UIs share the same controller input
    * and shouldn't be visible simultaneously. `onDone` receives the
    * measured offset in ms, or null if the player cancelled or the
@@ -411,7 +418,7 @@ export class Game {
     this.loopMarkerPressed = [...empty.loopMarkerPressed];
     this.tracker = new ScoreTracker(0);
     this.loopWindowMs = null;
-    // Belt-and-braces: whatever state hideVrMenu may or may not have run in,
+    // Belt-and-braces: whatever state hideSongSelect may or may not have run in,
     // a fresh chart always wants the playfield visible.
     this.renderer.setPlayfieldVisible(true);
     // Paint one idle frame so the HUD canvas (which the VR playfield
@@ -499,7 +506,7 @@ export class Game {
     this.input.detach();
     this.stopBgm();
     this.unsubConfig();
-    this.vrMenu.dispose();
+    this.songSelect.dispose();
     this.vrCalibrate.dispose();
     this.vrConfig.dispose();
     this.vrLog.dispose();
@@ -676,7 +683,7 @@ export class Game {
 
   private tick(): void {
     this.xrControllers.tick();
-    this.vrMenu.tick();
+    this.songSelect.tick();
     this.vrCalibrate.tick();
     this.vrConfig.tick();
     // VR face-button mapping during play:
