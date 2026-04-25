@@ -102,6 +102,40 @@ function makeLibrary(): BoxNode {
   return root;
 }
 
+/** Library with three songs at root so sort/search behaviour shows. */
+function makeMultiSongLibrary(): BoxNode {
+  const root: BoxNode = {
+    type: 'box',
+    name: '/',
+    path: '/',
+    parent: null,
+    children: [],
+  };
+  const songs: Array<{ title: string; artist: string; bpm: number }> = [
+    { title: 'Charlie', artist: 'Alpha', bpm: 200 },
+    { title: 'Alpha', artist: 'Bravo', bpm: 100 },
+    { title: 'Bravo', artist: 'Charlie', bpm: 150 },
+  ];
+  for (const { title, artist, bpm } of songs) {
+    const chart: ChartEntry = {
+      slot: 3,
+      label: 'MASTER',
+      chartPath: `${title}/chart.dtx`,
+      drumLevel: 500,
+    };
+    const song: SongEntry = {
+      title,
+      artist,
+      folderPath: title,
+      fromSetDef: false,
+      charts: [chart],
+      bpm,
+    };
+    root.children.push({ type: 'song', entry: song, parent: root });
+  }
+  return root;
+}
+
 function makeDeps(overrides: Partial<SongSelectDeps> = {}): SongSelectDeps {
   return {
     loadBytes: async () => new ArrayBuffer(0),
@@ -224,6 +258,72 @@ describe('SongSelectCanvas — canvas-2D panel wiring', () => {
     expect(hit).toBeTruthy();
     menu.__testClickAt(hit!.x + hit!.w / 2, hit!.y + hit!.h / 2);
     expect(exitCount).toBe(1);
+  });
+
+  it('cycleSortMode walks title→artist→bpm→level→title and reorders entries', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    menu.show(
+      makeMultiSongLibrary(),
+      () => {},
+      () => {},
+      makeDeps(),
+    );
+    expect(menu.getSortMode()).toBe('title');
+    // Title order: Alpha (the song), Bravo, Charlie. The first synthetic
+    // row at root is Random (no Back when at root). focusedSong reads
+    // the current focus, which after a fresh show() is on the first
+    // entry — Random — so we step focus by selecting via __testClickAt.
+    expect(menu.cycleSortMode()).toBe('artist');
+    expect(menu.getSortMode()).toBe('artist');
+    expect(menu.cycleSortMode()).toBe('bpm');
+    expect(menu.cycleSortMode()).toBe('level');
+    expect(menu.cycleSortMode()).toBe('title');
+  });
+
+  it('setSearchQuery filters the wheel entries by title substring', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    menu.show(
+      makeMultiSongLibrary(),
+      () => {},
+      () => {},
+      makeDeps(),
+    );
+    menu.setSearchQuery('alp');
+    // Random + 1 song match (Alpha). 'activate' hits map 1:1 to wheel
+    // rows — Random is one and Alpha is the second.
+    const activateHits = menu.__testHits().filter((h) => h.kind === 'activate');
+    expect(activateHits.length).toBeGreaterThanOrEqual(2);
+    expect(menu.getSearchQuery()).toBe('alp');
+  });
+
+  it('setSearchQuery normalises whitespace + case so callers can pipe raw input', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    menu.show(makeMultiSongLibrary(), () => {}, () => {}, makeDeps());
+    menu.setSearchQuery('  ALPHA  ');
+    expect(menu.getSearchQuery()).toBe('alpha');
+  });
+
+  it('setRoot(null) clears entries; setRoot(root) restores them', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    menu.show(makeLibrary(), () => {}, () => {}, makeDeps());
+    const beforeHits = menu.__testHits().filter((h) => h.kind === 'activate').length;
+    expect(beforeHits).toBeGreaterThan(0);
+
+    menu.setRoot(null);
+    const clearedHits = menu.__testHits().filter((h) => h.kind === 'activate').length;
+    expect(clearedHits).toBe(0);
+
+    menu.setRoot(makeLibrary());
+    const restoredHits = menu.__testHits().filter((h) => h.kind === 'activate').length;
+    expect(restoredHits).toBeGreaterThan(0);
   });
 
   it('hint-text baseline sits strictly above the Exit VR + utility button tops', () => {

@@ -17,7 +17,9 @@ import {
   pickChartForSlot,
   pickRandomSongIn,
   rowTitle,
+  SORT_MODES,
   type DisplayEntry,
+  type SortMode,
 } from './song-wheel-model.js';
 import {
   ARTIST_RIGHT_EDGE,
@@ -179,6 +181,15 @@ export class SongSelectCanvas {
   private entries: DisplayEntry[] = [];
   private focusIdx = 0;
   private preferredSlot = 4;
+  /** Sort mode passed to `buildDisplayEntries`. Persisted across
+   * show/hide cycles so a desktop player picking a sort sticks to it
+   * after a Rescan. The VR panel never changes this — no headset UI
+   * for sort selection — but the field is wired so a future controller
+   * gesture can drive it. */
+  private sortMode: SortMode = 'title';
+  /** Lower-cased substring filter. Same persistence reasoning as
+   * `sortMode`. Empty string = no filter. */
+  private searchQuery = '';
   /** Breadcrumb persisted across show/hide cycles so re-opening the
    * menu (after a song / after exit-and-re-enter VR) lands the player
    * back where they were. Stored as path string because the BoxNode
@@ -360,6 +371,89 @@ export class SongSelectCanvas {
     for (const t of this.tipMarks) t.visible = false;
     this.deps?.onFocusedSong(null);
     this.deps = null;
+  }
+
+  /** Update the library tree without going through show()/hide(). Used
+   * by the desktop driver when a Rescan finishes mid-browse so the wheel
+   * can refresh in place. Preserves the player's breadcrumb/focus when
+   * possible (path-match) and clamps the focus index against the new
+   * entry count. */
+  setRoot(root: BoxNode | null): void {
+    this.root = root;
+    if (!root) {
+      this.currentBox = null;
+      this.entries = [];
+      this.focusIdx = 0;
+      if (this.shown) this.paint();
+      return;
+    }
+    const resumeBox =
+      this.persistedBoxPath !== null ? findBoxByPath(root, this.persistedBoxPath) : null;
+    this.currentBox = resumeBox ?? root;
+    this.rebuildEntries();
+    this.focusIdx = resumeBox
+      ? Math.min(Math.max(0, this.persistedFocusIdx), Math.max(0, this.entries.length - 1))
+      : 0;
+    if (this.shown) {
+      this.emitFocusedSong();
+      void this.loadCoverForFocused();
+      this.paint();
+    }
+  }
+
+  getSortMode(): SortMode {
+    return this.sortMode;
+  }
+
+  setSortMode(mode: SortMode): void {
+    if (mode === this.sortMode) return;
+    this.sortMode = mode;
+    this.rebuildEntriesPreservingFocus();
+  }
+
+  /** Advance to the next sort mode in `SORT_MODES` and return it.
+   * Same shape as DOM SongWheel.cycleSortMode so callers can hand the
+   * returned value straight to their UI label. */
+  cycleSortMode(): SortMode {
+    const idx = SORT_MODES.indexOf(this.sortMode);
+    const next = SORT_MODES[(idx + 1) % SORT_MODES.length]!;
+    this.setSortMode(next);
+    return next;
+  }
+
+  getSearchQuery(): string {
+    return this.searchQuery;
+  }
+
+  /** Apply a substring filter to the current box. Empty / whitespace
+   * disables filtering. Trims + lower-cases internally so callers can
+   * pipe a raw `<input>` value in. */
+  setSearchQuery(query: string): void {
+    const normalized = query.trim().toLowerCase();
+    if (normalized === this.searchQuery) return;
+    this.searchQuery = normalized;
+    this.rebuildEntriesPreservingFocus();
+  }
+
+  /** Shared helper for sort/search updates: rebuild entries, keep
+   * focused song under the cursor where possible (since the entry order
+   * may have shifted), emit focus + repaint. */
+  private rebuildEntriesPreservingFocus(): void {
+    const prevFocused = this.focusedSong();
+    this.rebuildEntries();
+    if (prevFocused) {
+      const newIdx = this.entries.findIndex(
+        (e) => e.kind === 'node' && e.node.type === 'song' && e.node.entry === prevFocused,
+      );
+      this.focusIdx = newIdx >= 0 ? newIdx : 0;
+    } else {
+      this.focusIdx = 0;
+    }
+    if (this.shown) {
+      this.emitFocusedSong();
+      void this.loadCoverForFocused();
+      this.paint();
+    }
   }
 
   /** Test-only: fire the action of whichever button's rect covers
@@ -576,7 +670,10 @@ export class SongSelectCanvas {
     this.paint();
   }
 
-  private focusedSong(): SongEntry | null {
+  /** Currently focused song, or null when focus is on a folder /
+   * synthetic row. Mirrors `SongWheel.focusedSong()` so a desktop
+   * driver can read it the same way. */
+  focusedSong(): SongEntry | null {
     const entry = this.entries[this.focusIdx];
     if (entry?.kind !== 'node') return null;
     return entry.node.type === 'song' ? entry.node.entry : null;
@@ -640,9 +737,10 @@ export class SongSelectCanvas {
   }
 
   private rebuildEntries(): void {
-    // VR menu doesn't expose sort/search controls yet — children appear
-    // in scan order (matches the legacy behaviour).
-    this.entries = buildDisplayEntries(this.currentBox);
+    this.entries = buildDisplayEntries(this.currentBox, {
+      sort: this.sortMode,
+      searchQuery: this.searchQuery,
+    });
   }
 
   private invokeHit(hit: ButtonHit): void {
