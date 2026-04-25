@@ -121,7 +121,7 @@ interface ButtonHit {
   /** What happens on trigger/click. */
   action:
     | { kind: 'activate'; entryIdx: number }
-    | { kind: 'difficulty'; slot: number }
+    | { kind: 'chart'; song: SongEntry; chart: ChartEntry }
     | { kind: 'sort' }
     | { kind: 'exit' }
     | { kind: 'calibrate' }
@@ -876,13 +876,20 @@ export class SongSelectCanvas {
         void this.loadCoverForFocused();
         this.activateFocused();
         return;
-      case 'difficulty':
-        // Snap the preferred slot. No focus change (the difficulty
-        // grid only shows the focused song's chart slots), no
-        // launch — the player still has to confirm with trigger /
-        // Enter on the focused row to start the chart.
-        this.preferredSlot = hit.action.slot;
-        this.paint();
+      case 'chart':
+        // One-click chart launch via the difficulty grid: clicking a
+        // DR cell starts the chart at THAT slot directly. The
+        // earlier two-step "click to set preferredSlot, Enter to
+        // launch" was confusing — the user reported the launched
+        // chart never matched the highlighted cell. The single-step
+        // path also bypasses the preferredSlot bookkeeping that
+        // turned out to be where the desync was hiding. preferredSlot
+        // still tracks for ←/→ keyboard cycling + visual highlight
+        // on the next focus.
+        this.preferredSlot = hit.action.chart.slot;
+        if (this.onPick) {
+          this.onPick({ song: hit.action.song, chart: hit.action.chart });
+        }
         return;
       case 'sort':
         this.cycleSortMode();
@@ -994,13 +1001,13 @@ export class SongSelectCanvas {
     const hoveredAction = this.snapshotHoveredAction();
     const hoveredEntryIdx =
       hoveredAction?.kind === 'activate' ? hoveredAction.entryIdx : -1;
-    const hoveredDifficultySlot =
-      hoveredAction?.kind === 'difficulty' ? hoveredAction.slot : -1;
+    const hoveredChartSlot =
+      hoveredAction?.kind === 'chart' ? hoveredAction.chart.slot : -1;
     this.hits = [];
 
     this.paintBackground();
     this.paintPreimage();
-    this.paintStatusPanel(hoveredDifficultySlot);
+    this.paintStatusPanel(hoveredChartSlot);
     // Comment bar sits behind the wheel — its y-strip (257..287)
     // overlaps the focus row's bar (270..320) and the canonical C#
     // order paints the wheel ON TOP so the focused bar punches
@@ -1274,17 +1281,17 @@ export class SongSelectCanvas {
         } else if (p > 0 && chart) {
           drawWipLabel(ctx, '[WIP]', cellX + 6, rowY + ROW_H - 6);
         }
-        // DR cells with a chart are clickable (laser ray + desktop
-        // pointer alike) — tapping one snaps preferredSlot to that
-        // difficulty. GT/BS get no rect because they have no real
-        // chart data yet.
+        // DR cells with a chart are direct chart launchers (laser
+        // ray + desktop pointer alike) — clicking one starts the
+        // chart at THAT slot in one step. GT/BS get no rect because
+        // they have no real chart data yet.
         if (p === 0 && chart) {
           this.hits.push({
             x: cellX,
             y: rowY,
             w: PART_W,
             h: ROW_H,
-            action: { kind: 'difficulty', slot: i },
+            action: { kind: 'chart', song, chart },
           });
         }
       }

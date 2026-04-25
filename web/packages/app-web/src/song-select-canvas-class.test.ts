@@ -476,11 +476,13 @@ describe('SongSelectCanvas — canvas-2D panel wiring', () => {
     expect(pickCount).toBeLessThanOrEqual(1);
   });
 
-  it('DR cell click actually changes which chart subsequently launches', () => {
-    // The integration regression we're pinning: click DR slot 0 to
-    // pre-select Basic, then activate the focused song, and the
-    // chart that fires onPick should be Basic (not the default
-    // preferredSlot=4 fallback Master).
+  it('DR cell click directly launches that chart in one step', () => {
+    // After the reviewer feedback: clicking a DR cell should fire
+    // onPick immediately with that exact chart. No two-step
+    // "select then Enter" — the desync between visual selection
+    // and what got launched was hiding bugs in the preferredSlot
+    // bookkeeping. Direct chart-launch removes the whole class
+    // of bugs.
     const chart0: ChartEntry = {
       slot: 0,
       label: 'BASIC',
@@ -522,19 +524,15 @@ describe('SongSelectCanvas — canvas-2D panel wiring', () => {
     // Move focus onto the song (past the synthetic Random row).
     menu.dispatchKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
 
-    const diffHits = menu.__testHits().filter((h) => h.kind === 'difficulty');
-    expect(diffHits).toHaveLength(2);
-    // Default preferredSlot is 4 (DTX) — pickChartForSlot falls back
-    // to nearest-higher → Master (slot 3). So a plain Enter without
-    // touching difficulty would launch Master.
+    const chartHits = menu.__testHits().filter((h) => h.kind === 'chart');
+    expect(chartHits).toHaveLength(2);
     // Pick the BOTTOM cell (largest y) — that's slot 0 (Basic).
-    const slot0Hit = diffHits.reduce((a, b) => (b.y > a.y ? b : a));
+    const slot0Hit = chartHits.reduce((a, b) => (b.y > a.y ? b : a));
     expect(menu.__testClickAt(slot0Hit.x + 5, slot0Hit.y + 5)).toBe(true);
-    expect(pickedChart).toBeNull();
 
-    // Now activate. The launched chart should be Basic (slot 0),
-    // NOT Master (the default).
-    menu.dispatchKey(new KeyboardEvent('keydown', { key: 'Enter' }));
+    // Single click should have already launched Basic — no Enter
+    // needed. The launched chart is Basic, not Master (the default
+    // preferredSlot=4 nearest-higher fallback).
     expect(pickedChart).not.toBeNull();
     expect(pickedChart!.slot).toBe(0);
     expect(pickedChart!.chartPath).toBe('song/basic.dtx');
@@ -580,16 +578,24 @@ describe('SongSelectCanvas — canvas-2D panel wiring', () => {
     expect(pickedChart!.slot).toBe(0);
   });
 
-  it('paint() emits no chart-button hits anymore (canonical layout)', () => {
+  it('chart hits live only in the status panel grid (no floating buttons under focus row)', () => {
+    // The legacy DOM-style floating chart buttons under the focused
+    // bar were retired in C4c — they overlapped the comment ribbon
+    // and the next wheel row. The DR difficulty grid took over the
+    // chart-launch role. So `chart` hits should exist (the grid
+    // emits them per chart slot) but their geometry should sit in
+    // the status panel area, not under the focused wheel bar.
     const gl = makeFakeWebGL();
     const scene = new THREE.Scene();
     const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
     menu.show(makeMultiSongLibrary(), () => {}, () => {}, makeDeps());
-    const hits = menu.__testHits();
-    // The legacy DOM-style floating chart buttons under the focused
-    // bar are gone — difficulty selection lives in the status panel
-    // grid + ←/→ keys. No 'chart'-kind hit should ever be emitted.
-    expect(hits.some((h) => h.kind === ('chart' as never))).toBe(false);
+    menu.dispatchKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    const chartHits = menu.__testHits().filter((h) => h.kind === 'chart');
+    // Status panel x=130. Floating-button geometry would have been at
+    // anchor.x + WHEEL_TITLE_X_OFFSET (~519), well to the right.
+    for (const hit of chartHits) {
+      expect(hit.x).toBeLessThan(400);
+    }
   });
 
   it('hint-text baseline sits strictly above the Exit VR + utility button tops', () => {
