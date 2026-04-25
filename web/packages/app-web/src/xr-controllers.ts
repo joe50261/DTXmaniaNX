@@ -2,24 +2,32 @@ import * as THREE from 'three';
 import { Lane, type LaneValue } from '@dtxmania/input';
 import { LANE_LAYOUT } from './lane-layout.js';
 import { PAD_ATLAS, PAD_SIZE } from './pad-atlas.js';
+import { getConfig, subscribe, type Config } from './config.js';
+import {
+  applySeatYOffset,
+  getKitPreset,
+  type PadSpec,
+} from './kit-preset.js';
+import { detectPadHit } from './hit-detect.js';
 
 /**
  * VR virtual drum kit.
  *
- * Layout ported from /drum-kit-design.html after design review. Every pad
- * corresponds 1:1 to a DTX lane, and each uses the matching slice of
- * 7_pads.png so what the player sees in VR matches the on-screen HUD
- * sprite for that drum.
+ * Layout, sizes, and tilts come from `kit-preset.ts`. The default preset
+ * targets the GITADORA Galaxy Wave arcade cabinet (Konami's white-frame
+ * latest gen) so muscle memory transfers between the sim and a real
+ * machine; players can swap to other presets via the VR config panel.
  *
  * Controllers are drumsticks (visible cylinder + tip sphere attached to
- * each grip). The stick tip's world position is tracked per frame; a hit
- * fires when the tip plane-crosses a pad downward at sufficient speed and
- * lands within the pad's (x, z) footprint.
+ * each grip). The stick is sampled at five points along its shaft; a
+ * hit fires when any sample crosses a pad's tilted face from the
+ * outward-normal side at sufficient inward speed and lands within the
+ * pad's footprint. See `hit-detect.ts` for the math — pure functions,
+ * unit-tested.
  *
- * BD is a special case: its visual is a large disc facing the player
- * (like a real kick drum head), but the judgment plane is the virtual
- * horizontal surface above it — VR has no foot pedal, so the player
- * strikes it from above with a stick.
+ * BD is a special case: its visual is a large vertical face, but
+ * judgment uses a horizontal plane above it (Quest has no foot
+ * tracking, so the kick is a stick-strike abstraction).
  */
 
 export interface XrLaneEvent {
@@ -29,41 +37,9 @@ export interface XrLaneEvent {
 }
 export type XrLaneListener = (e: XrLaneEvent) => void;
 
-type PadShape = 'disc' | 'face' | 'pedal';
-
-interface PadSpec {
-  lane: LaneValue;
-  /** World-space centre in metres. */
-  position: THREE.Vector3;
-  /** Disc diameter / pedal side length in metres. */
-  size: number;
-  /** Tilt angle towards the player, in degrees (0 = flat). */
-  tiltDeg: number;
-  shape: PadShape;
-  /** If true, add a chrome stand from floor to pad bottom. */
-  stand: boolean;
-}
-
-const PAD_LAYOUT: readonly PadSpec[] = [
-  { lane: Lane.LC, position: new THREE.Vector3(-0.65, 1.35, -0.60), size: 0.36, tiltDeg: 10, shape: 'disc',  stand: true  },
-  { lane: Lane.HH, position: new THREE.Vector3(-0.50, 0.95, -0.40), size: 0.30, tiltDeg:  0, shape: 'disc',  stand: true  },
-  { lane: Lane.LP, position: new THREE.Vector3(-0.30, 0.20, -0.25), size: 0.18, tiltDeg:  0, shape: 'pedal', stand: false },
-  { lane: Lane.SD, position: new THREE.Vector3(-0.15, 0.80, -0.40), size: 0.32, tiltDeg:  0, shape: 'disc',  stand: false },
-  { lane: Lane.HT, position: new THREE.Vector3(-0.05, 1.00, -0.60), size: 0.26, tiltDeg: 10, shape: 'disc',  stand: false },
-  { lane: Lane.BD, position: new THREE.Vector3( 0.15, 0.35, -0.50), size: 0.50, tiltDeg:  0, shape: 'face',  stand: false },
-  { lane: Lane.LT, position: new THREE.Vector3( 0.20, 1.00, -0.60), size: 0.26, tiltDeg: 10, shape: 'disc',  stand: false },
-  { lane: Lane.FT, position: new THREE.Vector3( 0.50, 0.80, -0.50), size: 0.34, tiltDeg:  0, shape: 'disc',  stand: false },
-  { lane: Lane.CY, position: new THREE.Vector3( 0.55, 1.35, -0.70), size: 0.36, tiltDeg: 10, shape: 'disc',  stand: true  },
-  { lane: Lane.RD, position: new THREE.Vector3( 0.75, 1.15, -0.55), size: 0.42, tiltDeg:  8, shape: 'disc',  stand: true  },
-];
-
 const STICK_LENGTH_M = 0.35;
 const STICK_RADIUS_M = 0.01;
-const HIT_VELOCITY_THRESHOLD_MPS = 1.0;
 const HIT_COOLDOWN_MS = 80;
-/** BD is hit from above — judgment square is the pad's (x, z) footprint expanded
- *  a bit so the large kick-face is easy to strike. */
-const BD_HIT_HALF_M = 0.25;
 /** Number of points sampled along each stick's shaft (grip → tip) for hit
  * detection. The old single-tip check made it easy to overshoot — any
  * swing that passed through a pad with the stick's shaft but the tip
@@ -104,6 +80,22 @@ export class XrControllers {
   private padMeshByLane = new Map<LaneValue, { mesh: THREE.Mesh; baseY: number }>();
   /** Latest hit timestamps — read in tick() to animate the bounce. */
   private lastPadHitMs = new Map<LaneValue, number>();
+
+  /** Currently-built pad specs, world-space (preset + seat offset
+   * applied). Drives both visuals and hit detection so the two stay
+   * trivially in sync. Empty before start() / after stop(). */
+  private currentPads: readonly PadSpec[] = [];
+  /** Scene objects belonging to the kit only (pads + stands). Tracked
+   * separately from `addedToScene` so we can rebuild the kit in place
+   * on a preset / seat-offset change without tearing down controllers
+   * or grips. */
+  private kitObjects: THREE.Object3D[] = [];
+  /** Snapshot of the config inputs the kit was built from, so the
+   * config-subscribe handler can decide whether a rebuild is needed
+   * (avoids thrash when an unrelated setting like volume changes). */
+  private builtKitForPresetId: string | null = null;
+  private builtKitForSeatOffset: number | null = null;
+  private unsubConfig: (() => void) | null = null;
 
   constructor(private readonly webgl: THREE.WebGLRenderer, private readonly scene: THREE.Scene) {
     // Grip-local stick samples from grip (t=0) to tip (t=1). The shaft is
@@ -182,12 +174,7 @@ export class XrControllers {
   }
 
   start(): void {
-    for (const spec of PAD_LAYOUT) {
-      for (const obj of this.buildPadObjects(spec)) {
-        this.scene.add(obj);
-        this.addedToScene.push(obj);
-      }
-    }
+    this.buildKit(getConfig());
 
     // Controllers + their `connected` listeners live in the CTOR (so
     // the initial first-frame event dispatch can't miss them — see the
@@ -199,6 +186,40 @@ export class XrControllers {
       grip.add(this.buildStick());
       this.scene.add(grip);
       this.addedToScene.push(grip);
+    }
+
+    // Live-rebuild the kit when the player changes preset or seat
+    // offset via the in-VR config panel. Cheap (10 pads) so a full
+    // rebuild on each change beats wiring partial-update paths and
+    // keeps visuals + hit-detection trivially in sync.
+    this.unsubConfig = subscribe((cfg) => {
+      if (
+        cfg.kitPresetId !== this.builtKitForPresetId ||
+        cfg.seatYOffset !== this.builtKitForSeatOffset
+      ) {
+        this.buildKit(cfg);
+      }
+    });
+  }
+
+  /** Build (or rebuild) every pad mesh + stand from the current config.
+   *  Tears down any previously-built kit objects first, leaving
+   *  controllers / grips untouched. */
+  private buildKit(cfg: Config): void {
+    for (const o of this.kitObjects) this.scene.remove(o);
+    this.kitObjects.length = 0;
+    this.padMeshByLane.clear();
+
+    const preset = getKitPreset(cfg.kitPresetId);
+    this.currentPads = applySeatYOffset(preset.pads, cfg.seatYOffset);
+    this.builtKitForPresetId = cfg.kitPresetId;
+    this.builtKitForSeatOffset = cfg.seatYOffset;
+
+    for (const spec of this.currentPads) {
+      for (const obj of this.buildPadObjects(spec)) {
+        this.scene.add(obj);
+        this.kitObjects.push(obj);
+      }
     }
   }
 
@@ -226,10 +247,12 @@ export class XrControllers {
     geom.rotateX(-Math.PI / 2); // face up
     if (spec.tiltDeg !== 0) {
       // Tilt the front edge down towards the player (rotate around X axis).
+      // padNormal() in hit-detect.ts assumes the same rotation order, so
+      // the tilt direction MUST stay positive-around-X here.
       geom.rotateX(THREE.MathUtils.degToRad(spec.tiltDeg));
     }
     const mesh = new THREE.Mesh(geom, mat);
-    mesh.position.copy(spec.position);
+    mesh.position.set(spec.position.x, spec.position.y, spec.position.z);
     this.padMeshByLane.set(spec.lane, { mesh, baseY: spec.position.y });
     return mesh;
   }
@@ -246,8 +269,7 @@ export class XrControllers {
     // Front face — vertical, facing +Z (toward the player at origin).
     const faceMat = this.padMaterial(spec.lane);
     const face = new THREE.Mesh(new THREE.PlaneGeometry(spec.size, spec.size), faceMat);
-    face.position.copy(spec.position);
-    face.position.z += 0.12; // front of shell
+    face.position.set(spec.position.x, spec.position.y, spec.position.z + 0.12);
     out.push(face);
 
     // Shell cylinder — the kick drum body.
@@ -259,7 +281,7 @@ export class XrControllers {
       side: THREE.DoubleSide,
     });
     const shell = new THREE.Mesh(shellGeom, shellMat);
-    shell.position.copy(spec.position);
+    shell.position.set(spec.position.x, spec.position.y, spec.position.z);
     out.push(shell);
 
     return out;
@@ -336,31 +358,24 @@ export class XrControllers {
       const prev = this.prevSamples[i]!;
       this.prevSamples[i] = cur;
 
-      // Whole-stick hit scan: each sample (grip → tip) tested for a
-      // downward crossing of each pad. Early-exits once one pad is hit
-      // so a single swing can only fire one lane per controller-frame.
-      // Cooldown is still per-lane so rapid double-strikes on the same
-      // pad across two controllers stay correct.
+      // Whole-stick hit scan: each sample (grip → tip) tested against
+      // every pad's tilted face via the pure detector. Early-exits once
+      // one pad fires so a single swing can only trigger one lane per
+      // controller-frame. Cooldown is per-lane so rapid double-strikes
+      // on the same pad across two controllers stay correct.
       let fired = false;
       for (let s = 0; s < STICK_SAMPLE_COUNT && !fired; s++) {
         const c = cur[s];
         const p = prev[s];
         if (!c || !p) continue;
-        const vy = (c.y - p.y) / dtSec;
-        if (vy > -HIT_VELOCITY_THRESHOLD_MPS) continue;
 
-        for (const pad of PAD_LAYOUT) {
-          const padY = pad.position.y;
-          const crossed = p.y > padY && c.y <= padY;
-          if (!crossed) continue;
-
-          const t = (p.y - padY) / (p.y - c.y);
-          const hx = p.x + (c.x - p.x) * t;
-          const hz = p.z + (c.z - p.z) * t;
-
-          const half = pad.shape === 'face' ? BD_HIT_HALF_M : pad.size / 2;
-          if (Math.abs(hx - pad.position.x) > half) continue;
-          if (Math.abs(hz - pad.position.z) > half) continue;
+        for (const pad of this.currentPads) {
+          // Threshold is left at detectPadHit's default
+          // (HIT_VELOCITY_THRESHOLD_MPS) — passing it explicitly was
+          // redundant and obscured that the velocity threshold lives
+          // in the detector module.
+          const result = detectPadHit({ prev: p, curr: c, dtSec }, pad);
+          if (!result) continue;
 
           const lastMs = this.lastHitMs.get(pad.lane) ?? -Infinity;
           if (nowMs - lastMs < HIT_COOLDOWN_MS) continue;
@@ -487,9 +502,16 @@ export class XrControllers {
   }
 
   stop(): void {
+    this.unsubConfig?.();
+    this.unsubConfig = null;
     for (const o of this.addedToScene) this.scene.remove(o);
     this.addedToScene.length = 0;
+    for (const o of this.kitObjects) this.scene.remove(o);
+    this.kitObjects.length = 0;
     this.padMeshByLane.clear();
+    this.currentPads = [];
+    this.builtKitForPresetId = null;
+    this.builtKitForSeatOffset = null;
     for (let i = 0; i < 2; i++) this.prevSamples[i] = new Array(STICK_SAMPLE_COUNT).fill(null);
     this.prevFrameMs = null;
     this.lastHitMs.clear();

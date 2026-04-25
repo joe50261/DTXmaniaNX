@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG, getConfig, loadConfig, updateConfig } from './config.js';
+import {
+  KIT_PRESETS,
+  SEAT_Y_OFFSET_SIT,
+  SEAT_Y_OFFSET_STAND,
+} from './kit-preset.js';
 import { AUTO_PLAY_LABELS, VR_CONFIG_LAYOUT, VrConfig } from './vr-config.js';
 
 /**
@@ -234,6 +239,108 @@ describe('VrConfig — canvas-2D panel wiring', () => {
     panel.show(() => {});
     panel.__testClickAt(cellFor().px, cellFor().py);
     expect(getConfig().autoPlay.BD).toBe(false);
+  });
+
+  // Drum-kit section: preset picker + seat-Y offset slider + Sit/Stand
+  // quick buttons. These wire through to the same updateConfig path as
+  // the auto-play grid above, so the integration test exercises the
+  // round trip rather than the geometry. Geometry stays inside the
+  // generic "every hit-rect inside the panel" sweep further down.
+
+  it('preset picker emits one button per registered kit preset', () => {
+    const { panel } = makeConfigPanel();
+    panel.show(() => {});
+    const hits = panel.__testHits();
+    // Preset buttons are >= 200 px wide (full preset.label fits) and
+    // share a y-coord. They sit before the auto-play grid (cells
+    // ~225 wide) so we walk forward looking for the first run of
+    // wide same-y rects whose count matches KIT_PRESETS.length and
+    // whose width is well above the auto-play cell width — preset
+    // bar takes the full content area minus the label gutter, so
+    // each button is much wider than ~225.
+    let foundRun = false;
+    for (let i = 0; i < hits.length; i++) {
+      const h = hits[i]!;
+      // Preset buttons are wider than auto-play cells — they share the
+      // full content area, so they'll be ≥ 240 px wide for the current
+      // KIT_PRESETS.length of 2.
+      if (h.w < 240) continue;
+      const run = hits
+        .slice(i, i + KIT_PRESETS.length)
+        .filter((c) => c.y === h.y && Math.abs(c.w - h.w) < 2);
+      if (run.length === KIT_PRESETS.length) {
+        // Sanity: next hit (if any) should be on a different y or a
+        // different width — we picked up the whole preset bar, not a
+        // sub-run of the auto-play grid (which is 4-wide, narrower).
+        foundRun = true;
+        break;
+      }
+    }
+    expect(foundRun).toBe(true);
+  });
+
+  it('clicking the second preset button switches kitPresetId in the config blob', () => {
+    const { panel } = makeConfigPanel();
+    panel.show(() => {});
+    const initial = getConfig().kitPresetId;
+    expect(initial).toBe(KIT_PRESETS[0]!.id);
+
+    // Find the preset bar by its hallmark: the first run of
+    // KIT_PRESETS.length same-y rects each ≥ 240 px wide. Click the
+    // SECOND button to switch from the default preset to the next
+    // one.
+    const hits = panel.__testHits();
+    let firstButtonIdx = -1;
+    for (let i = 0; i < hits.length; i++) {
+      const h = hits[i]!;
+      if (h.w < 240) continue;
+      const run = hits
+        .slice(i, i + KIT_PRESETS.length)
+        .filter((c) => c.y === h.y && Math.abs(c.w - h.w) < 2);
+      if (run.length === KIT_PRESETS.length) {
+        firstButtonIdx = i;
+        break;
+      }
+    }
+    expect(firstButtonIdx).toBeGreaterThanOrEqual(0);
+    const second = hits[firstButtonIdx + 1]!;
+    const fired = panel.__testClickAt(second.x + second.w / 2, second.y + second.h / 2);
+    expect(fired).toBe(true);
+    expect(getConfig().kitPresetId).toBe(KIT_PRESETS[1]!.id);
+    expect(getConfig().kitPresetId).not.toBe(initial);
+  });
+
+  it('Sit / Stand quick buttons set seatYOffset to the SIT / STAND constants', () => {
+    const { panel } = makeConfigPanel();
+    panel.show(() => {});
+
+    // Prime the slider away from both quick-set values so we can prove
+    // each button is doing the assignment rather than no-op'ing.
+    updateConfig({ seatYOffset: 0.25 });
+    panel.show(() => {}); // re-paint with new value
+
+    // Sit / Stand are the only 32-px-tall pills in the Drum kit
+    // section (auto-play cells are 36 px tall, step buttons are
+    // ~36 px). Identify them by row geometry: same y, h=32, and
+    // h-rect width either 84 (Sit) or 132 (Stand · NNN cm) — Stand
+    // is wider because its label carries the standing-stature hint.
+    const hits = panel.__testHits();
+    const pills = hits.filter(
+      (h) => h.h === 32 && (h.w === 84 || h.w === 132),
+    );
+    expect(pills.length).toBe(2);
+
+    // Sit is the narrower one (no embedded cm number).
+    const sit = pills.find((p) => p.w === 84)!;
+    const stand = pills.find((p) => p.w === 132)!;
+    expect(sit.y).toBe(stand.y); // same row
+
+    panel.__testClickAt(sit.x + sit.w / 2, sit.y + sit.h / 2);
+    expect(getConfig().seatYOffset).toBe(SEAT_Y_OFFSET_SIT);
+
+    panel.show(() => {}); // re-paint after the click
+    panel.__testClickAt(stand.x + stand.w / 2, stand.y + stand.h / 2);
+    expect(getConfig().seatYOffset).toBe(SEAT_Y_OFFSET_STAND);
   });
 
   it('the Back-to-menu button fires the onClose callback exactly once', () => {
