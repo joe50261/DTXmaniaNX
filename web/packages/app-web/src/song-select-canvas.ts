@@ -976,6 +976,7 @@ export class SongSelectCanvas {
       '5_header panel.png',
       '5_footer panel.png',
       '5_skill point panel.png',
+      '5_graph panel drums.png',
       '5_comment bar.png',
       '5_scrollbar.png',
     ];
@@ -1327,6 +1328,16 @@ export class SongSelectCanvas {
     // the song-select stage read as canonical.
     const skillPanel = this.getAsset('5_skill point panel.png');
     if (skillPanel) ctx.drawImage(skillPanel, 32, 180);
+
+    // Graph panel chrome — `5_graph panel drums.png` (110×321) at
+    // (15, 368), per C# `CActSelectStatusPanel` line 422-436. The
+    // panel frames the 9-lane note-count bars (LC/HH/LP/SD/HT/BD/
+    // LT/FT/CY) plus the "総ノーツ数" total. The bars + total need
+    // per-lane parsed-chip counts the chart layer doesn't surface
+    // yet; the chrome alone still shows the canonical "DATA" /
+    // START / END framing.
+    const graphPanel = this.getAsset('5_graph panel drums.png');
+    if (graphPanel) ctx.drawImage(graphPanel, 15, 368);
 
     // BPM block — canonical position (90, 275) for the
     // `5_BPM.png` label (Length / BPM stacked) and (135, 298) for
