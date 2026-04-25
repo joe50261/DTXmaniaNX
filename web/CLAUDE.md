@@ -97,6 +97,26 @@ assertions are satisfied by any implementation that compiles. If the
 mock is longer than the code it's testing, do it in Playwright
 instead.
 
+## Verifying VR features without a Quest
+
+Quest Browser ships no DevTools, so debugging in-headset is push-and-pray.
+For desktop / Cloudflare-preview verification we ship **IWER** (Meta's
+Immersive Web Emulation Runtime) wired through `src/dev/xr-emulator.ts`:
+
+- `pnpm dev` on a desktop without an HMD: IWER auto-installs, so
+  clicking "Enter VR" gives a synthetic Quest 3 + DevUI control panel.
+- Anywhere (incl. `pnpm preview` / Cloudflare): append `?xr-emu=1` to
+  force-install. `?xr-emu=0` opts back out.
+- Programmatic control: the `XRDevice` instance is exposed on
+  `window.__xrEmu` for console-driven pose / button manipulation.
+
+`installRuntime` is called with `polyfillLayers: true`, so the
+WebXR Layers code (XrLayerManager + Quad layers) gets exercised on
+desktop too — that's how we verify layer-promoted panels short of
+a real Quest. If you write a feature that depends on
+`renderer.xr.getBinding()` being non-null, the desktop emulator path
+is your default verification surface.
+
 ## Branch expectations
 
 Default development branch is whatever the session is assigned to. Do not

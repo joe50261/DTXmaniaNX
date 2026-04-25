@@ -1,4 +1,11 @@
 /// <reference types="vite/client" />
+import { maybeInstallXrEmulator } from './dev/xr-emulator.js';
+// IWER must take over `navigator.xr` before any other module reads it.
+// `init()` is wrapped in an async IIFE further down; this top-level
+// await runs at module-load time so the polyfill is in place before
+// the first `'xr' in navigator` check.
+await maybeInstallXrEmulator();
+
 import { installOnScreenLog } from './on-screen-log.js';
 installOnScreenLog();
 
