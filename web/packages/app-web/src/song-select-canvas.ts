@@ -1212,28 +1212,38 @@ export class SongSelectCanvas {
     }
 
     // Difficulty grid: backed by the canonical `5_difficulty panel.png`
-    // (561×321) which already has the DRUM/GUITAR/BASS column headers
-    // and the DTX/MASTER/EXTREME/ADVANCED/BASIC row labels baked in.
-    // We paint it ONCE underneath, then overlay levels + selection
-    // highlight + hit-rects on the per-cell sub-rects. Cell geometry
-    // mirrors the design.md spec: row 4 (DTX) at the top y=389, row 0
-    // (BASIC) at the bottom y=629, 60 px stride. Per-row Guitar / Bass
-    // + skill % stay [WIP] until the chart layer exposes them.
+    // (561×321) which has the DRUM/GUITAR/BASS column headers and the
+    // DTX/MASTER/EXTREME/ADVANCED/BASIC row labels baked in. We only
+    // display the DRUM (leftmost) column for now: GT/BS data isn't
+    // wired and the full 561-wide texture overlaps the wheel bars
+    // (slot 5 anchor x=464), whose rounded-corner alpha lets the GT/BS
+    // labels bleed through in a visually confusing way. Cropping the
+    // source rect to the first column (x 0..PART_W) keeps the panel
+    // entirely on the left and avoids the overlap. When GT/BS data
+    // lands later we can extend back to the full panel + reposition
+    // / reshape the wheel as needed.
     const panel = this.getAsset('5_difficulty panel.png');
-    const PANEL_W = panel?.width ?? 561;
+    const FULL_PANEL_W = panel?.width ?? 561;
+    const FULL_PANEL_H = panel?.height ?? 321;
     const HEADER_H = 21; // header strip ABOVE the cell grid in the panel texture
     const ROW_H = 60;
-    const PART_W = Math.floor(PANEL_W / 3);
+    const PART_W = Math.floor(FULL_PANEL_W / 3);
     const gridX = STATUS_X + 5;
     // Y positions row 4's cell at y=389 (per design.md). The panel
     // texture's header sits HEADER_H px above that.
     const gridY = STATUS_Y + 41 - HEADER_H;
     if (panel) {
-      ctx.drawImage(panel, gridX, gridY);
+      // Source: leftmost column of the panel texture (DRUM).
+      // Dest: same width on the canvas, no scaling.
+      ctx.drawImage(
+        panel,
+        0, 0, PART_W, FULL_PANEL_H,
+        gridX, gridY, PART_W, FULL_PANEL_H,
+      );
     } else {
       // Fallback: rough dark backing so cells are still visible.
       ctx.fillStyle = 'rgba(15, 23, 42, 0.55)';
-      ctx.fillRect(gridX, gridY, PANEL_W, HEADER_H + ROW_H * 5);
+      ctx.fillRect(gridX, gridY, PART_W, HEADER_H + ROW_H * 5);
     }
 
     const slotsUsed = new Map<number, ChartEntry>();
