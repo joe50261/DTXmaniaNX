@@ -30,8 +30,12 @@ export default defineConfig({
   plugins: [
     viteStaticCopy({
       targets: [
-        // stripBase: true flattens away the `../../../Runtime/System/Graphics`
-        // prefix the plugin would otherwise mirror under dest.
+        // `stripBase: true` strips every leading directory segment
+        // (equivalent of a flat copy) so files land directly under
+        // dist/skin/. Without it the plugin mirrors the source tree
+        // — `dist/skin/Runtime/System/Graphics/5_*.png`. Per the
+        // plugin's `RenameObject` type (vite-plugin-static-copy
+        // v4.1.0): `stripBase: number | true`.
         {
           src: `${RUNTIME_GRAPHICS}/5_*.{png,jpg}`,
           dest: 'skin',
@@ -40,7 +44,7 @@ export default defineConfig({
         ...STAGE7_ALLOWLIST.map((name) => ({
           src: `${RUNTIME_GRAPHICS}/${name}`,
           dest: 'skin',
-          rename: { stripBase: true },
+          rename: { stripBase: true as const },
         })),
       ],
     }),

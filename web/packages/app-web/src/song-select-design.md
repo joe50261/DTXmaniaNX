@@ -81,8 +81,11 @@ file first.
     - **Rank icon** (35 × 50), top-left at cell+(7, 5).
     - **Skill % gauge + numeric**, mid-right. Gauge from
       `5_skill number on gauge etc.png`.
-- **BPM block:** label texture `5_BPM.png` at (32, 258); numeric BPM
-  drawn at (42, 278) using `5_bpm font.png`.
+- **BPM block:** label texture `5_BPM.png` (Length / BPM stacked) at
+  (90, 275); numeric BPM drawn at (135, 298) using `5_bpm font.png`,
+  format `{0,3:###}` (right-aligned 3-digit, leading-space pad for
+  sub-100 values). Positions from C# `CActSelectStatusPanel` lines
+  290-401, gated by the panel-body texture (which we always load).
 - **Skill point summary:** top-right of the panel at (32, 180); large
   font for current drum/guitar/bass SP.
 - **Bottom graph panels:** `5_graph panel drums.png` / `5_graph panel

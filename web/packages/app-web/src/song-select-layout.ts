@@ -32,6 +32,44 @@ export const PREIMAGE_SIZE = 292;
 export const STATUS_X = 130;
 export const STATUS_Y = 350;
 
+// Difficulty grid (DR/GT/BS × DTX/MASTER/EXTREME/ADVANCED/BASIC).
+// `5_difficulty panel.png` is 561×321 with the column / row labels
+// baked in. Cells are 187×60 each, matching C# `nPanelW=187, nPanelH=60`
+// from `CActSelectStatusPanel` lines 505-506. Y-baseline of difficulty
+// `i` (0..4) = `STATUS_Y + 41 + (4 − i) × 60 − 2`; row 4 (DTX/Master)
+// sits at the top, row 0 (Basic) at the bottom. The HEADER_H strip
+// above row 4 is the column-header band inside the panel texture.
+export const DIFF_GRID_X = STATUS_X + 5;
+export const DIFF_GRID_Y_OFFSET = 41; // row 4 cell top relative to STATUS_Y
+export const DIFF_HEADER_H = 21;
+export const DIFF_ROW_H = 60;
+export const DIFF_PART_W = 187; // per-instrument column width
+export const DIFF_GRID_TOP = STATUS_Y + DIFF_GRID_Y_OFFSET - DIFF_HEADER_H;
+/** Y-baseline of difficulty row `i` (0 = Basic at bottom, 4 = DTX at top). */
+export function diffRowY(i: number): number {
+  return STATUS_Y + DIFF_GRID_Y_OFFSET + (4 - i) * DIFF_ROW_H - 2;
+}
+
+// Skill-point panel chrome (`5_skill point panel.png`, 187×62).
+// Position from C# `CActSelectStatusPanel` line 408.
+export const SKILL_POINT_PANEL_X = 32;
+export const SKILL_POINT_PANEL_Y = 180;
+
+// Drum graph panel chrome (`5_graph panel drums.png`, 110×321).
+// Position from C# `CActSelectStatusPanel` lines 422-436 — drums-only mode.
+export const GRAPH_PANEL_X = 15;
+export const GRAPH_PANEL_Y = 368;
+
+// BPM block. Label texture (`5_BPM.png`) at the first pair, numeric
+// digits (`5_bpm font.png`) at the second. Positions from C#
+// `CActSelectStatusPanel` lines 290-401: `nBPM位置X/Y` are (90, 275)
+// when the status panel body texture is loaded; the digits draw at
+// `(nBPM位置X + 45, nBPM位置Y + 23)` = (135, 298).
+export const BPM_LABEL_X = 90;
+export const BPM_LABEL_Y = 275;
+export const BPM_DIGITS_X = BPM_LABEL_X + 45;
+export const BPM_DIGITS_Y = BPM_LABEL_Y + 23;
+
 // 13-bar wheel anchors. Each entry is the (x, y) of the LEFT edge of
 // the bar texture on the canvas. Index 5 is the focus row (its bar is
 // the active one and the title font is upgraded). Curving x values

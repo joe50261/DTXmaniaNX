@@ -21,12 +21,21 @@ import {
 import {
   ARTIST_RIGHT_EDGE,
   ARTIST_Y,
+  BPM_DIGITS_X,
+  BPM_DIGITS_Y,
+  BPM_LABEL_X,
+  BPM_LABEL_Y,
   COMMENT_BAR_X,
   COMMENT_BAR_Y,
   COMMENT_CLIP_H_PX,
   COMMENT_CLIP_W_PX,
   COMMENT_TEXT_OFFSET_X,
   COMMENT_TEXT_OFFSET_Y,
+  DIFF_GRID_TOP,
+  DIFF_GRID_X,
+  DIFF_PART_W,
+  DIFF_ROW_H,
+  diffRowY,
   FOOTER_CALIB_X,
   FOOTER_CONFIG_X,
   FOOTER_EXIT_H,
@@ -38,6 +47,8 @@ import {
   FOOTER_UTIL_BTN_H,
   FOOTER_UTIL_BTN_W,
   FOOTER_UTIL_BTN_Y,
+  GRAPH_PANEL_X,
+  GRAPH_PANEL_Y,
   PANEL_H_PX,
   PANEL_POS_Y,
   PANEL_POS_Z,
@@ -51,6 +62,8 @@ import {
   SCROLLBAR_W,
   SCROLLBAR_X,
   SCROLLBAR_Y,
+  SKILL_POINT_PANEL_X,
+  SKILL_POINT_PANEL_Y,
   STATUS_X,
   STATUS_Y,
   WHEEL_BAR_ANCHORS,
@@ -1054,7 +1067,7 @@ export class SongSelectCanvas {
     // panel.png` is static at the bottom. Painted late so they sit
     // on top of the wheel/comment/scrollbar/etc.
     this.paintStageChrome();
-    if (!this.desktopMode) this.paintFooter();
+    if (!this.desktopMode) this.paintFooter(hoveredAction);
     this.paintWipBanner();
 
     this.texture.needsUpdate = true;
@@ -1078,19 +1091,21 @@ export class SongSelectCanvas {
 
   private paintHeaderAndBreadcrumb(): void {
     const ctx = this.ctx;
-    ctx.fillStyle = '#e2e8f0';
-    ctx.font = 'bold 26px ui-monospace, monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText('Song Library', 40, 32);
-
+    // The "Song Library" header text we used to paint at y=32 was
+    // covered up the moment `5_header panel.png` (105 px tall) finished
+    // sliding in — the header chrome already provides scene identity
+    // (1st Stage / timer in its top-right card), so we drop the text.
+    // The breadcrumb still earns its keep (current folder path), so it
+    // moves below the header chrome to y=120.
     ctx.font = '14px ui-monospace, monospace';
     ctx.fillStyle = '#cbd5e1';
+    ctx.textAlign = 'left';
     ctx.fillText(
       buildBreadcrumbPath(this.currentBox)
         .map((s) => s.node.name)
         .join('  ›  '),
       40,
-      54,
+      120,
     );
   }
 
@@ -1261,31 +1276,35 @@ export class SongSelectCanvas {
     // show empty when no chart). The texture itself is partly
     // translucent, which softens the overlap with the wheel bars
     // (their anchors place row 5 at x=464, inside the 561-wide panel).
+    // Geometry comes from `song-select-layout.ts`'s diff-grid block —
+    // DIFF_GRID_X / DIFF_GRID_TOP / DIFF_PART_W / DIFF_ROW_H +
+    // diffRowY(i). Keeping the magic numbers in the layout module
+    // (rather than inlined here) keeps the layout-only unit tests
+    // honest and lets the canvas stay an unconditional consumer.
     const panel = this.getAsset('5_difficulty panel.png');
-    const FULL_PANEL_W = panel?.width ?? 561;
+    const FULL_PANEL_W = panel?.width ?? DIFF_PART_W * 3;
     const FULL_PANEL_H = panel?.height ?? 321;
-    const HEADER_H = 21; // header strip ABOVE the cell grid in the panel texture
-    const ROW_H = 60;
-    const PART_W = Math.floor(FULL_PANEL_W / 3);
-    const gridX = STATUS_X + 5;
-    // Y positions row 4's cell at y=389 (per design.md). The panel
-    // texture's header sits HEADER_H px above that.
-    const gridY = STATUS_Y + 41 - HEADER_H;
     if (panel) {
-      ctx.drawImage(panel, gridX, gridY);
+      ctx.drawImage(panel, DIFF_GRID_X, DIFF_GRID_TOP);
     } else {
       // Fallback: rough dark backing so cells are still visible.
       ctx.fillStyle = 'rgba(15, 23, 42, 0.55)';
-      ctx.fillRect(gridX, gridY, FULL_PANEL_W, HEADER_H + ROW_H * 5);
+      ctx.fillRect(DIFF_GRID_X, DIFF_GRID_TOP, FULL_PANEL_W, FULL_PANEL_H);
     }
 
     const slotsUsed = new Map<number, ChartEntry>();
     for (const c of song.charts) slotsUsed.set(c.slot, c);
     const selected = this.chartForPreferred(song);
+    // Hoist asset lookups out of the per-row loop — paintStatusPanel
+    // runs every frame the panel changes.
     const frame = this.getAsset('5_difficulty frame.png');
+    const levelSprite = this.getAsset('5_level number.png');
+    const rankSprite = this.getAsset('5_skill icon.png');
+    const skillNumSprite = this.getAsset('5_skill number.png');
+    const skillMax = this.getAsset('5_skill max.png');
     for (let i = 0; i < 5; i++) {
-      const rowY = STATUS_Y + 41 + (4 - i) * 60 - 2;
-      const cellX = gridX + 0 * PART_W; // DR is the first column
+      const rowY = diffRowY(i);
+      const cellX = DIFF_GRID_X; // DR is the first column
       const chart = slotsUsed.get(i);
       const isSelected = chart !== undefined && chart.slot === selected.slot;
       const isHovered = i === hoveredSlot && chart !== undefined;
@@ -1298,7 +1317,7 @@ export class SongSelectCanvas {
       if (isHovered) {
         if (frame) ctx.drawImage(frame, cellX, rowY);
         ctx.fillStyle = 'rgba(251, 191, 36, 0.28)';
-        ctx.fillRect(cellX, rowY, PART_W, ROW_H);
+        ctx.fillRect(cellX, rowY, DIFF_PART_W, DIFF_ROW_H);
       } else if (isSelected) {
         if (frame) ctx.drawImage(frame, cellX, rowY);
       }
@@ -1309,11 +1328,10 @@ export class SongSelectCanvas {
       // digits 0-9 at (i*20, 0) sized 20×28, period at (200, 0)
       // sized 10×28. Position from the C# reference: nBoxX +
       // nPanelW - 77, nBoxY + nPanelH - 35.
-      const levelSprite = this.getAsset('5_level number.png');
       if (chart?.drumLevel !== undefined && chart.drumLevel > 0) {
         const text = (chart.drumLevel / 100).toFixed(2);
-        const lvX = cellX + PART_W - 77;
-        const lvY = rowY + ROW_H - 35;
+        const lvX = cellX + DIFF_PART_W - 77;
+        const lvY = rowY + DIFF_ROW_H - 35;
         if (levelSprite) {
           drawLevelGlyphs(ctx, levelSprite, text, lvX, lvY);
         } else {
@@ -1321,7 +1339,7 @@ export class SongSelectCanvas {
           ctx.font = 'bold 18px ui-monospace, monospace';
           ctx.fillStyle = '#fde047';
           ctx.textAlign = 'right';
-          ctx.fillText(text, cellX + PART_W - 6, rowY + ROW_H - 8);
+          ctx.fillText(text, cellX + DIFF_PART_W - 6, rowY + DIFF_ROW_H - 8);
         }
       }
       // Per-record overlays (rank icon + skill %) — only drawn if the
@@ -1332,9 +1350,6 @@ export class SongSelectCanvas {
       // `CActSelectStatusPanel` lines 594-624.
       if (chart?.record) {
         const rec = chart.record;
-        const rankSprite = this.getAsset('5_skill icon.png');
-        const skillNumSprite = this.getAsset('5_skill number.png');
-        const skillMax = this.getAsset('5_skill max.png');
         if (rankSprite) {
           // Rank icon at cell+(7, 5), 35×height per slot.
           ctx.drawImage(
@@ -1358,12 +1373,13 @@ export class SongSelectCanvas {
         // Achievement % at cell+(30, 33), or `5_skill max.png` badge
         // when excellent. Format `{0,6:##0.00}%` → right-aligned 6
         // chars + literal '%'.
-        const achPos = { x: cellX + PART_W - 157, y: rowY + ROW_H - 27 };
+        const achX = cellX + DIFF_PART_W - 157;
+        const achY = rowY + DIFF_ROW_H - 27;
         if (rec.excellent && skillMax) {
-          ctx.drawImage(skillMax, cellX + PART_W - 142, rowY + ROW_H - 27);
+          ctx.drawImage(skillMax, cellX + DIFF_PART_W - 142, achY);
         } else if (skillNumSprite) {
           const achText = rec.bestAchievement.toFixed(2).padStart(6, ' ') + '%';
-          drawAchievementGlyphs(ctx, skillNumSprite, achText, achPos.x, achPos.y);
+          drawAchievementGlyphs(ctx, skillNumSprite, achText, achX, achY);
         }
       }
       // DR cells with a chart are direct chart launchers (laser ray +
@@ -1373,8 +1389,8 @@ export class SongSelectCanvas {
         this.hits.push({
           x: cellX,
           y: rowY,
-          w: PART_W,
-          h: ROW_H,
+          w: DIFF_PART_W,
+          h: DIFF_ROW_H,
           action: { kind: 'chart', song, chart },
         });
       }
@@ -1388,8 +1404,8 @@ export class SongSelectCanvas {
     // lands. The chrome itself still helps the stage read as
     // canonical.
     const skillPanel = this.getAsset('5_skill point panel.png');
-    if (skillPanel) ctx.drawImage(skillPanel, 32, 180);
-    drawWipLabel(ctx, '[WIP] SP total', 50, 230);
+    if (skillPanel) ctx.drawImage(skillPanel, SKILL_POINT_PANEL_X, SKILL_POINT_PANEL_Y);
+    drawWipLabel(ctx, '[WIP] SP total', SKILL_POINT_PANEL_X + 18, SKILL_POINT_PANEL_Y + 50);
 
     // Graph panel chrome — `5_graph panel drums.png` (110×321) at
     // (15, 368), per C# `CActSelectStatusPanel` line 422-436. The
@@ -1399,7 +1415,7 @@ export class SongSelectCanvas {
     // yet; the chrome alone still shows the canonical "DATA" /
     // START / END framing.
     const graphPanel = this.getAsset('5_graph panel drums.png');
-    if (graphPanel) ctx.drawImage(graphPanel, 15, 368);
+    if (graphPanel) ctx.drawImage(graphPanel, GRAPH_PANEL_X, GRAPH_PANEL_Y);
 
     // BPM block — canonical position (90, 275) for the
     // `5_BPM.png` label (Length / BPM stacked) and (135, 298) for
@@ -1410,11 +1426,11 @@ export class SongSelectCanvas {
     // at (132, 268) but needs song.duration which the chart layer
     // hasn't surfaced yet.
     const bpmLabel = this.getAsset('5_BPM.png');
-    if (bpmLabel) ctx.drawImage(bpmLabel, 90, 275);
+    if (bpmLabel) ctx.drawImage(bpmLabel, BPM_LABEL_X, BPM_LABEL_Y);
     const bpmFont = this.getAsset('5_bpm font.png');
     if (song.bpm && bpmFont) {
       const bpmText = Math.round(song.bpm).toString().padStart(3, ' ');
-      drawBpmGlyphs(ctx, bpmFont, bpmText, 135, 298);
+      drawBpmGlyphs(ctx, bpmFont, bpmText, BPM_DIGITS_X, BPM_DIGITS_Y);
     }
 
     drawWipLabel(ctx, '[WIP] gauge bar / perf history', STATUS_X + 8, STATUS_Y + 312);
@@ -1486,7 +1502,7 @@ export class SongSelectCanvas {
     }
   }
 
-  private paintFooter(): void {
+  private paintFooter(hoveredAction: ButtonHit['action'] | null): void {
     const ctx = this.ctx;
     ctx.fillStyle = '#cbd5e1';
     ctx.font = '13px ui-monospace, monospace';
@@ -1497,9 +1513,12 @@ export class SongSelectCanvas {
       FOOTER_HINT_BASELINE_Y,
     );
 
-    // Exit VR
-    const hovered =
-      this.hoveredIdx >= 0 && this.hits[this.hoveredIdx]?.action.kind === 'exit';
+    // Exit VR. Hover state is read from the snapshotted action of the
+    // *previous* paint's hit list, NOT this.hits[this.hoveredIdx]: the
+    // hit list is rebuilt every paint and `hoveredIdx` indexes the
+    // OLD list, so re-reading would get the wrong button after any
+    // layout shift.
+    const hovered = hoveredAction?.kind === 'exit';
     ctx.fillStyle = hovered ? '#dc2626' : '#374151';
     ctx.fillRect(FOOTER_EXIT_X, FOOTER_EXIT_Y, FOOTER_EXIT_W, FOOTER_EXIT_H);
     ctx.fillStyle = '#fff';
@@ -1519,26 +1538,26 @@ export class SongSelectCanvas {
     });
 
     if (this.deps?.onConfig) {
-      this.paintUtilityButton('Settings', FOOTER_CONFIG_X, 'config');
+      this.paintUtilityButton('Settings', FOOTER_CONFIG_X, 'config', hoveredAction);
     }
     if (this.deps?.onCalibrate) {
       const x = this.deps?.onConfig ? FOOTER_CALIB_X : FOOTER_CONFIG_X;
-      this.paintUtilityButton('Calibrate Latency', x, 'calibrate');
+      this.paintUtilityButton('Calibrate Latency', x, 'calibrate', hoveredAction);
     }
     // Sort button — always painted in VR mode so the player can re-
     // order the wheel without removing the headset. The label tracks
     // the current mode so the button doubles as a state readout.
-    this.paintUtilityButton(`Sort: ${this.sortMode}`, FOOTER_SORT_X, 'sort');
+    this.paintUtilityButton(`Sort: ${this.sortMode}`, FOOTER_SORT_X, 'sort', hoveredAction);
   }
 
   private paintUtilityButton(
     label: string,
     x: number,
     actionKind: 'config' | 'calibrate' | 'sort',
+    hoveredAction: ButtonHit['action'] | null,
   ): void {
     const ctx = this.ctx;
-    const hovered =
-      this.hoveredIdx >= 0 && this.hits[this.hoveredIdx]?.action.kind === actionKind;
+    const hovered = hoveredAction?.kind === actionKind;
     ctx.fillStyle = hovered ? '#2563eb' : '#1e293b';
     ctx.fillRect(x, FOOTER_UTIL_BTN_Y, FOOTER_UTIL_BTN_W, FOOTER_UTIL_BTN_H);
     ctx.strokeStyle = '#475569';
@@ -1568,13 +1587,17 @@ export class SongSelectCanvas {
 
   private paintWipBanner(): void {
     const ctx = this.ctx;
+    // Banner sits at y=120 (just below the 105-px-tall stage header
+    // chrome). The earlier y=24 placement got covered up by the
+    // header chrome's "1st Stage / timer" card the moment the slide-
+    // in completed.
     ctx.font = '12px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(251, 191, 36, 0.85)';
     ctx.textAlign = 'right';
     ctx.fillText(
       'Song Select · WIP — aligning to DTXMania design',
       PANEL_W_PX - 20,
-      24,
+      120,
     );
   }
 

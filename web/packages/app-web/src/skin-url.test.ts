@@ -16,9 +16,16 @@ describe('buildSkinUrl', () => {
     expect(buildSkinUrl('/DTXmaniaNX', '5_BPM.png')).toBe('/DTXmaniaNX/skin/5_BPM.png');
   });
 
-  it('preserves spaces in the filename (DTXMania assets keep them)', () => {
+  it('URL-encodes spaces in the filename (DTXMania assets keep them; raw spaces break the URL constructor + service-worker Request matching)', () => {
     expect(buildSkinUrl('/', 'ScreenPlay judge strings 1.png')).toBe(
-      '/skin/ScreenPlay judge strings 1.png'
+      '/skin/ScreenPlay%20judge%20strings%201.png'
     );
+  });
+
+  it('encodes other reserved characters in filenames', () => {
+    // Defensive — DTXmania doesn't ship filenames with `?` / `#` today,
+    // but the encoder should cover them so a future skin doesn't break
+    // silently.
+    expect(buildSkinUrl('/', 'odd?name#x.png')).toBe('/skin/odd%3Fname%23x.png');
   });
 });
