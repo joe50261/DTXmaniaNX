@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { BoxNode, ChartEntry, SongEntry } from '@dtxmania/dtx-core';
+import type { BoxNode, ChartEntry, Rank, SongEntry } from '@dtxmania/dtx-core';
 import {
   findButtonAtPoint,
   stepStickAxis,
@@ -114,6 +114,20 @@ const ASSET_BACKGROUND = '5_background.jpg';
 /** Duration of the header panel's stage-entry slide-in, in ms.
  *  Mirrors C# `CStageSongSelection`'s entry counter (100 steps × 3 ms). */
 const HEADER_SLIDE_DURATION_MS = 300;
+
+/** Sprite-sheet column for each rank in `5_skill icon.png`. Mirrors
+ *  C# `CScoreIni.ERANK` (SS=0..E=6). Slots 7/8/9 are reserved for
+ *  full-combo, excellent, and another badge — not part of the rank
+ *  enum, so they're addressed directly in the paint code. */
+const RANK_INDEX: Record<Rank, number> = {
+  SS: 0,
+  S: 1,
+  A: 2,
+  B: 3,
+  C: 4,
+  D: 5,
+  E: 6,
+};
 
 interface ButtonHit {
   /** Canvas rectangle. */
@@ -977,6 +991,9 @@ export class SongSelectCanvas {
       '5_footer panel.png',
       '5_skill point panel.png',
       '5_graph panel drums.png',
+      '5_skill icon.png',
+      '5_skill number.png',
+      '5_skill max.png',
       '5_comment bar.png',
       '5_scrollbar.png',
     ];
@@ -1307,6 +1324,48 @@ export class SongSelectCanvas {
           ctx.fillText(text, cellX + PART_W - 6, rowY + ROW_H - 8);
         }
       }
+      // Per-record overlays (rank icon + skill %) — only drawn if the
+      // player has played this chart at least once. ChartRecord type
+      // already carries `bestRank`, `fullCombo`, `excellent`, and
+      // `bestAchievement`; the canvas just maps them onto the sprite
+      // sheets the C# reference uses. Positions from
+      // `CActSelectStatusPanel` lines 594-624.
+      if (chart?.record) {
+        const rec = chart.record;
+        const rankSprite = this.getAsset('5_skill icon.png');
+        const skillNumSprite = this.getAsset('5_skill number.png');
+        const skillMax = this.getAsset('5_skill max.png');
+        if (rankSprite) {
+          // Rank icon at cell+(7, 5), 35×height per slot.
+          ctx.drawImage(
+            rankSprite,
+            RANK_INDEX[rec.bestRank] * 35, 0, 35, rankSprite.height,
+            cellX + 7, rowY + 5, 35, rankSprite.height,
+          );
+          // FC / EX medal at cell+(42, 5) — index 8 for excellent
+          // (perfect), 7 for full-combo. C# uses skill==100 for the
+          // excellent check; our `excellent` sticky flag carries
+          // the same meaning.
+          const medalIdx = rec.excellent ? 8 : rec.fullCombo ? 7 : -1;
+          if (medalIdx >= 0) {
+            ctx.drawImage(
+              rankSprite,
+              medalIdx * 35, 0, 35, rankSprite.height,
+              cellX + 42, rowY + 5, 35, rankSprite.height,
+            );
+          }
+        }
+        // Achievement % at cell+(30, 33), or `5_skill max.png` badge
+        // when excellent. Format `{0,6:##0.00}%` → right-aligned 6
+        // chars + literal '%'.
+        const achPos = { x: cellX + PART_W - 157, y: rowY + ROW_H - 27 };
+        if (rec.excellent && skillMax) {
+          ctx.drawImage(skillMax, cellX + PART_W - 142, rowY + ROW_H - 27);
+        } else if (skillNumSprite) {
+          const achText = rec.bestAchievement.toFixed(2).padStart(6, ' ') + '%';
+          drawAchievementGlyphs(ctx, skillNumSprite, achText, achPos.x, achPos.y);
+        }
+      }
       // DR cells with a chart are direct chart launchers (laser ray +
       // desktop pointer alike) — clicking one starts the chart at
       // THAT slot in one step.
@@ -1324,10 +1383,13 @@ export class SongSelectCanvas {
     // Skill-point panel chrome — `5_skill point panel.png` (187×62)
     // at (32, 180), per C# `CActSelectStatusPanel` line 408. The
     // panel framing the per-instrument SP totals (DR/GT/BS), which
-    // we don't have data for yet — the chrome itself still helps
-    // the song-select stage read as canonical.
+    // need a cross-chart aggregator — not just `chart.record` —
+    // so the numeric stays [WIP] until the user/skill abstraction
+    // lands. The chrome itself still helps the stage read as
+    // canonical.
     const skillPanel = this.getAsset('5_skill point panel.png');
     if (skillPanel) ctx.drawImage(skillPanel, 32, 180);
+    drawWipLabel(ctx, '[WIP] SP total', 50, 230);
 
     // Graph panel chrome — `5_graph panel drums.png` (110×321) at
     // (15, 368), per C# `CActSelectStatusPanel` line 422-436. The
@@ -1355,7 +1417,7 @@ export class SongSelectCanvas {
       drawBpmGlyphs(ctx, bpmFont, bpmText, 135, 298);
     }
 
-    drawWipLabel(ctx, '[WIP] skill % / gauge / perf history', STATUS_X + 8, STATUS_Y + 312);
+    drawWipLabel(ctx, '[WIP] gauge bar / perf history', STATUS_X + 8, STATUS_Y + 312);
   }
 
   private paintCommentBar(): void {
@@ -1627,6 +1689,40 @@ function drawBpmGlyphs(
     } else {
       // Spaces / unknowns advance 12 px (C# default char width) so
       // right-aligned `{0,3:###}` formats land BPM in a fixed slot.
+      x += 12;
+    }
+  }
+}
+
+/** Paint the achievement / skill % numeric using the canonical
+ *  `5_skill number.png` glyph sprite. Per C# DTXMania's
+ *  `st達成率数字` table:
+ *    digit i → source rect (i*12, 0, 12, 20)
+ *    '.'    → source rect (120, 0, 6, 20)
+ *    '%'    → source rect (126, 0, 12, 20)
+ *  Spaces (left-padding for the `{0,6:##0.00}%` format) advance
+ *  12 px without drawing — matches C#'s `tDrawAchievementRate`
+ *  which fixes glyph stride to 12 (or 6 for the period). */
+function drawAchievementGlyphs(
+  ctx: CanvasRenderingContext2D,
+  sprite: HTMLImageElement,
+  text: string,
+  x: number,
+  y: number,
+): void {
+  const GLYPH_H = 20;
+  for (const ch of text) {
+    if (ch >= '0' && ch <= '9') {
+      const idx = ch.charCodeAt(0) - '0'.charCodeAt(0);
+      ctx.drawImage(sprite, idx * 12, 0, 12, GLYPH_H, x, y, 12, GLYPH_H);
+      x += 12;
+    } else if (ch === '.') {
+      ctx.drawImage(sprite, 120, 0, 6, GLYPH_H, x, y, 6, GLYPH_H);
+      x += 6;
+    } else if (ch === '%') {
+      ctx.drawImage(sprite, 126, 0, 12, GLYPH_H, x, y, 12, GLYPH_H);
+      x += 12;
+    } else {
       x += 12;
     }
   }
