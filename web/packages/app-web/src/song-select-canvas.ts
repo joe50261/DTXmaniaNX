@@ -111,6 +111,9 @@ const PANEL_POS = new THREE.Vector3(0, PANEL_POS_Y, PANEL_POS_Z);
 // instead of a 404. All loaded through skinUrl() — see vite.config.ts
 // for the build-time copy from Runtime/System/Graphics/.
 const ASSET_BACKGROUND = '5_background.jpg';
+/** Duration of the header panel's stage-entry slide-in, in ms.
+ *  Mirrors C# `CStageSongSelection`'s entry counter (100 steps × 3 ms). */
+const HEADER_SLIDE_DURATION_MS = 300;
 
 interface ButtonHit {
   /** Canvas rectangle. */
@@ -249,6 +252,11 @@ export class SongSelectCanvas {
    * tick() can decide whether to advance the scroll without re-running
    * measureText every frame. Cleared when the focused song changes. */
   private commentTextWidthPx = 0;
+  /** Stage entry slide-in for `5_header panel.png`. Counts up in ms;
+   *  paint() reads it through a sin curve so the header slides
+   *  down from y=−h to y=0 over HEADER_SLIDE_DURATION_MS. Reset on
+   *  every show() so re-opening the menu replays the entry. */
+  private headerSlideMs = 0;
 
   constructor(
     private readonly webgl: THREE.WebGLRenderer,
@@ -355,6 +363,7 @@ export class SongSelectCanvas {
     this.preimageFade = restartPreimageFade();
     this.commentScroll = restartCommentScroll();
     this.commentTextWidthPx = 0;
+    this.headerSlideMs = 0;
 
     this.emitFocusedSong();
     void this.loadCoverForFocused();
@@ -753,12 +762,16 @@ export class SongSelectCanvas {
         COMMENT_CLIP_W_PX,
       );
     }
+    if (this.headerSlideMs < HEADER_SLIDE_DURATION_MS) {
+      this.headerSlideMs = Math.min(HEADER_SLIDE_DURATION_MS, this.headerSlideMs + dtMs);
+    }
   }
 
   private isAnimating(): boolean {
     if (this.wheelScroll.dir !== 0) return true;
     if (this.preimageFade.elapsedMs < PREIMAGE_FADE_MS) return true;
     if (this.commentTextWidthPx > COMMENT_CLIP_W_PX) return true;
+    if (this.headerSlideMs < HEADER_SLIDE_DURATION_MS) return true;
     return false;
   }
 
@@ -960,6 +973,8 @@ export class SongSelectCanvas {
       '5_level number.png',
       '5_BPM.png',
       '5_bpm font.png',
+      '5_header panel.png',
+      '5_footer panel.png',
       '5_comment bar.png',
       '5_scrollbar.png',
     ];
@@ -1015,6 +1030,11 @@ export class SongSelectCanvas {
     this.paintWheel(hoveredEntryIdx);
     this.paintScrollbar();
     this.paintHeaderAndBreadcrumb();
+    // Stage chrome: `5_header panel.png` slides down from y=−h to
+    // y=0 over HEADER_SLIDE_DURATION_MS (sin curve), `5_footer
+    // panel.png` is static at the bottom. Painted late so they sit
+    // on top of the wheel/comment/scrollbar/etc.
+    this.paintStageChrome();
     if (!this.desktopMode) this.paintFooter();
     this.paintWipBanner();
 
@@ -1474,6 +1494,25 @@ export class SongSelectCanvas {
       PANEL_W_PX - 20,
       24,
     );
+  }
+
+  private paintStageChrome(): void {
+    const ctx = this.ctx;
+    const header = this.getAsset('5_header panel.png');
+    if (header) {
+      // Slide-in: y = h * sin(π/2 × progress) − h. progress 0 → −h
+      // (offscreen above), progress 1 → 0 (final at top edge).
+      // Mirrors C# `CStageSongSelection.tDrawStage` math exactly.
+      const progress = Math.min(1, this.headerSlideMs / HEADER_SLIDE_DURATION_MS);
+      const h = header.height;
+      const y = Math.round(h * Math.sin((Math.PI / 2) * progress) - h);
+      ctx.drawImage(header, 0, y);
+    }
+    const footer = this.getAsset('5_footer panel.png');
+    if (footer) {
+      // Static, bottom-aligned. C#: `tDraw2D(0, 720 - footer.height)`.
+      ctx.drawImage(footer, 0, PANEL_H_PX - footer.height);
+    }
   }
 }
 
