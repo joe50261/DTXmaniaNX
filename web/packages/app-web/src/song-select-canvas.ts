@@ -121,6 +121,7 @@ interface ButtonHit {
   /** What happens on trigger/click. */
   action:
     | { kind: 'activate'; entryIdx: number }
+    | { kind: 'difficulty'; slot: number }
     | { kind: 'sort' }
     | { kind: 'exit' }
     | { kind: 'calibrate' }
@@ -875,6 +876,14 @@ export class SongSelectCanvas {
         void this.loadCoverForFocused();
         this.activateFocused();
         return;
+      case 'difficulty':
+        // Snap the preferred slot. No focus change (the difficulty
+        // grid only shows the focused song's chart slots), no
+        // launch — the player still has to confirm with trigger /
+        // Enter on the focused row to start the chart.
+        this.preferredSlot = hit.action.slot;
+        this.paint();
+        return;
       case 'sort':
         this.cycleSortMode();
         return;
@@ -975,19 +984,23 @@ export class SongSelectCanvas {
   }
 
   private paint(): void {
-    // Snapshot which wheel entry the laser/cursor is hovering BEFORE
-    // we clear the hit-rect list. The new hits get rebuilt from
-    // scratch each paint, so hoveredIdx (which indexes the previous
-    // paint's hits) is otherwise unusable for cross-paint state. The
-    // snapshot lets paintWheelBar give the targeted-but-not-focused
-    // row a visible hover overlay so the player can see where their
-    // laser is pointing.
-    const hoveredEntryIdx = this.snapshotHoveredEntryIdx();
+    // Snapshot what the laser/cursor is hovering BEFORE we clear the
+    // hit-rect list. The new hits get rebuilt from scratch each
+    // paint, so hoveredIdx (which indexes the previous paint's hits)
+    // is otherwise unusable for cross-paint state. The snapshot lets
+    // paintWheelBar / paintStatusPanel give the targeted-but-not-
+    // selected element a visible hover overlay so the player can see
+    // where their laser is pointing.
+    const hoveredAction = this.snapshotHoveredAction();
+    const hoveredEntryIdx =
+      hoveredAction?.kind === 'activate' ? hoveredAction.entryIdx : -1;
+    const hoveredDifficultySlot =
+      hoveredAction?.kind === 'difficulty' ? hoveredAction.slot : -1;
     this.hits = [];
 
     this.paintBackground();
     this.paintPreimage();
-    this.paintStatusPanel();
+    this.paintStatusPanel(hoveredDifficultySlot);
     // Comment bar sits behind the wheel — its y-strip (257..287)
     // overlaps the focus row's bar (270..320) and the canonical C#
     // order paints the wheel ON TOP so the focused bar punches
@@ -1002,11 +1015,9 @@ export class SongSelectCanvas {
     this.texture.needsUpdate = true;
   }
 
-  private snapshotHoveredEntryIdx(): number {
-    if (this.hoveredIdx < 0) return -1;
-    const hit = this.hits[this.hoveredIdx];
-    if (!hit) return -1;
-    return hit.action.kind === 'activate' ? hit.action.entryIdx : -1;
+  private snapshotHoveredAction(): ButtonHit['action'] | null {
+    if (this.hoveredIdx < 0) return null;
+    return this.hits[this.hoveredIdx]?.action ?? null;
   }
 
   private paintBackground(): void {
@@ -1181,7 +1192,7 @@ export class SongSelectCanvas {
     ctx.globalAlpha = prevAlpha;
   }
 
-  private paintStatusPanel(): void {
+  private paintStatusPanel(hoveredSlot: number): void {
     const ctx = this.ctx;
     const body = this.getAsset('5_status panel.png');
     if (body) {
@@ -1228,7 +1239,17 @@ export class SongSelectCanvas {
         }
         const chart = p === 0 ? slotsUsed.get(i) : undefined;
         const isSelected = chart !== undefined && chart.slot === selected.slot;
-        if (isSelected) {
+        // Hover only on the DR column for now — GT/BS are [WIP] data
+        // slots so clicking them does nothing useful, and we'd rather
+        // not telegraph an interaction we can't fulfil.
+        const isHovered = p === 0 && i === hoveredSlot && chart !== undefined;
+        if (isHovered) {
+          ctx.fillStyle = 'rgba(251, 191, 36, 0.38)';
+          ctx.fillRect(cellX, cellY, cellW, cellH);
+          ctx.strokeStyle = '#fbbf24';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(cellX + 1, cellY + 1, cellW - 2, cellH - 2);
+        } else if (isSelected) {
           ctx.fillStyle = 'rgba(251, 191, 36, 0.28)';
           ctx.fillRect(cellX, cellY, cellW, cellH);
         }
@@ -1249,6 +1270,19 @@ export class SongSelectCanvas {
           );
         } else if (p > 0 && chart) {
           drawWipLabel(ctx, '[WIP]', cellX + 6, cellY + cellH - 6);
+        }
+        // DR cells with a chart are clickable (laser ray + desktop
+        // pointer alike) — tapping one snaps preferredSlot to that
+        // difficulty. GT/BS get no rect because they have no real
+        // chart data yet.
+        if (p === 0 && chart) {
+          this.hits.push({
+            x: cellX,
+            y: cellY,
+            w: cellW,
+            h: cellH,
+            action: { kind: 'difficulty', slot: i },
+          });
         }
       }
     }
