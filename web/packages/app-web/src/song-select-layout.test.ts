@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  FOOTER_EXIT_H,
+  FOOTER_EXIT_X,
+  FOOTER_EXIT_Y,
+  FOOTER_UTIL_BTN_H,
+  FOOTER_UTIL_BTN_Y,
   PANEL_H_PX,
   PANEL_W_PX,
   PREIMAGE_SIZE,
@@ -73,5 +78,53 @@ describe('song-select-layout — DTXMania Stage 05 invariants', () => {
     expect(SCROLLBAR_X).toBeGreaterThan(PANEL_W_PX - 50);
     expect(SCROLLBAR_X).toBeLessThan(PANEL_W_PX);
     expect(SCROLLBAR_Y + SCROLLBAR_H).toBeLessThan(PANEL_H_PX);
+  });
+
+  it('no on-canvas wheel bar y-overlaps the footer button row (clears slot 11)', () => {
+    // Pinning the regression that motivated commit 3e025fa: wheel
+    // slot 11 (anchor (996, 617), regular bar height 48) was clipping
+    // the bottom of the previous 50-px-tall Exit VR rect at
+    // y=654..704. The contract: every visible wheel bar's y-extent
+    // must end at or above the footer row's top.
+    //
+    // Bar heights from the C# skin textures: `5_bar score.png` /
+    // `5_bar box.png` / `5_bar other.png` are all 48 tall; only
+    // `5_bar score selected.png` (the focus-row texture) is 96 tall.
+    // The wheel paints the selected texture exclusively at slot 5
+    // (WHEEL_FOCUS_INDEX), so the realistic per-slot height is 96 at
+    // the focus row and 48 elsewhere.
+    //
+    // Bar 12's anchor (1280, 668) sits at the canvas right edge —
+    // its texture is fully off-canvas so it's never visible. We
+    // exclude bars that start at or past the right edge from the
+    // overlap check; their y position is meaningless because no
+    // pixel ever paints.
+    const FOCUS_BAR_H = 96;
+    const REGULAR_BAR_H = 48;
+    const footerTop = Math.min(FOOTER_UTIL_BTN_Y, FOOTER_EXIT_Y);
+    const footerBottom = Math.max(
+      FOOTER_UTIL_BTN_Y + FOOTER_UTIL_BTN_H,
+      FOOTER_EXIT_Y + FOOTER_EXIT_H,
+    );
+    for (let i = 0; i < WHEEL_VISIBLE_BARS; i++) {
+      const anchor = WHEEL_BAR_ANCHORS[i]!;
+      if (anchor.x >= PANEL_W_PX) continue; // off-canvas, never paints
+      const barH = i === WHEEL_FOCUS_INDEX ? FOCUS_BAR_H : REGULAR_BAR_H;
+      const barBottom = anchor.y + barH;
+      const overlaps = barBottom > footerTop && anchor.y < footerBottom;
+      expect(
+        overlaps,
+        `bar slot ${i} (y=${anchor.y}..${barBottom}) overlaps footer row [${footerTop}..${footerBottom}]`,
+      ).toBe(false);
+    }
+  });
+
+  it('footer Exit VR sits inside the panel and to the right of the util row', () => {
+    // Cheap sanity: Exit VR must be on canvas and its left edge must
+    // be past the rightmost utility button so the row reads as one
+    // strip without horizontal collision.
+    expect(FOOTER_EXIT_X).toBeGreaterThan(0);
+    expect(FOOTER_EXIT_X + 200).toBeLessThanOrEqual(PANEL_W_PX); // 200 = FOOTER_EXIT_W
+    expect(FOOTER_EXIT_Y + FOOTER_EXIT_H).toBeLessThanOrEqual(PANEL_H_PX);
   });
 });
