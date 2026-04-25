@@ -14,14 +14,17 @@
  *
  * Capabilities:
  *   - Trigger L / Trigger R buttons → drive
- *     `controller.setButtonValueImmediate('xr-standard-trigger', …)`
- *     for one-shot select events. Enough for VR menu / config /
- *     calibrate panel verification.
+ *     `controller.setButtonValueImmediate('trigger', …)` for one-shot
+ *     select events. Note: IWER's internal button id is `'trigger'`,
+ *     NOT `'xr-standard-trigger'` (that's the WebXR Gamepad standard
+ *     mapping name; IWER uses its own short ids — see
+ *     `iwer/lib/device/configs/controller/meta.js`).
  *   - Recenter — `xrDevice.recenter()`.
  *   - Head Y +/- — small step buttons because head height matters
  *     for laser angle in our menu layouts.
- *   - Status text — surfaces device name + active session state so
- *     reviewers can confirm requestSession actually went through.
+ *   - Aim ↑↓←→ — pitch / yaw step on the right controller (the one
+ *     `xr-controllers.ts` resolves to the laser pointer in our app).
+ *     Lets you re-aim onto a panel without DevUI's drag handles.
  *
  * Pose-level control beyond this is via `window.__xrEmu` from the
  * console (e.g. `__xrEmu.controllers.right.position.set(...)`).
@@ -29,6 +32,8 @@
 import type { XRDevice } from 'iwer';
 
 const PANEL_ID = 'iwer-mini-panel';
+const TRIGGER_BUTTON_ID = 'trigger';
+const AIM_STEP_DEG = 5;
 
 export function installMiniPanel(device: XRDevice): void {
   if (document.getElementById(PANEL_ID)) return;
@@ -41,7 +46,7 @@ export function installMiniPanel(device: XRDevice): void {
     position: 'fixed',
     right: '8px',
     bottom: '8px',
-    width: '200px',
+    width: '220px',
     padding: '8px',
     background: 'rgba(15, 23, 42, 0.92)',
     color: '#e5e7eb',
@@ -74,7 +79,8 @@ export function installMiniPanel(device: XRDevice): void {
   panel.appendChild(makeButton('Trigger L', () => pressTrigger(device, 'left')));
   panel.appendChild(makeButton('Trigger R', () => pressTrigger(device, 'right')));
   panel.appendChild(makeButton('Recenter', () => device.recenter()));
-  panel.appendChild(makeStepRow('Head Y', (delta) => stepHeadY(device, delta)));
+  panel.appendChild(makeStepRow('Head Y', (delta) => stepHeadY(device, delta), '−', '+', 0.05));
+  panel.appendChild(makeAimRow(device));
 
   document.body.appendChild(panel);
 }
@@ -109,7 +115,13 @@ function makeButton(label: string, onClick: () => void): HTMLButtonElement {
   return b;
 }
 
-function makeStepRow(label: string, onStep: (delta: number) => void): HTMLDivElement {
+function makeStepRow(
+  label: string,
+  onStep: (delta: number) => void,
+  minus = '−',
+  plus = '+',
+  step = 1,
+): HTMLDivElement {
   const row = document.createElement('div');
   Object.assign(row.style, {
     display: 'flex',
@@ -121,17 +133,42 @@ function makeStepRow(label: string, onStep: (delta: number) => void): HTMLDivEle
   tag.textContent = label;
   tag.style.flex = '1';
   row.appendChild(tag);
-  row.appendChild(makeButton('−', () => onStep(-0.05)));
-  row.appendChild(makeButton('+', () => onStep(0.05)));
+  row.appendChild(makeButton(minus, () => onStep(-step)));
+  row.appendChild(makeButton(plus, () => onStep(step)));
+  return row;
+}
+
+function makeAimRow(device: XRDevice): HTMLDivElement {
+  const row = document.createElement('div');
+  Object.assign(row.style, {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr 1fr',
+    gap: '4px',
+    margin: '3px 0',
+  } as Partial<CSSStyleDeclaration>);
+  const tag = document.createElement('span');
+  tag.textContent = 'Aim R';
+  tag.style.gridColumn = '1 / span 3';
+  tag.style.opacity = '0.7';
+  row.appendChild(tag);
+  row.appendChild(makeButton('↖', () => aimRight(device, -AIM_STEP_DEG, -AIM_STEP_DEG)));
+  row.appendChild(makeButton('↑', () => aimRight(device, -AIM_STEP_DEG, 0)));
+  row.appendChild(makeButton('↗', () => aimRight(device, -AIM_STEP_DEG, AIM_STEP_DEG)));
+  row.appendChild(makeButton('←', () => aimRight(device, 0, -AIM_STEP_DEG)));
+  row.appendChild(makeButton('•', () => resetAimRight(device)));
+  row.appendChild(makeButton('→', () => aimRight(device, 0, AIM_STEP_DEG)));
+  row.appendChild(makeButton('↙', () => aimRight(device, AIM_STEP_DEG, -AIM_STEP_DEG)));
+  row.appendChild(makeButton('↓', () => aimRight(device, AIM_STEP_DEG, 0)));
+  row.appendChild(makeButton('↘', () => aimRight(device, AIM_STEP_DEG, AIM_STEP_DEG)));
   return row;
 }
 
 /**
- * Press the trigger for ~120 ms, then release. The 'xr-standard-trigger'
- * id is configured with `eventTrigger: 'select'` in IWER's Quest profile,
- * so the press fires `selectstart` → `select` → `selectend` on the input
- * source, which is what `xr-controllers.ts` listens to for laser-ray
- * clicks against VR panels.
+ * Press the trigger for ~120 ms, then release. The 'trigger' id is
+ * configured with `eventTrigger: 'select'` in IWER's Quest profile,
+ * so the press fires `selectstart` → `select` → `selectend` on the
+ * input source, which is what `xr-controllers.ts` listens to for
+ * laser-ray clicks against VR panels.
  */
 function pressTrigger(device: XRDevice, hand: 'left' | 'right'): void {
   const c = device.controllers[hand];
@@ -139,10 +176,86 @@ function pressTrigger(device: XRDevice, hand: 'left' | 'right'): void {
     console.warn(`[xr-emu] no ${hand} controller`);
     return;
   }
-  c.setButtonValueImmediate('xr-standard-trigger', 1);
-  setTimeout(() => c.setButtonValueImmediate('xr-standard-trigger', 0), 120);
+  c.setButtonValueImmediate(TRIGGER_BUTTON_ID, 1);
+  setTimeout(() => c.setButtonValueImmediate(TRIGGER_BUTTON_ID, 0), 120);
 }
 
 function stepHeadY(device: XRDevice, delta: number): void {
   device.position.y += delta;
 }
+
+/**
+ * Apply a relative pitch / yaw to the right controller's existing
+ * orientation. We pull the current quaternion as YXZ Euler so we can
+ * tweak the human-readable axes, add the deltas, then push the new
+ * Euler back. `eulerToQuat` matches `quatToEuler`'s order so this
+ * round-trips cleanly.
+ */
+function aimRight(device: XRDevice, pitchDeg: number, yawDeg: number): void {
+  applyAimDelta(device, 'right', pitchDeg, yawDeg);
+}
+
+function resetAimRight(device: XRDevice): void {
+  const c = device.controllers.right;
+  if (!c) return;
+  c.quaternion.set(0, 0, 0, 1);
+}
+
+function applyAimDelta(
+  device: XRDevice,
+  hand: 'left' | 'right',
+  pitchDeg: number,
+  yawDeg: number,
+): void {
+  const c = device.controllers[hand];
+  if (!c) return;
+  const eulerNow = quatToEuler(c.quaternion);
+  const q = eulerToQuat({
+    pitch: eulerNow.pitch + pitchDeg,
+    yaw: eulerNow.yaw + yawDeg,
+    roll: eulerNow.roll,
+  });
+  c.quaternion.set(q.x, q.y, q.z, q.w);
+}
+
+interface EulerDeg {
+  pitch: number;
+  yaw: number;
+  roll: number;
+}
+
+interface QuatLike {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+}
+
+/** YXZ-order quat → Euler in degrees, mirroring IWER's own helper. */
+function quatToEuler(q: QuatLike): EulerDeg {
+  const { x, y, z, w } = q;
+  const RAD = 180 / Math.PI;
+  const sinp = Math.max(-1, Math.min(1, 2 * (w * x - y * z)));
+  const pitch = Math.abs(sinp) >= 1 ? (Math.sign(sinp) * Math.PI) / 2 : Math.asin(sinp);
+  const yaw = Math.atan2(2 * (w * y + x * z), 1 - 2 * (x * x + y * y));
+  const roll = Math.atan2(2 * (w * z + x * y), 1 - 2 * (x * x + z * z));
+  return { pitch: pitch * RAD, yaw: yaw * RAD, roll: roll * RAD };
+}
+
+function eulerToQuat(e: EulerDeg): QuatLike {
+  const RAD = Math.PI / 180;
+  const cy = Math.cos((e.yaw * RAD) / 2);
+  const sy = Math.sin((e.yaw * RAD) / 2);
+  const cp = Math.cos((e.pitch * RAD) / 2);
+  const sp = Math.sin((e.pitch * RAD) / 2);
+  const cr = Math.cos((e.roll * RAD) / 2);
+  const sr = Math.sin((e.roll * RAD) / 2);
+  // YXZ multiply order
+  return {
+    x: cy * sp * cr + sy * cp * sr,
+    y: sy * cp * cr - cy * sp * sr,
+    z: cy * cp * sr - sy * sp * cr,
+    w: cy * cp * cr + sy * sp * sr,
+  };
+}
+
