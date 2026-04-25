@@ -827,16 +827,7 @@ export class SongSelectCanvas {
       return;
     }
     if (this.onPick) {
-      const chart = this.chartForPreferred(node.entry);
-      console.info(
-        '[song-select] activateFocused → onPick',
-        'preferredSlot=', this.preferredSlot,
-        'chosenSlot=', chart.slot,
-        'path=', chart.chartPath,
-        'songTitle=', node.entry.title,
-        'availableSlots=', node.entry.charts.map((c) => c.slot),
-      );
-      this.onPick({ song: node.entry, chart });
+      this.onPick({ song: node.entry, chart: this.chartForPreferred(node.entry) });
     }
   }
 
@@ -886,21 +877,10 @@ export class SongSelectCanvas {
         this.activateFocused();
         return;
       case 'chart':
-        // One-click chart launch via the difficulty grid: clicking a
-        // DR cell starts the chart at THAT slot directly. The
-        // earlier two-step "click to set preferredSlot, Enter to
-        // launch" was confusing — the user reported the launched
-        // chart never matched the highlighted cell. The single-step
-        // path also bypasses the preferredSlot bookkeeping that
-        // turned out to be where the desync was hiding. preferredSlot
-        // still tracks for ←/→ keyboard cycling + visual highlight
-        // on the next focus.
-        console.info(
-          '[song-select] chart-hit fired',
-          'slot=', hit.action.chart.slot,
-          'path=', hit.action.chart.chartPath,
-          'songTitle=', hit.action.song.title,
-        );
+        // One-click chart launch from the difficulty grid: clicking a
+        // DR cell starts that chart directly. preferredSlot still
+        // tracks for ←/→ keyboard cycling + visual selection on the
+        // next focus.
         this.preferredSlot = hit.action.chart.slot;
         if (this.onPick) {
           this.onPick({ song: hit.action.song, chart: hit.action.chart });
@@ -975,6 +955,7 @@ export class SongSelectCanvas {
       '5_preimage panel.png',
       '5_preimage default.png',
       '5_status panel.png',
+      '5_difficulty panel.png',
       '5_difficulty frame.png',
       '5_comment bar.png',
       '5_scrollbar.png',
@@ -1230,85 +1211,78 @@ export class SongSelectCanvas {
       return;
     }
 
-    // 5 difficulties × 3 instruments grid. `5_difficulty frame.png`
-    // is ONE 187×60 row showing all three instrument columns side by
-    // side — drawn once per difficulty, not three times. Y-baseline =
-    // 391 + (4-i)*60 - 2; row 4 (Master) sits at the top, row 0
-    // (Basic) at the bottom. Per-row Guitar / Bass + skill % stay
-    // [WIP] until the chart layer exposes them.
+    // Difficulty grid: backed by the canonical `5_difficulty panel.png`
+    // (561×321) which already has the DRUM/GUITAR/BASS column headers
+    // and the DTX/MASTER/EXTREME/ADVANCED/BASIC row labels baked in.
+    // We paint it ONCE underneath, then overlay levels + selection
+    // highlight + hit-rects on the per-cell sub-rects. Cell geometry
+    // mirrors the design.md spec: row 4 (DTX) at the top y=389, row 0
+    // (BASIC) at the bottom y=629, 60 px stride. Per-row Guitar / Bass
+    // + skill % stay [WIP] until the chart layer exposes them.
+    const panel = this.getAsset('5_difficulty panel.png');
+    const PANEL_W = panel?.width ?? 561;
+    const HEADER_H = 21; // header strip ABOVE the cell grid in the panel texture
+    const ROW_H = 60;
+    const PART_W = Math.floor(PANEL_W / 3);
+    const gridX = STATUS_X + 5;
+    // Y positions row 4's cell at y=389 (per design.md). The panel
+    // texture's header sits HEADER_H px above that.
+    const gridY = STATUS_Y + 41 - HEADER_H;
+    if (panel) {
+      ctx.drawImage(panel, gridX, gridY);
+    } else {
+      // Fallback: rough dark backing so cells are still visible.
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.55)';
+      ctx.fillRect(gridX, gridY, PANEL_W, HEADER_H + ROW_H * 5);
+    }
+
     const slotsUsed = new Map<number, ChartEntry>();
     for (const c of song.charts) slotsUsed.set(c.slot, c);
     const selected = this.chartForPreferred(song);
     const frame = this.getAsset('5_difficulty frame.png');
-    const ROW_W = frame?.width ?? 187;
-    const ROW_H = frame?.height ?? 60;
-    const PART_W = Math.floor(ROW_W / 3);
-    const PARTS = ['DR', 'GT', 'BS'] as const;
     for (let i = 0; i < 5; i++) {
       const rowY = STATUS_Y + 41 + (4 - i) * 60 - 2;
-      const rowX = STATUS_X + 5;
-      // Translucent dark backing under the whole row — the BG image
-      // (5_background.jpg) is a busy guitar/yellow scene that makes
-      // the thin pink frame border + dim text unreadable. Painted
-      // FIRST so the frame texture sits on top of it.
-      ctx.fillStyle = 'rgba(11, 15, 26, 0.62)';
-      ctx.fillRect(rowX, rowY, ROW_W, ROW_H);
-      if (frame) {
-        ctx.drawImage(frame, rowX, rowY);
-      } else {
-        ctx.strokeStyle = '#94a3b8';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(rowX + 0.5, rowY + 0.5, ROW_W - 1, ROW_H - 1);
+      const cellX = gridX + 0 * PART_W; // DR is the first column
+      const chart = slotsUsed.get(i);
+      const isSelected = chart !== undefined && chart.slot === selected.slot;
+      const isHovered = i === hoveredSlot && chart !== undefined;
+      // Selection / hover overlay: `5_difficulty frame.png` is the
+      // canonical "this cell is highlighted" texture (a magenta-bordered
+      // 187×60 frame). Drawn ONLY on the targeted cell so the panel
+      // doesn't look like every difficulty is selected. Hover gets a
+      // brighter amber tint to distinguish "what you'd launch" from
+      // "what's currently default".
+      if (isHovered) {
+        if (frame) ctx.drawImage(frame, cellX, rowY);
+        ctx.fillStyle = 'rgba(251, 191, 36, 0.28)';
+        ctx.fillRect(cellX, rowY, PART_W, ROW_H);
+      } else if (isSelected) {
+        if (frame) ctx.drawImage(frame, cellX, rowY);
       }
-      for (let p = 0; p < PARTS.length; p++) {
-        const cellX = rowX + p * PART_W;
-        const chart = p === 0 ? slotsUsed.get(i) : undefined;
-        const isSelected = chart !== undefined && chart.slot === selected.slot;
-        // Hover only on the DR column for now — GT/BS are [WIP] data
-        // slots so clicking them does nothing useful, and we'd rather
-        // not telegraph an interaction we can't fulfil.
-        const isHovered = p === 0 && i === hoveredSlot && chart !== undefined;
-        if (isHovered) {
-          ctx.fillStyle = 'rgba(251, 191, 36, 0.38)';
-          ctx.fillRect(cellX, rowY, PART_W, ROW_H);
-          ctx.strokeStyle = '#fbbf24';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(cellX + 1, rowY + 1, PART_W - 2, ROW_H - 2);
-        } else if (isSelected) {
-          ctx.fillStyle = 'rgba(251, 191, 36, 0.28)';
-          ctx.fillRect(cellX, rowY, PART_W, ROW_H);
-        }
-        // Empty-cell label tone — still dim but legible against the
-        // dark backing instead of dissolving into the BG.
-        ctx.fillStyle = chart ? '#fff' : '#94a3b8';
-        ctx.font = 'bold 13px ui-monospace, monospace';
-        ctx.textAlign = 'left';
-        ctx.fillText(PARTS[p]!, cellX + 6, rowY + 16);
-        if (p === 0 && chart?.drumLevel !== undefined && chart.drumLevel > 0) {
-          ctx.font = 'bold 18px ui-monospace, monospace';
-          ctx.fillStyle = '#fde047';
-          ctx.textAlign = 'right';
-          ctx.fillText(
-            (chart.drumLevel / 100).toFixed(2),
-            cellX + PART_W - 6,
-            rowY + ROW_H - 8,
-          );
-        } else if (p > 0 && chart) {
-          drawWipLabel(ctx, '[WIP]', cellX + 6, rowY + ROW_H - 6);
-        }
-        // DR cells with a chart are direct chart launchers (laser
-        // ray + desktop pointer alike) — clicking one starts the
-        // chart at THAT slot in one step. GT/BS get no rect because
-        // they have no real chart data yet.
-        if (p === 0 && chart) {
-          this.hits.push({
-            x: cellX,
-            y: rowY,
-            w: PART_W,
-            h: ROW_H,
-            action: { kind: 'chart', song, chart },
-          });
-        }
+      // Drum level — bottom-right of the DR cell. The level number is
+      // the only chart-data we have yet; everything else (rank icon,
+      // skill % gauge) waits on the chart layer.
+      if (chart?.drumLevel !== undefined && chart.drumLevel > 0) {
+        ctx.font = 'bold 18px ui-monospace, monospace';
+        ctx.fillStyle = '#fde047';
+        ctx.textAlign = 'right';
+        ctx.fillText(
+          (chart.drumLevel / 100).toFixed(2),
+          cellX + PART_W - 6,
+          rowY + ROW_H - 8,
+        );
+      }
+      // DR cells with a chart are direct chart launchers (laser ray +
+      // desktop pointer alike) — clicking one starts the chart at
+      // THAT slot in one step.
+      if (chart) {
+        this.hits.push({
+          x: cellX,
+          y: rowY,
+          w: PART_W,
+          h: ROW_H,
+          action: { kind: 'chart', song, chart },
+        });
       }
     }
 
