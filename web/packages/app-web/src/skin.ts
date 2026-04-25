@@ -1,21 +1,22 @@
 import * as THREE from 'three';
 import type { SkinTextures } from './renderer.js';
+import { skinUrl } from './skin-url.js';
 
 /**
- * Loads the drum-play skin assets we ship under public/skin/. Ported from the
- * subset of Runtime/System/Graphics/ used by Stage 07 (performance) in the
- * original DTXMania; only the handful we actually render are copied so the
- * PWA shell stays small.
+ * Loads the drum-play skin assets shipped under dist/skin/ (copied at
+ * build time from Runtime/System/Graphics/ — see vite.config.ts). Ported
+ * from the subset of Stage 07 (performance) assets the renderer actually
+ * uses; the rest stay out of the PWA shell to keep it small.
  *
  * Missing files resolve to undefined rather than throwing — the renderer
  * tolerates absent skin pieces and falls back to its plain 2D drawing.
  */
-export async function loadSkin(baseUrl: string): Promise<SkinTextures> {
+export async function loadSkin(): Promise<SkinTextures> {
   const loader = new THREE.TextureLoader();
   const load = (name: string): Promise<THREE.Texture | undefined> =>
     new Promise((resolve) => {
       loader.load(
-        `${baseUrl}skin/${name}`,
+        skinUrl(name),
         (tex) => {
           tex.colorSpace = THREE.SRGBColorSpace;
           resolve(tex);

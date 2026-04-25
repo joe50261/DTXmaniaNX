@@ -111,199 +111,24 @@
       #search-box.visible {
         display: block;
       }
-      #breadcrumb {
-        margin-top: 16px;
-        padding: 6px 10px;
-        border-top: 1px solid rgba(255, 255, 255, 0.08);
-        font-size: 12px;
+      #song-select-mount {
+        margin-top: 12px;
         display: flex;
-        flex-wrap: wrap;
-        gap: 4px;
-        align-items: center;
-        min-height: 1.4em;
-      }
-      .breadcrumb-seg {
-        padding: 2px 6px;
-        border-radius: 3px;
-      }
-      .breadcrumb-seg.nav {
-        cursor: pointer;
-        opacity: 0.55;
-      }
-      .breadcrumb-seg.nav:hover {
-        background: rgba(80, 120, 255, 0.15);
-        opacity: 1;
-      }
-      .breadcrumb-seg.current {
-        font-weight: bold;
-      }
-      .breadcrumb-sep {
-        opacity: 0.35;
-      }
-      #song-select {
-        display: grid;
-        grid-template-columns: 1fr 200px;
-        gap: 14px;
-        margin-top: 6px;
-      }
-      #song-wheel {
-        min-height: 44vh;
-        max-height: 52vh;
-        display: flex;
-        flex-direction: column;
         justify-content: center;
-        gap: 2px;
       }
-      .wheel-empty {
-        opacity: 0.5;
-        font-size: 14px;
-        text-align: center;
-        padding: 20px 0;
-      }
-      .wheel-row {
-        padding: 5px 10px;
-        border-radius: 4px;
-        overflow: hidden;
-        transition: background 80ms linear, opacity 80ms linear;
-        cursor: pointer;
-      }
-      .wheel-row.wheel-off-1 { opacity: 0.65; font-size: 13px; }
-      .wheel-row.wheel-off-2 { opacity: 0.40; font-size: 12px; }
-      .wheel-row.wheel-off-3 { opacity: 0.22; font-size: 11px; }
-      .wheel-row.wheel-focus {
-        background: rgba(80, 120, 255, 0.18);
-        border: 1px solid rgba(80, 120, 255, 0.45);
-        opacity: 1;
+      .song-select-canvas {
+        /* Logical size is 1280×720; the canvas painting reads physical
+         * pixels via its own width/height attributes, so we just ask
+         * the browser to scale it to fit the panel and lock the aspect
+         * ratio. Box-shadow none — the panel already has its own. */
+        max-width: 100%;
+        height: auto;
+        aspect-ratio: 16 / 9;
+        background: #0b0f1a;
+        border-radius: 6px;
+        box-shadow: none;
         cursor: default;
-        padding: 10px 12px;
-      }
-      .wheel-title {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: 14px;
-      }
-      .wheel-focus .wheel-title {
-        font-size: 18px;
-        font-weight: bold;
-        margin-bottom: 4px;
-      }
-      .wheel-meta {
-        opacity: 0.55;
-        font-size: 11px;
-        margin-bottom: 6px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .wheel-charts {
-        display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
-      }
-      .chart-btn {
-        font-size: 12px !important;
-        padding: 4px 10px !important;
-        background: #1e2a55 !important;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 1px;
-        line-height: 1.1;
-        border: 1px solid transparent;
-      }
-      .chart-btn:hover {
-        background: #3355ff !important;
-      }
-      .chart-btn.selected {
-        border-color: #fbbf24;
-        background: #3355ff !important;
-      }
-      .chart-btn {
-        position: relative;
-      }
-      .chart-btn .level {
-        font-size: 10px;
-        opacity: 0.7;
-      }
-      .chart-lamp {
-        position: absolute;
-        top: 3px;
-        right: 3px;
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        box-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
-      }
-      #side-column {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        min-width: 0;
-      }
-      #preimage-panel {
-        width: 100%;
-        aspect-ratio: 1 / 1;
-        object-fit: cover;
-        border-radius: 6px;
-        background: rgba(255, 255, 255, 0.04);
-        display: none;
-      }
-      #preimage-panel.visible {
-        display: block;
-      }
-      #status-panel {
-        padding: 10px 12px;
-        background: rgba(255, 255, 255, 0.04);
-        border-radius: 6px;
-        font-size: 12px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        flex: 1;
-        min-height: 0;
-      }
-      .status-diffs {
-        display: flex;
-        flex-direction: column;
-        gap: 3px;
-      }
-      .status-diff {
-        display: flex;
-        justify-content: space-between;
-        align-items: baseline;
-        padding: 3px 6px;
-        border-radius: 3px;
-      }
-      .status-diff.selected {
-        background: rgba(251, 191, 36, 0.15);
-      }
-      .status-diff.empty {
-        opacity: 0.35;
-      }
-      .diff-label { font-size: 11px; letter-spacing: 0.05em; }
-      .diff-level { font-variant-numeric: tabular-nums; opacity: 0.85; }
-      .status-meta {
-        border-top: 1px solid rgba(255, 255, 255, 0.08);
-        padding-top: 8px;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-      }
-      .status-meta-line {
-        display: flex;
-        gap: 8px;
-        font-size: 11px;
-      }
-      .status-meta-key {
-        opacity: 0.55;
-        min-width: 44px;
-        flex-shrink: 0;
-      }
-      .status-meta-val {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        touch-action: none;
       }
       #wheel-help {
         margin-top: 10px;
@@ -482,14 +307,7 @@
           <button id="sort-btn" class="ghost">Sort: title</button>
         </div>
         <input id="search-box" type="text" placeholder="Search songs… (press / to open, Esc to close)" autocomplete="off" spellcheck="false" />
-        <div id="breadcrumb"></div>
-        <div id="song-select">
-          <div id="song-wheel"></div>
-          <div id="side-column">
-            <img id="preimage-panel" alt="" />
-            <div id="status-panel"></div>
-          </div>
-        </div>
+        <div id="song-select-mount"></div>
         <div id="wheel-help">↑ ↓ browse · ← → difficulty · Enter play/enter · Esc back</div>
         <div class="errors" id="scan-errors"></div>
         <div class="hint">

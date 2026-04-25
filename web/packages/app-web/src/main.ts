@@ -19,7 +19,6 @@ import {
   type SongIndex,
 } from '@dtxmania/dtx-core';
 import { Game, type GameFsContext } from './game.js';
-import { SongWheel } from './song-wheel.js';
 import { ConfigPanel } from './config-panel.js';
 import {
   getConfig,
@@ -89,58 +88,10 @@ const rescanBtn = requireEl<HTMLButtonElement>('rescan-folder');
 const calibrateBtn = requireEl<HTMLButtonElement>('calibrate');
 const configBtn = requireEl<HTMLButtonElement>('config-btn');
 const xrBtn = requireEl<HTMLButtonElement>('enter-xr');
-const wheelEl = requireEl<HTMLDivElement>('song-wheel');
-const statusPanelEl = requireEl<HTMLDivElement>('status-panel');
-const breadcrumbEl = requireEl<HTMLDivElement>('breadcrumb');
-const preimageEl = requireEl<HTMLImageElement>('preimage-panel');
+const songSelectMount = requireEl<HTMLDivElement>('song-select-mount');
 const scanErrorsEl = requireEl<HTMLDivElement>('scan-errors');
 const sortBtn = requireEl<HTMLButtonElement>('sort-btn');
 const searchBox = requireEl<HTMLInputElement>('search-box');
-
-const songWheel = new SongWheel(wheelEl, statusPanelEl, breadcrumbEl, {
-  onStart: (chart) => run(() => startChart(chart)),
-  formatLevel,
-  isActive: () => overlay.style.display !== 'none',
-});
-songWheel.attachKeyboard();
-songWheel.onFocusChanged(() => onFocusChanged());
-
-sortBtn.addEventListener('click', () => {
-  const mode = songWheel.cycleSortMode();
-  sortBtn.textContent = `Sort: ${mode}`;
-});
-
-// `/` opens the search box; typing filters live; Esc clears + closes
-// (the plain wheel Esc-back handler sees nothing because search-box
-// consumes the event first). Search-mode also suppresses the wheel's
-// own keyboard listener so arrow keys navigate the input cursor.
-searchBox.addEventListener('input', () => {
-  songWheel.setSearchQuery(searchBox.value);
-});
-searchBox.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    e.preventDefault();
-    closeSearch();
-  } else if (e.key === 'Enter') {
-    // Enter during search commits the currently-focused result and
-    // closes the box. Keep the filter applied so the player sees
-    // the state their selection came from; cleared on next open.
-    e.preventDefault();
-    searchBox.blur();
-  }
-});
-searchBox.addEventListener('blur', () => {
-  // Give wheel keys back once search loses focus.
-  songWheel.attachKeyboard();
-});
-window.addEventListener('keydown', (e) => {
-  if (e.key !== '/') return;
-  const target = e.target as HTMLElement | null;
-  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
-  if (overlay.style.display === 'none') return;
-  e.preventDefault();
-  openSearch();
-});
 
 /** Commit an A/B loop marker capture and surface a HUD toast. Shared
  * by the keyboard hotkeys and the VR face-button path so the feedback
@@ -198,23 +149,22 @@ window.addEventListener('keydown', (e) => {
 });
 
 function openSearch(): void {
+  if (!songSelect) return;
   searchBox.classList.add('visible');
-  searchBox.value = songWheel.getSearchQuery();
-  songWheel.detachKeyboard();
+  searchBox.value = songSelect.getSearchQuery();
   searchBox.focus();
   searchBox.select();
 }
 
 function closeSearch(): void {
   searchBox.value = '';
-  songWheel.setSearchQuery('');
+  songSelect?.setSearchQuery('');
   searchBox.classList.remove('visible');
   searchBox.blur();
-  songWheel.attachKeyboard();
 }
 
 // Preload skin PNGs once at boot. Games created later reuse these textures.
-const skinPromise: Promise<SkinTextures> = loadSkin(import.meta.env.BASE_URL);
+const skinPromise: Promise<SkinTextures> = loadSkin();
 
 /**
  * Game is built eagerly (with empty skin) so the Enter-VR click handler
@@ -251,6 +201,89 @@ try {
   console.warn('Game init failed', e);
 }
 
+// Single source of truth for the song-select view, shared between
+// desktop and VR. The Game constructed it (it owns the Three.js plane
+// + CanvasTexture); the desktop driver mounts the underlying canvas
+// element into the overlay below so the player sees the same wheel
+// they would in VR. Null only when WebGL init failed at boot.
+const songSelect = activeGame?.songSelect ?? null;
+if (songSelect) {
+  songSelect.setDesktopMode(true);
+  // Inject the canvas into the overlay where the legacy DOM SongWheel
+  // used to live. CSS scales it down to the panel width (1280×720
+  // logical → ~720×405 rendered). Same canvas remains the
+  // CanvasTexture source for VR — both renders read from the same
+  // element, no contention.
+  const el = songSelect.getCanvasElement();
+  el.classList.add('song-select-canvas');
+  songSelectMount.appendChild(el);
+
+  // Pointer events for hover + click. Coordinates are scaled from
+  // CSS pixels back to the logical 1280×720 canvas grid the hit-rects
+  // live in.
+  const toCanvasCoords = (e: PointerEvent | MouseEvent): { x: number; y: number } => {
+    const rect = el.getBoundingClientRect();
+    return {
+      x: ((e.clientX - rect.left) / rect.width) * el.width,
+      y: ((e.clientY - rect.top) / rect.height) * el.height,
+    };
+  };
+  el.addEventListener('pointermove', (e) => {
+    const { x, y } = toCanvasCoords(e);
+    songSelect.dispatchPointerMove(x, y);
+  });
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return; // left-click only
+    const { x, y } = toCanvasCoords(e);
+    songSelect.dispatchPointerDown(x, y);
+  });
+
+  // Keyboard nav: arrows + Enter + Escape. Window-level so the player
+  // doesn't have to focus the canvas first. Skipped while typing in
+  // an input (search box) and while the overlay is hidden (chart
+  // playing) — same gates the legacy SongWheel checked.
+  window.addEventListener('keydown', (e) => {
+    if (overlay.style.display === 'none') return;
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+    if (songSelect.dispatchKey(e)) e.preventDefault();
+  });
+}
+
+sortBtn.addEventListener('click', () => {
+  if (!songSelect) return;
+  const mode = songSelect.cycleSortMode();
+  sortBtn.textContent = `Sort: ${mode}`;
+});
+
+// `/` opens the search box; typing filters live; Esc clears + closes.
+// While focused, the search box swallows arrow keys (text caret nav),
+// so the canvas's keydown handler above no-ops thanks to the
+// INPUT-tagName guard.
+searchBox.addEventListener('input', () => {
+  songSelect?.setSearchQuery(searchBox.value);
+});
+searchBox.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeSearch();
+  } else if (e.key === 'Enter') {
+    // Enter during search commits the currently-focused result and
+    // closes the box. Keep the filter applied so the player sees
+    // the state their selection came from; cleared on next open.
+    e.preventDefault();
+    searchBox.blur();
+  }
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key !== '/') return;
+  const target = e.target as HTMLElement | null;
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+  if (overlay.style.display === 'none') return;
+  e.preventDefault();
+  openSearch();
+});
+
 // Song-select preview audio: rides on the Game's AudioContext so a single
 // user gesture resumes both, and the browser's AudioContext cap doesn't
 // bite. The loader closes over `library` so switching folders picks up
@@ -271,14 +304,6 @@ const previewPlayer: PreviewPlayer | null = activeGame
 /** Cancels an outstanding 600 ms preview-start timer. DTXmania's canonical
  * delay — prevents preview thrash while the player scrolls the wheel. */
 let pendingPreviewTimer: number | null = null;
-/** Object URL currently assigned to preimageEl; revoked when replaced. */
-let currentPreimageUrl: string | null = null;
-
-function onFocusChanged(): void {
-  const song = songWheel.focusedSong();
-  schedulePreview(song);
-  void updatePreimage(song);
-}
 
 function schedulePreview(song: SongEntry | null): void {
   if (pendingPreviewTimer !== null) {
@@ -294,37 +319,6 @@ function schedulePreview(song: SongEntry | null): void {
     // driven by config.volumePreview) governs the actual loudness.
     void previewPlayer.play(path, 1);
   }, 600);
-}
-
-async function updatePreimage(song: SongEntry | null): Promise<void> {
-  if (!song?.preimage || !library) {
-    clearPreimage();
-    return;
-  }
-  const path = joinPath(song.folderPath, song.preimage);
-  try {
-    const buf = await library.backend.readFile(path);
-    // focus may have moved while we were loading — abort if stale
-    if (songWheel.focusedSong() !== song) return;
-    const blob = new Blob([buf.slice(0)]);
-    const url = URL.createObjectURL(blob);
-    if (currentPreimageUrl) URL.revokeObjectURL(currentPreimageUrl);
-    currentPreimageUrl = url;
-    preimageEl.src = url;
-    preimageEl.classList.add('visible');
-  } catch (e) {
-    console.warn('[preimage] load failed', path, e);
-    clearPreimage();
-  }
-}
-
-function clearPreimage(): void {
-  preimageEl.classList.remove('visible');
-  preimageEl.removeAttribute('src');
-  if (currentPreimageUrl) {
-    URL.revokeObjectURL(currentPreimageUrl);
-    currentPreimageUrl = null;
-  }
 }
 
 interface Library {
@@ -348,7 +342,8 @@ forgetBtn.addEventListener('click', () =>
     // dropping the folder means dropping its score history too.
     await clearChartRecords().catch(() => {});
     library = null;
-    songWheel.setRoot(null);
+    songSelect?.setRoot(null);
+    activeGame?.hideSongSelect();
     forgetBtn.style.display = 'none';
     rescanBtn.style.display = 'none';
     pickBtn.textContent = 'Pick folder';
@@ -658,7 +653,13 @@ function applyLibrary(
   pickBtn.textContent = 'Change folder';
   forgetBtn.style.display = 'inline-block';
   rescanBtn.style.display = 'inline-block';
-  songWheel.setRoot(index.root);
+  // Drive the canvas: setRoot updates the entry list in place; show()
+  // (via showSongSelectForActive) lights up the panel and hooks up
+  // the preview-audio + chart-launch callbacks. Skip the show() if a
+  // chart is already playing — the player's mid-song and the canvas
+  // shouldn't grab focus until they return.
+  songSelect?.setRoot(index.root);
+  if (!activeGame?.hasChart) showSongSelectForActive();
   renderScanErrors(index.errors);
   refreshXrButton();
 }
@@ -690,11 +691,6 @@ async function attachRecordsToIndex(index: SongIndex): Promise<void> {
     }
   };
   visit(index.root);
-}
-
-// DTXMania stores #DLEVEL as 0..1000 (three digits shown as e.g. "5.62").
-function formatLevel(dlevel: number): string {
-  return (dlevel / 100).toFixed(2);
 }
 
 function renderScanErrors(errors: { path: string; message: string }[]): void {
@@ -764,15 +760,17 @@ async function launchGame(
   }
   const startOpts: Parameters<Game['loadAndStart']>[1] = {
     onRestart: () => {
-      if (game.inXR) {
-        // In VR: re-show the menu panel so the player can pick again without
-        // taking off the headset.
-        showVrMenuForActive(fs);
-      } else {
+      // Same call on desktop and VR — Game.showSongSelect both (a)
+      // hides the playfield (no-op on desktop) and (b) lights up the
+      // canvas plane / DOM canvas. The caller-supplied onExit is
+      // session.end() which is a no-op outside an XRSession, so the
+      // desktop "Esc" path still relies on overlay.style.display.
+      if (!game.inXR) {
         overlay.style.display = 'grid';
         setStatus('Pick another chart or change folder.');
         refreshXrButton();
       }
+      showSongSelectForActive(fs);
     },
     // Finish-event plumbing: only scanner-backed charts persist records.
     // The bundled demo has no stable ID so we skip it. Practice runs
@@ -821,7 +819,7 @@ async function launchGame(
   }
   previewPlayer?.stop(120);
   try {
-    game.hideVrMenu();
+    game.hideSongSelect();
     await game.loadAndStart(dtxText, startOpts);
     overlay.style.display = 'none';
     refreshXrButton();
@@ -831,10 +829,15 @@ async function launchGame(
   }
 }
 
-function showVrMenuForActive(fs?: GameFsContext): void {
+function showSongSelectForActive(fs?: GameFsContext): void {
   if (!activeGame || !library) return;
   const lib = library;
-  activeGame.showVrMenu(
+  // Footer mode is keyed off inXR rather than baked into desktop boot:
+  // a desktop session that enters and exits VR needs the footer to
+  // come and go each time, and a desktop boot then upgraded to VR
+  // would otherwise stay footer-less inside the headset.
+  songSelect?.setDesktopMode(!activeGame.inXR);
+  activeGame.showSongSelect(
     lib.root,
     (pick) => {
       run(async () => {
@@ -867,23 +870,23 @@ function showVrMenuForActive(fs?: GameFsContext): void {
         // Stop the preview clip so its tail doesn't overlap the metronome
         // clicks while the player is listening for beats.
         schedulePreview(null);
-        activeGame.hideVrMenu();
+        activeGame.hideSongSelect();
         activeGame.showVrCalibrate((offsetMs) => {
           if (offsetMs !== null) {
             saveAudioOffsetMs(offsetMs);
             showToast(`Latency offset: ${Math.round(offsetMs)} ms`);
           }
           activeGame?.hideVrCalibrate();
-          showVrMenuForActive(fs);
+          showSongSelectForActive(fs);
         });
       },
       onConfig: () => {
         if (!activeGame) return;
         schedulePreview(null);
-        activeGame.hideVrMenu();
+        activeGame.hideSongSelect();
         activeGame.showVrConfig(() => {
           activeGame?.hideVrConfig();
-          showVrMenuForActive(fs);
+          showSongSelectForActive(fs);
         });
       },
     }
@@ -936,6 +939,11 @@ xrBtn.addEventListener('click', () => {
     setStatus('Exited VR.');
     overlay.style.display = 'grid';
     refreshXrButton();
+    // Re-bring up the desktop canvas: Game.enterXR's onEnded already
+    // hid songSelect (so the in-VR footer wouldn't flash on the
+    // desktop overlay during teardown). showSongSelectForActive both
+    // re-shows it and flips desktopMode back on.
+    if (library && !game.hasChart) showSongSelectForActive();
   });
   overlay.style.display = 'none';
   setStatus('Entering VR…');
@@ -943,7 +951,7 @@ xrBtn.addEventListener('click', () => {
     .then(() => {
       console.info('[xr] session started');
       setStatus('In VR — use controllers to play.');
-      if (library && !game.hasChart) showVrMenuForActive();
+      if (library && !game.hasChart) showSongSelectForActive();
     })
     .catch((e) => {
       console.error('[xr] enterXR failed', e);
