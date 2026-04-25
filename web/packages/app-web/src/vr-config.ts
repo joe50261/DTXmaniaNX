@@ -8,6 +8,16 @@ import {
   type AutoPlayMap,
   type Config,
 } from './config.js';
+import {
+  clampSeatYOffset,
+  getKitPreset,
+  KIT_PRESETS,
+  SEAT_Y_OFFSET_MAX,
+  SEAT_Y_OFFSET_MIN,
+  SEAT_Y_OFFSET_SIT,
+  SEAT_Y_OFFSET_STAND,
+  SEAT_Y_OFFSET_STEP,
+} from './kit-preset.js';
 
 /**
  * In-VR settings panel — the VR-path counterpart of `config-panel.ts`.
@@ -28,12 +38,14 @@ import {
  */
 
 const PANEL_W_PX = 1024;
-// 1024×1120 (world ≈1.6m × 1.75m) fits Audio + Gameplay + Auto-play
-// (11-lane grid) + Practice + Diagnostics without overflow. The
-// previous 1024×768 clipped the last section and left no room for the
-// auto-play toggles; players reported having to leave VR to enable
-// auto-kick.
-const PANEL_H_PX = 1120;
+// 1024×1260 (world ≈1.6m × 1.97m) fits Audio + Gameplay + Drum kit +
+// Auto-play (11-lane grid) + Practice + Diagnostics + Footer without
+// overflow. Drum kit picker adds ~140 px (preset bar + description +
+// seat slider + Sit/Stand quick buttons); panel height grew to
+// match. The previous 1120 px clipped the auto-play grid's last row
+// once the Drum kit section landed above it; the unit-test sweep
+// over `__testHits()` catches further drift.
+const PANEL_H_PX = 1260;
 const PANEL_WORLD_W = 1.6;
 const PANEL_WORLD_H = (PANEL_WORLD_W * PANEL_H_PX) / PANEL_W_PX;
 const PANEL_POS = new THREE.Vector3(0, 1.55, -1.5);
@@ -370,6 +382,10 @@ export class VrConfig {
     );
 
     y += SECTION_GAP;
+    y = this.paintSection('Drum kit', y);
+    y = this.paintKitSection(y, cfg);
+
+    y += SECTION_GAP;
     y = this.paintSection('Auto-play (per lane)', y);
     y = this.paintAutoPlayGrid(y, cfg.autoPlay);
 
@@ -513,6 +529,137 @@ export class VrConfig {
       action: () => apply(!value),
     });
     return y + ROW_H;
+  }
+
+  /** Drum-kit preset picker + seat-Y offset.
+   *
+   * The preset row is a horizontal radio bar with one button per
+   * registered kit preset, rendered at full readable width because
+   * preset labels (e.g. "GITADORA Galaxy Wave") need room. The seat
+   * height slider sits below; "Sit" / "Stand" quick-set buttons map
+   * to the SIT (= 0) and STAND (~+0.5 m) constants in kit-preset.ts
+   * so a player flipping between seated practice on an arcade stool
+   * and standing-room play at home gets one-tap re-calibration. */
+  private paintKitSection(y: number, cfg: Config): number {
+    const ctx = this.ctx;
+
+    // Preset row — label on the left, segmented buttons on the right.
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = '15px ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('Preset', 60, y + 28);
+
+    const buttonsRight = PANEL_W_PX - 40;
+    const buttonsLeft = 200;
+    const gap = 8;
+    const buttonH = 36;
+    const buttonW = Math.floor(
+      (buttonsRight - buttonsLeft - gap * (KIT_PRESETS.length - 1)) /
+        KIT_PRESETS.length,
+    );
+    const buttonsTotalW = buttonW * KIT_PRESETS.length + gap * (KIT_PRESETS.length - 1);
+    let bx = buttonsRight - buttonsTotalW;
+    const by = y + (ROW_H - buttonH) / 2;
+    for (const preset of KIT_PRESETS) {
+      const isActive = cfg.kitPresetId === preset.id;
+      const idx = this.hits.length;
+      ctx.fillStyle = isActive ? '#16a34a' : '#1e293b';
+      ctx.fillRect(bx, by, buttonW, buttonH);
+      ctx.strokeStyle =
+        this.hoveredIdx === idx ? '#fbbf24' : isActive ? '#22c55e' : '#475569';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(bx + 1, by + 1, buttonW - 2, buttonH - 2);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(preset.label, bx + buttonW / 2, by + buttonH / 2 + 5);
+      this.hits.push({
+        x: bx,
+        y: by,
+        w: buttonW,
+        h: buttonH,
+        action: () => updateConfig({ kitPresetId: preset.id }),
+      });
+      bx += buttonW + gap;
+    }
+    y += ROW_H;
+
+    // Description of the currently-selected preset (muted, italics-style
+    // small print). Helps players understand why the picker matters
+    // before they switch — arcade-vs-fusion sizes aren't obvious from
+    // the labels alone.
+    const selected = getKitPreset(cfg.kitPresetId);
+    ctx.fillStyle = '#64748b';
+    ctx.font = '12px ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(selected.description, 60, y + 14);
+    y += 22;
+
+    // Seat-Y slider — −/+ step buttons identical to other sliders.
+    y = this.paintSlider(
+      y,
+      'Seat height',
+      cfg.seatYOffset,
+      SEAT_Y_OFFSET_MIN,
+      SEAT_Y_OFFSET_MAX,
+      SEAT_Y_OFFSET_STEP,
+      2,
+      (v) => updateConfig({ seatYOffset: clampSeatYOffset(v) }),
+      (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)} m`,
+    );
+
+    // Sit / Stand quick-set buttons — left-aligned next to the slider's
+    // label gutter so they read as shortcuts that DRIVE the slider above
+    // them, not as a separate setting.
+    const QW = 84;
+    const QH = 32;
+    const sitX = 60;
+    const standX = sitX + QW + gap;
+    this.drawQuickSetButton(
+      'Sit',
+      sitX,
+      y,
+      QW,
+      QH,
+      cfg.seatYOffset === SEAT_Y_OFFSET_SIT,
+      () => updateConfig({ seatYOffset: SEAT_Y_OFFSET_SIT }),
+    );
+    this.drawQuickSetButton(
+      'Stand',
+      standX,
+      y,
+      QW,
+      QH,
+      cfg.seatYOffset === SEAT_Y_OFFSET_STAND,
+      () => updateConfig({ seatYOffset: SEAT_Y_OFFSET_STAND }),
+    );
+    return y + QH + 8;
+  }
+
+  /** Pill-style "set this value" button. Highlighted when the value
+   *  it sets is currently active, so the row reads as a radio bar. */
+  private drawQuickSetButton(
+    label: string,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    isActive: boolean,
+    action: () => void,
+  ): void {
+    const ctx = this.ctx;
+    const idx = this.hits.length;
+    ctx.fillStyle = isActive ? '#0e7490' : '#1e293b';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle =
+      this.hoveredIdx === idx ? '#fbbf24' : isActive ? '#22d3ee' : '#475569';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 14px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, x + w / 2, y + h / 2 + 5);
+    this.hits.push({ x, y, w, h, action });
   }
 
   /** Per-lane auto-play grid — mirrors the DOM panel's "Auto-play (by
