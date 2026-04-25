@@ -32,8 +32,11 @@ describe('SONG_SELECT_FOOTER — song-picker footer geometry', () => {
     expect(EXIT_Y).toBeGreaterThan(0);
     expect(EXIT_Y + EXIT_H).toBeLessThanOrEqual(PANEL_H_PX);
     expect(EXIT_W).toBeGreaterThan(0);
-    // 16 px bottom margin so the button doesn't touch the panel edge.
-    expect(PANEL_H_PX - (EXIT_Y + EXIT_H)).toBeGreaterThanOrEqual(12);
+    // ≥4 px bottom margin so the button doesn't touch the panel edge.
+    // Tightened from 12 to 4 when the footer row was shrunk to share
+    // the `5_footer panel.png` chrome strip (y=690..720) and clear
+    // wheel slot 11 (y=617..665) above.
+    expect(PANEL_H_PX - (EXIT_Y + EXIT_H)).toBeGreaterThanOrEqual(4);
   });
 
   it('Utility row shares a baseline band with Exit VR (single control strip)', () => {

@@ -298,6 +298,14 @@ export class SongSelectCanvas {
     this.texture = new THREE.CanvasTexture(this.canvas);
     this.texture.minFilter = THREE.LinearFilter;
     this.texture.generateMipmaps = false;
+    // The 2D canvas is sRGB content. Three.js defaults a CanvasTexture
+    // to linear color space, which makes the VR-side render look
+    // washed-out compared to the desktop-side `<canvas>` (browser
+    // composites the latter as sRGB). Setting `colorSpace` here
+    // re-aligns the two surfaces. Affects only the texture upload
+    // path; the desktop DOM render reads from the same canvas
+    // directly and is unchanged.
+    this.texture.colorSpace = THREE.SRGBColorSpace;
 
     const mat = new THREE.MeshBasicMaterial({
       map: this.texture,

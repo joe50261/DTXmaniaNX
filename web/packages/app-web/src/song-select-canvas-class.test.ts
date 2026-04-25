@@ -271,14 +271,16 @@ describe('SongSelectCanvas — canvas-2D panel wiring', () => {
       makeDeps(),
     );
     expect(menu.getSortMode()).toBe('title');
-    // Title order: Alpha (the song), Bravo, Charlie. The first synthetic
-    // row at root is Random (no Back when at root). focusedSong reads
-    // the current focus, which after a fresh show() is on the first
-    // entry — Random — so we step focus by selecting via __testClickAt.
-    expect(menu.cycleSortMode()).toBe('artist');
-    expect(menu.getSortMode()).toBe('artist');
-    expect(menu.cycleSortMode()).toBe('bpm');
+    // Sort order mirrors C# `CActSortSongs.EOrder` (Title, Level,
+    // BestRank, PlayCount, Author) plus a web-port bpm extension at
+    // the end. SkillPoint + Date are still TODO (need aggregation /
+    // mtime).
     expect(menu.cycleSortMode()).toBe('level');
+    expect(menu.getSortMode()).toBe('level');
+    expect(menu.cycleSortMode()).toBe('bestRank');
+    expect(menu.cycleSortMode()).toBe('playCount');
+    expect(menu.cycleSortMode()).toBe('artist');
+    expect(menu.cycleSortMode()).toBe('bpm');
     expect(menu.cycleSortMode()).toBe('title');
   });
 
@@ -427,7 +429,9 @@ describe('SongSelectCanvas — canvas-2D panel wiring', () => {
     expect(sortHit).toBeTruthy();
     expect(menu.getSortMode()).toBe('title');
     menu.__testClickAt(sortHit!.x + sortHit!.w / 2, sortHit!.y + sortHit!.h / 2);
-    expect(menu.getSortMode()).toBe('artist');
+    // Cycles to the next mode in SORT_MODES — `title → level` per the
+    // canonical EOrder (see song-wheel-model SORT_MODES test).
+    expect(menu.getSortMode()).toBe('level');
   });
 
   it('setDesktopMode(true) suppresses the sort + footer hits', () => {

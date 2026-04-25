@@ -124,27 +124,30 @@ export const SCROLLBAR_Y = 120;
 export const SCROLLBAR_W = 12;
 export const SCROLLBAR_H = 492;
 
-// Web-specific footer (Settings / Calibrate / Exit VR) — DTXMania
-// proper has different chrome here, but VR users need a way out and a
-// way to reach calibrate without removing the headset, so we keep the
-// strip and reposition it for the new canvas size.
+// Web-specific footer (Settings / Calibrate / Sort / Exit VR) —
+// DTXMania proper has different chrome here, but VR users need a
+// way out and a way to reach calibrate / sort without removing the
+// headset, so we keep the strip and reposition it for the new
+// canvas size. Heights are tight so the button row sits IN the
+// `5_footer panel.png` strip (y=690..720) without clipping wheel
+// slot 11 above (anchor (996, 617), bar height 48 → ends y=665).
 export const FOOTER_EXIT_W = 200;
-export const FOOTER_EXIT_H = 50;
-export const FOOTER_UTIL_BTN_W = 180;
-export const FOOTER_UTIL_BTN_H = 36;
-export const FOOTER_MARGIN = 16;
+export const FOOTER_EXIT_H = 30;
+export const FOOTER_UTIL_BTN_W = 160;
+export const FOOTER_UTIL_BTN_H = 30;
+export const FOOTER_MARGIN = 8;
 export const FOOTER_EXIT_X = PANEL_W_PX - 40 - FOOTER_EXIT_W;
 export const FOOTER_EXIT_Y = PANEL_H_PX - FOOTER_MARGIN - FOOTER_EXIT_H;
 export const FOOTER_UTIL_BTN_Y =
   FOOTER_EXIT_Y + (FOOTER_EXIT_H - FOOTER_UTIL_BTN_H) / 2;
 export const FOOTER_CONFIG_X = 40;
-export const FOOTER_CALIB_X = FOOTER_CONFIG_X + FOOTER_UTIL_BTN_W + 16;
+export const FOOTER_CALIB_X = FOOTER_CONFIG_X + FOOTER_UTIL_BTN_W + 12;
 // Sort button sits between Calibrate and the right-side Exit VR rect.
 // In VR the player has no other surface to change sort modes, so this
 // is the canonical home (DTXMania proper exposes sort inside the
 // wheel via dedicated controller buttons).
-export const FOOTER_SORT_X = FOOTER_CALIB_X + FOOTER_UTIL_BTN_W + 16;
-export const FOOTER_HINT_BASELINE_Y = FOOTER_UTIL_BTN_Y - 14;
+export const FOOTER_SORT_X = FOOTER_CALIB_X + FOOTER_UTIL_BTN_W + 12;
+export const FOOTER_HINT_BASELINE_Y = FOOTER_UTIL_BTN_Y - 6;
 
 // Frozen view of the footer geometry, used by song-select-canvas.test.ts
 // to pin the "hint text doesn't sit under the button rectangle"
