@@ -224,6 +224,18 @@ export class XrLayerManager {
       const prevScissor = gl.getParameter(gl.SCISSOR_TEST);
       const prevVao = gl.getParameter(gl.VERTEX_ARRAY_BINDING);
       const prevTex2d = gl.getParameter(gl.TEXTURE_BINDING_2D);
+      // three.js's CanvasTexture defaults to flipY=true, so its
+      // WebGLState leaves `UNPACK_FLIP_Y_WEBGL` as true after the
+      // engine's draw — that would make our canvas land in the
+      // texture upside-down and the polyfill's quad-layer compositor
+      // (which samples `v=1` at the top of the quad in image
+      // convention) display the HUD inverted. Pin both unpack flags
+      // to the values our blit shader assumes (`flipY=false`,
+      // `premultiplyAlpha=false`) and restore afterwards.
+      const prevFlipY = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL);
+      const prevPremul = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
 
       gl.useProgram(this.program);
       gl.bindVertexArray(this.vao);
@@ -274,6 +286,8 @@ export class XrLayerManager {
       gl.bindFramebuffer(gl.FRAMEBUFFER, prevFbo as WebGLFramebuffer | null);
       gl.activeTexture(prevActive as number);
       gl.viewport(prevViewport[0]!, prevViewport[1]!, prevViewport[2]!, prevViewport[3]!);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, prevFlipY as boolean);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, prevPremul as boolean);
       if (prevDepthTest) gl.enable(gl.DEPTH_TEST);
       if (prevBlend) gl.enable(gl.BLEND);
       if (prevCull) gl.enable(gl.CULL_FACE);
