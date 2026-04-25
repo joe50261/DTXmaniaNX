@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { BoxNode, ChartEntry, SongEntry } from '@dtxmania/dtx-core';
 import { SongSelectCanvas, type SongSelectDeps } from './song-select-canvas.js';
-import { SONG_SELECT_FOOTER } from './song-select-canvas.js';
+import { SONG_SELECT_FOOTER } from './song-select-layout.js';
 
 /**
  * SongSelectCanvas is canvas-2D view code (mirrors VrConfig). Same test recipe:

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SONG_SELECT_FOOTER } from './song-select-canvas.js';
+import { SONG_SELECT_FOOTER } from './song-select-layout.js';
 
 /**
  * Geometry invariants for the in-VR song-picker footer strip.

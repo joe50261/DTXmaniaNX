@@ -17,10 +17,47 @@ import {
   pickChartForSlot,
   pickRandomSongIn,
   rowTitle,
-  WHEEL_CENTER_OFFSET,
-  WHEEL_VISIBLE_ROWS,
   type DisplayEntry,
 } from './song-wheel-model.js';
+import {
+  ARTIST_RIGHT_EDGE,
+  ARTIST_Y,
+  COMMENT_BAR_X,
+  COMMENT_BAR_Y,
+  FOOTER_CALIB_X,
+  FOOTER_CONFIG_X,
+  FOOTER_EXIT_H,
+  FOOTER_EXIT_W,
+  FOOTER_EXIT_X,
+  FOOTER_EXIT_Y,
+  FOOTER_HINT_BASELINE_Y,
+  FOOTER_UTIL_BTN_H,
+  FOOTER_UTIL_BTN_W,
+  FOOTER_UTIL_BTN_Y,
+  PANEL_H_PX,
+  PANEL_POS_Y,
+  PANEL_POS_Z,
+  PANEL_W_PX,
+  PANEL_WORLD_H,
+  PANEL_WORLD_W,
+  PREIMAGE_SIZE,
+  PREIMAGE_X,
+  PREIMAGE_Y,
+  SCROLLBAR_H,
+  SCROLLBAR_W,
+  SCROLLBAR_X,
+  SCROLLBAR_Y,
+  STATUS_X,
+  STATUS_Y,
+  WHEEL_BAR_ANCHORS,
+  WHEEL_FOCUS_INDEX,
+  WHEEL_TITLE_X_OFFSET,
+  WHEEL_VISIBLE_BARS,
+  SONG_SELECT_FOOTER,
+} from './song-select-layout.js';
+import { skinUrl } from './skin-url.js';
+
+export { SONG_SELECT_FOOTER };
 
 /**
  * In-VR song-selection panel — DTXmania Stage 05 flavour.
@@ -44,59 +81,12 @@ import {
  * about backends directly.
  */
 
-const PANEL_W_PX = 1024;
-const PANEL_H_PX = 768;
-const PANEL_WORLD_W = 1.6;
-const PANEL_WORLD_H = (PANEL_WORLD_W * PANEL_H_PX) / PANEL_W_PX;
-const PANEL_POS = new THREE.Vector3(0, 1.45, -1.5);
+const PANEL_POS = new THREE.Vector3(0, PANEL_POS_Y, PANEL_POS_Z);
 
-const WHEEL_X = 40;
-const WHEEL_W = 560;
-const WHEEL_ROW_H = 74;
-const WHEEL_TOP = 130;
-
-const COVER_X = 620;
-const COVER_Y = WHEEL_TOP;
-const COVER_SIZE = 200;
-
-const STATUS_X = COVER_X;
-const STATUS_Y = COVER_Y + COVER_SIZE + 16;
-const STATUS_W = PANEL_W_PX - STATUS_X - 40;
-
-/** Footer layout — exported so the "hint text doesn't sit under the
- * button rectangle" invariant can be asserted without a canvas. The
- * regression the constants guard against is visible in the repo's bug
- * reports: the Settings / Calibrate / Exit VR buttons were painted on
- * top of the control-hint line, making it unreadable in VR. */
-export const SONG_SELECT_FOOTER = Object.freeze({
-  PANEL_W_PX,
-  PANEL_H_PX,
-  EXIT_W: 200,
-  EXIT_H: 50,
-  UTIL_BTN_W: 180,
-  UTIL_BTN_H: 36,
-  /** Baseline of the 13-px hint text (canvas fillText y = baseline). */
-  hintBaselineY: (): number => SONG_SELECT_FOOTER.UTIL_BTN_Y - 14,
-  /** 16 px margin below the button rectangle to the bottom edge. */
-  EXIT_Y: PANEL_H_PX - 16 - 50,
-  UTIL_BTN_Y: PANEL_H_PX - 16 - 50 + (50 - 36) / 2,
-});
-
-const EXIT_W = SONG_SELECT_FOOTER.EXIT_W;
-const EXIT_H = SONG_SELECT_FOOTER.EXIT_H;
-const EXIT_X = PANEL_W_PX - 40 - EXIT_W;
-const EXIT_Y = SONG_SELECT_FOOTER.EXIT_Y;
-
-const UTIL_BTN_W = SONG_SELECT_FOOTER.UTIL_BTN_W;
-const UTIL_BTN_H = SONG_SELECT_FOOTER.UTIL_BTN_H;
-// Utility row sits on the same baseline as the Exit VR button so the
-// bottom strip reads as one control bar. Hint text is painted ABOVE
-// this row (see paintFooter) — the previous layout put hint text and
-// buttons at the same y, covering the text with the button rectangles.
-const UTIL_BTN_Y = SONG_SELECT_FOOTER.UTIL_BTN_Y;
-const CONFIG_BTN_X = 40;
-const CALIB_BTN_X = CONFIG_BTN_X + UTIL_BTN_W + 16;
-const FOOTER_HINT_Y = SONG_SELECT_FOOTER.hintBaselineY();
+// Asset filenames pulled out so a typo lands on TypeScript narrowing
+// instead of a 404. All loaded through skinUrl() — see vite.config.ts
+// for the build-time copy from Runtime/System/Graphics/.
+const ASSET_BACKGROUND = '5_background.jpg';
 
 interface ButtonHit {
   /** Canvas rectangle. */
@@ -177,6 +167,10 @@ export class SongSelectCanvas {
   private coverBitmap: ImageBitmap | null = null;
   /** Latest cover-load request token; stale responses are dropped. */
   private coverRequestId = 0;
+  /** Static skin PNGs from Runtime/System/Graphics/. Populated lazily;
+   * paint() falls back to procedural drawing for any asset that hasn't
+   * loaded yet so the panel is usable before the image set finishes. */
+  private skinAssets = new Map<string, HTMLImageElement>();
   private onPick: ((pick: SongSelectPick) => void) | null = null;
   private onExit: (() => void) | null = null;
   private shown = false;
@@ -222,6 +216,8 @@ export class SongSelectCanvas {
     this.mesh.position.copy(PANEL_POS);
     this.mesh.visible = false;
     this.scene.add(this.mesh);
+
+    void this.loadSkinAssets();
 
     for (let i = 0; i < 2; i++) {
       const controller = this.webgl.xr.getController(i);
@@ -600,114 +596,181 @@ export class SongSelectCanvas {
     }
   }
 
+  private async loadSkinAssets(): Promise<void> {
+    // Pulled out so a single 404 doesn't cascade — paint() copes with
+    // any individual asset being absent. Names mirror Runtime/Graphics
+    // exactly (including spaces) so the Vite plugin's allow-pattern
+    // hits each one. After everything resolves we trigger one paint
+    // so the panel jumps to the skinned look without waiting on
+    // another show()/focus event.
+    const names = [
+      ASSET_BACKGROUND,
+      '5_bar score.png',
+      '5_bar score selected.png',
+      '5_bar box.png',
+      '5_bar box selected.png',
+      '5_bar other.png',
+      '5_bar other selected.png',
+      '5_preimage panel.png',
+      '5_preimage default.png',
+      '5_status panel.png',
+      '5_difficulty frame.png',
+      '5_comment bar.png',
+      '5_scrollbar.png',
+    ];
+    await Promise.all(names.map((name) => this.loadOneAsset(name)));
+    if (this.shown) this.paint();
+  }
+
+  private loadOneAsset(name: string): Promise<void> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        this.skinAssets.set(name, img);
+        resolve();
+      };
+      img.onerror = () => {
+        // Missing asset is non-fatal — the matching paint helper falls
+        // back to a procedural rect. Logged once per name so we notice
+        // a typo or a build-time copy regression without spamming.
+        console.warn('[song-select] skin asset missing:', name);
+        resolve();
+      };
+      img.src = skinUrl(name);
+    });
+  }
+
+  private getAsset(name: string): HTMLImageElement | null {
+    return this.skinAssets.get(name) ?? null;
+  }
+
   private paint(): void {
     const ctx = this.ctx;
     this.hits = [];
 
-    ctx.fillStyle = '#0a0f18';
-    ctx.fillRect(0, 0, PANEL_W_PX, PANEL_H_PX);
+    this.paintBackground();
+    this.paintPreimage();
+    this.paintStatusPanel();
+    this.paintWheel();
+    this.paintCommentBar();
+    this.paintScrollbar();
+    this.paintHeaderAndBreadcrumb();
+    this.paintFooter();
+    this.paintWipBanner();
 
-    // Header
+    this.texture.needsUpdate = true;
+  }
+
+  private paintBackground(): void {
+    const ctx = this.ctx;
+    const bg = this.getAsset(ASSET_BACKGROUND);
+    if (bg) {
+      ctx.drawImage(bg, 0, 0, PANEL_W_PX, PANEL_H_PX);
+    } else {
+      ctx.fillStyle = '#0a0f18';
+      ctx.fillRect(0, 0, PANEL_W_PX, PANEL_H_PX);
+    }
+  }
+
+  private paintHeaderAndBreadcrumb(): void {
+    const ctx = this.ctx;
     ctx.fillStyle = '#e2e8f0';
-    ctx.font = 'bold 30px ui-monospace, monospace';
+    ctx.font = 'bold 26px ui-monospace, monospace';
     ctx.textAlign = 'left';
-    ctx.fillText('Song Library', 40, 52);
+    ctx.fillText('Song Library', 40, 32);
 
-    // Breadcrumb
-    ctx.font = '15px ui-monospace, monospace';
-    ctx.fillStyle = '#94a3b8';
+    ctx.font = '14px ui-monospace, monospace';
+    ctx.fillStyle = '#cbd5e1';
     ctx.fillText(
       buildBreadcrumbPath(this.currentBox)
         .map((s) => s.node.name)
         .join('  ›  '),
       40,
-      86
+      54,
     );
-
-    this.paintWheel();
-    this.paintCover();
-    this.paintStatusPanel();
-    this.paintFooter();
-
-    this.texture.needsUpdate = true;
   }
 
   private paintWheel(): void {
     const ctx = this.ctx;
     if (this.entries.length === 0) {
-      ctx.fillStyle = '#64748b';
+      ctx.fillStyle = '#cbd5e1';
       ctx.font = '16px ui-monospace, monospace';
-      ctx.fillText('Empty folder.', WHEEL_X, WHEEL_TOP + 40);
+      ctx.textAlign = 'left';
+      ctx.fillText('Empty folder.', WHEEL_BAR_ANCHORS[WHEEL_FOCUS_INDEX]!.x, WHEEL_BAR_ANCHORS[WHEEL_FOCUS_INDEX]!.y + 30);
       return;
     }
     const n = this.entries.length;
-    const centerY = WHEEL_TOP + WHEEL_CENTER_OFFSET * WHEEL_ROW_H;
-    for (let i = 0; i < WHEEL_VISIBLE_ROWS; i++) {
-      const offset = i - WHEEL_CENTER_OFFSET;
+    for (let i = 0; i < WHEEL_VISIBLE_BARS; i++) {
+      const offset = i - WHEEL_FOCUS_INDEX;
       const idx = ((this.focusIdx + offset) % n + n) % n;
       const entry = this.entries[idx]!;
-      const y = WHEEL_TOP + i * WHEEL_ROW_H;
-      this.paintWheelRow(entry, y, offset === 0, idx);
+      this.paintWheelBar(entry, i, offset === 0, idx);
     }
-    void centerY;
   }
 
-  private paintWheelRow(
+  private paintWheelBar(
     entry: DisplayEntry,
-    y: number,
+    barIdx: number,
     focused: boolean,
-    entryIdx: number
+    entryIdx: number,
   ): void {
     const ctx = this.ctx;
-    const h = WHEEL_ROW_H - 4;
+    const anchor = WHEEL_BAR_ANCHORS[barIdx]!;
+    const tex = this.getAsset(barTextureName(entry, focused));
+    const barW = tex?.width ?? 360;
+    const barH = tex?.height ?? 50;
 
-    if (focused) {
-      ctx.fillStyle = 'rgba(80, 120, 255, 0.18)';
-      ctx.fillRect(WHEEL_X, y, WHEEL_W, h);
-      ctx.strokeStyle = 'rgba(80, 120, 255, 0.55)';
+    if (tex) {
+      ctx.drawImage(tex, anchor.x, anchor.y);
+    } else {
+      // Fallback so the wheel still reads if the bar PNG didn't load.
+      ctx.fillStyle = focused ? '#3355ff' : '#1e2a55';
+      ctx.fillRect(anchor.x, anchor.y, barW, barH);
+      ctx.strokeStyle = focused ? '#fbbf24' : '#475569';
       ctx.lineWidth = 1;
-      ctx.strokeRect(WHEEL_X + 0.5, y + 0.5, WHEEL_W - 1, h - 1);
-      // Box folders with a #FONTCOLOR from box.def get a coloured left
-      // accent bar so the author's chosen palette shows up on focus.
-      if (entry.kind === 'node' && entry.node.type === 'box' && entry.node.fontColor) {
-        ctx.fillStyle = entry.node.fontColor;
-        ctx.fillRect(WHEEL_X, y, 4, h);
-      }
+      ctx.strokeRect(anchor.x + 0.5, anchor.y + 0.5, barW - 1, barH - 1);
     }
 
-    // Row is also a clickable activate target for laser rays.
+    // Box folders with a #FONTCOLOR from box.def get a coloured left
+    // accent bar so the author's chosen palette shows up on focus.
+    if (focused && entry.kind === 'node' && entry.node.type === 'box' && entry.node.fontColor) {
+      ctx.fillStyle = entry.node.fontColor;
+      ctx.fillRect(anchor.x, anchor.y, 4, barH);
+    }
+
+    // Whole bar is the laser-click activate target.
     this.hits.push({
-      x: WHEEL_X,
-      y,
-      w: WHEEL_W,
-      h,
+      x: anchor.x,
+      y: anchor.y,
+      w: barW,
+      h: barH,
       action: { kind: 'activate', entryIdx },
     });
 
     const title = rowTitle(entry);
     ctx.textAlign = 'left';
-    ctx.fillStyle = focused ? '#f1f5f9' : '#94a3b8';
+    ctx.fillStyle = focused ? '#fff' : '#e2e8f0';
     ctx.font = focused
       ? 'bold 22px ui-monospace, monospace'
       : '16px ui-monospace, monospace';
-    ctx.fillText(title, WHEEL_X + 14, y + (focused ? 32 : 26));
+    ctx.fillText(title, anchor.x + WHEEL_TITLE_X_OFFSET, anchor.y + barH * 0.62);
 
     if (!focused) return;
     if (entry.kind !== 'node' || entry.node.type !== 'song') return;
 
-    // Focused song row: chart buttons (right-aligned inside the wheel col)
-    // overlaying the bottom half of the focused cell.
+    // Focused song row: chart buttons stack just below the focus bar so
+    // the player's instrument-difficulty pick is one click away.
     const song = entry.node.entry;
     const selected = this.chartForPreferred(song);
     const btnH = 32;
     const btnW = 96;
     const btnGap = 6;
     const charts = [...song.charts].sort((a, b) => a.slot - b.slot);
-    let btnX = WHEEL_X + WHEEL_W - 14 - charts.length * (btnW + btnGap) + btnGap;
-    const btnY = y + h - btnH - 8;
+    let btnX = anchor.x + WHEEL_TITLE_X_OFFSET;
+    const btnY = anchor.y + barH + 6;
     for (const chart of charts) {
       const isSelected = chart.slot === selected.slot;
-      ctx.fillStyle = isSelected ? '#3355ff' : '#1e2a55';
+      ctx.fillStyle = isSelected ? '#3355ff' : 'rgba(30, 42, 85, 0.85)';
       ctx.fillRect(btnX, btnY, btnW, btnH);
       if (isSelected) {
         ctx.strokeStyle = '#fbbf24';
@@ -723,9 +786,6 @@ export class SongSelectCanvas {
         ctx.fillStyle = '#cbd5e1';
         ctx.fillText(`L.${(chart.drumLevel / 100).toFixed(2)}`, btnX + btnW / 2, btnY + 27);
       }
-      // Clear-lamp dot in the top-right corner, mirrors the desktop
-      // wheel. Only drawn when the chart has a record — no dot = never
-      // played.
       const lampColor = canvasLampColor(chart);
       if (lampColor) {
         ctx.fillStyle = lampColor;
@@ -745,108 +805,196 @@ export class SongSelectCanvas {
     ctx.textAlign = 'left';
   }
 
-  private paintCover(): void {
+  private paintPreimage(): void {
     const ctx = this.ctx;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
-    ctx.fillRect(COVER_X, COVER_Y, COVER_SIZE, COVER_SIZE);
+    const frame = this.getAsset('5_preimage panel.png');
+    const fallback = this.getAsset('5_preimage default.png');
+
+    // Frame first (decorative — sits behind the actual image).
+    if (frame) {
+      ctx.drawImage(frame, PREIMAGE_X - 8, PREIMAGE_Y - 8);
+    }
     if (this.coverBitmap) {
-      ctx.drawImage(this.coverBitmap, COVER_X, COVER_Y, COVER_SIZE, COVER_SIZE);
+      ctx.drawImage(
+        this.coverBitmap,
+        PREIMAGE_X,
+        PREIMAGE_Y,
+        PREIMAGE_SIZE,
+        PREIMAGE_SIZE,
+      );
+    } else if (fallback) {
+      ctx.drawImage(fallback, PREIMAGE_X, PREIMAGE_Y, PREIMAGE_SIZE, PREIMAGE_SIZE);
     } else {
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.55)';
+      ctx.fillRect(PREIMAGE_X, PREIMAGE_Y, PREIMAGE_SIZE, PREIMAGE_SIZE);
       ctx.fillStyle = '#334155';
       ctx.font = '12px ui-monospace, monospace';
       ctx.textAlign = 'center';
-      ctx.fillText('(no cover)', COVER_X + COVER_SIZE / 2, COVER_Y + COVER_SIZE / 2);
+      ctx.fillText(
+        '(no cover)',
+        PREIMAGE_X + PREIMAGE_SIZE / 2,
+        PREIMAGE_Y + PREIMAGE_SIZE / 2,
+      );
       ctx.textAlign = 'left';
     }
   }
 
   private paintStatusPanel(): void {
     const ctx = this.ctx;
-    const song = this.focusedSong();
-    if (!song) return;
+    const body = this.getAsset('5_status panel.png');
+    if (body) {
+      ctx.drawImage(body, STATUS_X, STATUS_Y);
+    } else {
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
+      ctx.fillRect(STATUS_X, STATUS_Y, 380, 320);
+    }
 
+    const song = this.focusedSong();
+    if (!song) {
+      drawWipLabel(ctx, '(focus a song)', STATUS_X + 20, STATUS_Y + 30);
+      return;
+    }
+
+    // 5 difficulties × 3 instruments grid. Geometry mirrors C# Stage 05
+    // (`5_difficulty frame.png` cells, y-baseline = 391 + (4-i)*60 - 2),
+    // but most data slots are still wired to the per-row drum-level
+    // only — Guitar/Bass + skill % stay [WIP] until the chart layer
+    // exposes them.
     const slotsUsed = new Map<number, ChartEntry>();
     for (const c of song.charts) slotsUsed.set(c.slot, c);
     const selected = this.chartForPreferred(song);
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
-    ctx.fillRect(STATUS_X, STATUS_Y, STATUS_W, 310);
-
-    let y = STATUS_Y + 22;
-    ctx.font = '13px ui-monospace, monospace';
-    for (let slot = 0; slot < DIFFICULTY_SLOT_LABELS.length; slot++) {
-      const chart = slotsUsed.get(slot);
-      const isSelected = chart !== undefined && chart.slot === selected.slot;
-      if (isSelected) {
-        ctx.fillStyle = 'rgba(251, 191, 36, 0.15)';
-        ctx.fillRect(STATUS_X + 6, y - 14, STATUS_W - 12, 20);
+    const frame = this.getAsset('5_difficulty frame.png');
+    const cellW = frame?.width ?? 110;
+    const cellH = frame?.height ?? 56;
+    const PARTS = ['DR', 'GT', 'BS'] as const;
+    for (let i = 0; i < 5; i++) {
+      const cellY = STATUS_Y + 41 + (4 - i) * 60 - 2;
+      for (let p = 0; p < PARTS.length; p++) {
+        const cellX = STATUS_X + 5 + p * (cellW + 4);
+        if (frame) {
+          ctx.drawImage(frame, cellX, cellY);
+        } else {
+          ctx.strokeStyle = '#475569';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(cellX + 0.5, cellY + 0.5, cellW - 1, cellH - 1);
+        }
+        const chart = p === 0 ? slotsUsed.get(i) : undefined;
+        const isSelected = chart !== undefined && chart.slot === selected.slot;
+        if (isSelected) {
+          ctx.fillStyle = 'rgba(251, 191, 36, 0.18)';
+          ctx.fillRect(cellX, cellY, cellW, cellH);
+        }
+        ctx.fillStyle = chart ? '#fff' : '#475569';
+        ctx.font = 'bold 13px ui-monospace, monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(PARTS[p]!, cellX + 6, cellY + 16);
+        if (p === 0 && chart?.drumLevel !== undefined && chart.drumLevel > 0) {
+          ctx.font = 'bold 18px ui-monospace, monospace';
+          ctx.fillStyle = '#fde047';
+          ctx.textAlign = 'right';
+          ctx.fillText(
+            (chart.drumLevel / 100).toFixed(2),
+            cellX + cellW - 6,
+            cellY + cellH - 8,
+          );
+        } else if (p > 0 && chart) {
+          drawWipLabel(ctx, '[WIP]', cellX + 6, cellY + cellH - 6);
+        }
       }
-      ctx.fillStyle = chart ? '#cbd5e1' : '#475569';
-      ctx.textAlign = 'left';
-      ctx.fillText(chart?.label ?? DIFFICULTY_SLOT_LABELS[slot]!, STATUS_X + 12, y);
-      ctx.textAlign = 'right';
-      ctx.fillText(
-        chart?.drumLevel !== undefined && chart.drumLevel > 0
-          ? `L.${(chart.drumLevel / 100).toFixed(2)}`
-          : '—',
-        STATUS_X + STATUS_W - 12,
-        y
-      );
-      y += 24;
     }
 
-    // Meta block
-    y += 8;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
-    ctx.fillRect(STATUS_X + 12, y - 10, STATUS_W - 24, 1);
-    y += 12;
+    // BPM block under the grid (canonical position 32, 258 sits under
+    // the skill point area; we render under the panel for now and tag
+    // [WIP] until the panel-internal layout is completed).
+    const bpm = song.bpm ? Math.round(song.bpm).toString() : '—';
+    ctx.font = 'bold 16px ui-monospace, monospace';
+    ctx.fillStyle = '#fff';
     ctx.textAlign = 'left';
-    const lines: Array<[string, string | undefined]> = [
-      ['Best', formatBestRecordLine(selected)],
-      ['Artist', song.artist],
-      ['Genre', song.genre],
-      ['BPM', song.bpm ? Math.round(song.bpm).toString() : undefined],
-    ];
-    for (const [k, v] of lines) {
-      if (!v) continue;
-      ctx.fillStyle = '#64748b';
-      ctx.fillText(k, STATUS_X + 12, y);
-      ctx.fillStyle = '#cbd5e1';
-      ctx.fillText(truncate(v, 24), STATUS_X + 70, y);
-      y += 20;
+    ctx.fillText(`BPM ${bpm}`, STATUS_X + 8, STATUS_Y + 312);
+
+    drawWipLabel(ctx, '[WIP] skill % / gauge / perf history', STATUS_X + 8, STATUS_Y + 336);
+  }
+
+  private paintCommentBar(): void {
+    const ctx = this.ctx;
+    const song = this.focusedSong();
+    const bar = this.getAsset('5_comment bar.png');
+    if (bar) {
+      ctx.drawImage(bar, COMMENT_BAR_X, COMMENT_BAR_Y);
+    }
+    // Artist name (right-aligned at the canonical position).
+    if (song?.artist) {
+      ctx.font = '20px ui-monospace, monospace';
+      ctx.fillStyle = '#fde047';
+      ctx.textAlign = 'right';
+      ctx.fillText(song.artist, ARTIST_RIGHT_EDGE, ARTIST_Y);
+    }
+    // Comment text — scrolling animation is [WIP] until C3.
+    if (song?.comment) {
+      ctx.font = '14px ui-monospace, monospace';
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'left';
+      ctx.fillText(truncate(song.comment, 70), COMMENT_BAR_X + 123, COMMENT_BAR_Y + 82);
+    } else {
+      drawWipLabel(ctx, '[WIP] comment scroll', COMMENT_BAR_X + 123, COMMENT_BAR_Y + 82);
+    }
+  }
+
+  private paintScrollbar(): void {
+    const ctx = this.ctx;
+    const tex = this.getAsset('5_scrollbar.png');
+    if (tex) {
+      ctx.drawImage(tex, SCROLLBAR_X, SCROLLBAR_Y);
+    } else {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.fillRect(SCROLLBAR_X, SCROLLBAR_Y, SCROLLBAR_W, SCROLLBAR_H);
+    }
+    // Thumb position: focusIdx / entries.length × track height.
+    if (this.entries.length > 0) {
+      const ratio = this.focusIdx / this.entries.length;
+      const thumbY = SCROLLBAR_Y + Math.round(ratio * (SCROLLBAR_H - 12));
+      ctx.fillStyle = '#fde047';
+      ctx.fillRect(SCROLLBAR_X, thumbY, SCROLLBAR_W, 12);
     }
   }
 
   private paintFooter(): void {
     const ctx = this.ctx;
-    ctx.fillStyle = '#64748b';
+    ctx.fillStyle = '#cbd5e1';
     ctx.font = '13px ui-monospace, monospace';
     ctx.textAlign = 'left';
     ctx.fillText(
       'Stick: ↕ browse  · ↔ difficulty    ·    Trigger: play / enter    ·    Squeeze: back',
       40,
-      FOOTER_HINT_Y
+      FOOTER_HINT_BASELINE_Y,
     );
 
     // Exit VR
-    const hovered = this.hoveredIdx >= 0 && this.hits[this.hoveredIdx]?.action.kind === 'exit';
+    const hovered =
+      this.hoveredIdx >= 0 && this.hits[this.hoveredIdx]?.action.kind === 'exit';
     ctx.fillStyle = hovered ? '#dc2626' : '#374151';
-    ctx.fillRect(EXIT_X, EXIT_Y, EXIT_W, EXIT_H);
+    ctx.fillRect(FOOTER_EXIT_X, FOOTER_EXIT_Y, FOOTER_EXIT_W, FOOTER_EXIT_H);
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 16px ui-monospace, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('Exit VR', EXIT_X + EXIT_W / 2, EXIT_Y + EXIT_H / 2 + 6);
-    this.hits.push({ x: EXIT_X, y: EXIT_Y, w: EXIT_W, h: EXIT_H, action: { kind: 'exit' } });
+    ctx.fillText(
+      'Exit VR',
+      FOOTER_EXIT_X + FOOTER_EXIT_W / 2,
+      FOOTER_EXIT_Y + FOOTER_EXIT_H / 2 + 6,
+    );
+    this.hits.push({
+      x: FOOTER_EXIT_X,
+      y: FOOTER_EXIT_Y,
+      w: FOOTER_EXIT_W,
+      h: FOOTER_EXIT_H,
+      action: { kind: 'exit' },
+    });
 
-    // Utility row: Settings + Calibrate. Each is drawn only if a handler
-    // is wired; callers can hide either without code churn.
     if (this.deps?.onConfig) {
-      this.paintUtilityButton('Settings', CONFIG_BTN_X, 'config');
+      this.paintUtilityButton('Settings', FOOTER_CONFIG_X, 'config');
     }
     if (this.deps?.onCalibrate) {
-      // Offset X if Settings isn't rendered so Calibrate doesn't float
-      // in the middle of the row.
-      const x = this.deps?.onConfig ? CALIB_BTN_X : CONFIG_BTN_X;
+      const x = this.deps?.onConfig ? FOOTER_CALIB_X : FOOTER_CONFIG_X;
       this.paintUtilityButton('Calibrate Latency', x, 'calibrate');
     }
   }
@@ -854,28 +1002,77 @@ export class SongSelectCanvas {
   private paintUtilityButton(
     label: string,
     x: number,
-    actionKind: 'config' | 'calibrate'
+    actionKind: 'config' | 'calibrate',
   ): void {
     const ctx = this.ctx;
     const hovered =
       this.hoveredIdx >= 0 && this.hits[this.hoveredIdx]?.action.kind === actionKind;
     ctx.fillStyle = hovered ? '#2563eb' : '#1e293b';
-    ctx.fillRect(x, UTIL_BTN_Y, UTIL_BTN_W, UTIL_BTN_H);
+    ctx.fillRect(x, FOOTER_UTIL_BTN_Y, FOOTER_UTIL_BTN_W, FOOTER_UTIL_BTN_H);
     ctx.strokeStyle = '#475569';
     ctx.lineWidth = 1;
-    ctx.strokeRect(x + 0.5, UTIL_BTN_Y + 0.5, UTIL_BTN_W - 1, UTIL_BTN_H - 1);
+    ctx.strokeRect(
+      x + 0.5,
+      FOOTER_UTIL_BTN_Y + 0.5,
+      FOOTER_UTIL_BTN_W - 1,
+      FOOTER_UTIL_BTN_H - 1,
+    );
     ctx.fillStyle = '#cbd5e1';
     ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(label, x + UTIL_BTN_W / 2, UTIL_BTN_Y + UTIL_BTN_H / 2 + 5);
+    ctx.fillText(
+      label,
+      x + FOOTER_UTIL_BTN_W / 2,
+      FOOTER_UTIL_BTN_Y + FOOTER_UTIL_BTN_H / 2 + 5,
+    );
     this.hits.push({
       x,
-      y: UTIL_BTN_Y,
-      w: UTIL_BTN_W,
-      h: UTIL_BTN_H,
+      y: FOOTER_UTIL_BTN_Y,
+      w: FOOTER_UTIL_BTN_W,
+      h: FOOTER_UTIL_BTN_H,
       action: { kind: actionKind },
     });
   }
+
+  private paintWipBanner(): void {
+    const ctx = this.ctx;
+    ctx.font = '12px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(251, 191, 36, 0.85)';
+    ctx.textAlign = 'right';
+    ctx.fillText(
+      'Song Select · WIP — aligning to DTXMania design',
+      PANEL_W_PX - 20,
+      24,
+    );
+  }
+}
+
+/** Picks the bar texture filename for a wheel entry, distinguishing
+ * Score (regular songs), Box (sub-folders / BACKBOX), and Other
+ * (RANDOM, etc.). Mirrors `EBarType` in `CActSelectSongList`. */
+function barTextureName(entry: DisplayEntry, focused: boolean): string {
+  const suffix = focused ? ' selected' : '';
+  if (entry.kind === 'node' && entry.node.type === 'song') {
+    return `5_bar score${suffix}.png`;
+  }
+  if (entry.kind === 'node' && entry.node.type === 'box') {
+    return `5_bar box${suffix}.png`;
+  }
+  return `5_bar other${suffix}.png`;
+}
+
+function drawWipLabel(
+  ctx: CanvasRenderingContext2D,
+  label: string,
+  x: number,
+  y: number,
+): void {
+  ctx.save();
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.fillStyle = 'rgba(251, 191, 36, 0.85)';
+  ctx.textAlign = 'left';
+  ctx.fillText(label, x, y);
+  ctx.restore();
 }
 
 /** Canvas palette for lamp dots. Matches the DOM palette except the
