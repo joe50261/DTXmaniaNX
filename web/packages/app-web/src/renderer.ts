@@ -6,6 +6,7 @@ import { CHIP_ATLAS_Y, CHIP_ATLAS_H, chipRect } from './chip-atlas.js';
 import { JUDGE_ROWS, JUDGE_SPRITE_W, JUDGE_SPRITE_H } from './judge-atlas.js';
 import { linearFadeIn, linearFadeOut, padBounceOffset } from './renderer-math.js';
 import { HudText } from './hud-text.js';
+import { XrLayerManager } from './xr-layer-manager.js';
 import type { JudgmentKind, Rank } from '@dtxmania/dtx-core';
 import type { LaneValue } from '@dtxmania/input';
 
@@ -180,6 +181,13 @@ export class Renderer {
 
   /** XR session (null when in desktop ortho mode). */
   private xrSession: XRSession | null = null;
+  /** Owns the XRWebGLBinding and per-panel quad layers. Active only
+   * when the session negotiated 'layers' AND we successfully created
+   * at least one panel layer. Falls back to mesh rendering otherwise. */
+  private readonly xrLayers = new XrLayerManager();
+  /** Latest XRFrame from setAnimationLoop's second arg, used by the
+   * layer manager's per-frame blit. Null in desktop mode. */
+  private xrFrame: XRFrame | null = null;
 
   /** Per-frame tick from the owner (runs BEFORE the WebGL draw). XR-safe. */
   private tickCallback: (() => void) | null = null;
@@ -243,8 +251,11 @@ export class Renderer {
 
     // Drive the render loop. setAnimationLoop is XR-safe (uses XR frame pacing
     // when a session is active and rAF otherwise). The tick callback fires
-    // before each render so game logic stays XR-compatible.
-    this.webgl.setAnimationLoop(() => {
+    // before each render so game logic stays XR-compatible. The frame arg
+    // is the live XRFrame (null in desktop mode); we stash it so the layer
+    // manager's blit pass can call binding.getSubImage(layer, frame).
+    this.webgl.setAnimationLoop((_time, frame) => {
+      this.xrFrame = frame ?? null;
       this.tickCallback?.();
       this.renderFrame();
     });
@@ -433,6 +444,13 @@ export class Renderer {
     this.animatePadHits();
     const cam = this.xrSession ? this.webgl.xr.getCamera() : this.orthoCamera;
     this.webgl.render(this.scene, cam);
+    // Composition-layer blit must come AFTER three's draw so we
+    // observe the layer's color texture in the same frame as the
+    // projection layer. resetState() inside the blit puts three's
+    // GL state cache back in sync for the next frame.
+    if (this.xrFrame && this.xrLayers.isActive()) {
+      this.xrLayers.blit(this.xrFrame);
+    }
   }
 
   /**
@@ -478,7 +496,11 @@ export class Renderer {
   async enterXR(onEnded: () => void): Promise<void> {
     if (!navigator.xr) throw new Error('WebXR not available in this browser');
     const session = await navigator.xr.requestSession('immersive-vr', {
-      optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
+      // 'layers' opts the runtime into composition-layer rendering;
+      // when accepted, three.js creates an XRProjectionLayer (visible
+      // through renderer.xr.getBaseLayer()) and we add Quad layers on
+      // top via XrLayerManager. Quest 3 advertises this since OS v60.
+      optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers'],
     });
     await this.webgl.xr.setSession(session);
     this.xrSession = session;
@@ -489,8 +511,31 @@ export class Renderer {
     this.playfield.scale.setScalar(xrScale);
     this.playfield.position.set(0, 1.6, -2.0);
 
+    // Try to promote the HUD plane to a composition layer. The mesh
+    // stays in the scene (zero opacity) so raycasting and the desktop
+    // ortho draw still work; if registerPanel returns false, the mesh
+    // remains visible and we keep the original textured-quad path.
+    try {
+      const refSpace = await session.requestReferenceSpace('local-floor');
+      if (this.xrLayers.attach(this.webgl, session)) {
+        const heightMeters = 2.4 * (CANVAS_H / CANVAS_W);
+        this.xrLayers.registerPanel({
+          canvas: this.hud,
+          mesh: this.hudMesh,
+          refSpace,
+          position: { x: 0, y: 1.6, z: -2.0 },
+          widthMeters: 2.4,
+          heightMeters,
+        });
+      }
+    } catch (err) {
+      console.warn('[xr] layer promotion failed; using mesh path', err);
+    }
+
     session.addEventListener('end', () => {
+      this.xrLayers.dispose();
       this.xrSession = null;
+      this.xrFrame = null;
       this.playfield.scale.setScalar(1);
       this.playfield.position.set(0, 0, 0);
       onEnded();
