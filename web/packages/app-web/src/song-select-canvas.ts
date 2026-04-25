@@ -523,43 +523,55 @@ export class SongSelectCanvas {
   /** Desktop pointer-down (click). Returns `true` if the click landed
    * on a hit-rect.
    *
-   * Semantics differ from the XR trigger path: an XR trigger says
-   * "do whatever I'm pointing at right now" (point-and-shoot, the
-   * VR norm). A desktop click on a wheel row should *only move focus*
-   * the first time and only activate when the player clicks the
-   * already-focused row — that's the long-standing DOM SongWheel
-   * behaviour and prevents an accidental click-while-skimming from
-   * launching a chart. Footer / chart-button hits still fire
-   * immediately. */
+   * Wheel-row hits use a "click to focus, click again to activate"
+   * pattern — see `applyHitWithFocusJump`. Footer hits fire
+   * immediately. The XR trigger path goes through the same helper so
+   * the two input surfaces never disagree. */
   dispatchPointerDown(px: number, py: number): boolean {
     if (!this.shown) return false;
     const idx = findButtonAtPoint(this.hits, px, py);
     if (idx < 0) return false;
-    const hit = this.hits[idx]!;
-    if (hit.action.kind === 'activate' && hit.action.entryIdx !== this.focusIdx) {
-      // Move focus only — second click on the same row activates.
-      const delta = hit.action.entryIdx - this.focusIdx;
-      this.focusIdx = hit.action.entryIdx;
-      this.wheelScroll = startWheelScroll(this.wheelScroll, Math.abs(delta) === 1 ? (delta > 0 ? 1 : -1) : 0);
-      this.onFocusedSongChanged();
-      void this.loadCoverForFocused();
-      this.paint();
-      return true;
-    }
-    this.invokeHit(hit);
+    this.applyHitWithFocusJump(this.hits[idx]!);
     return true;
   }
 
+  /** Shared between the desktop pointer click and the XR trigger
+   * pull. When the hit is a wheel row that's NOT currently focused,
+   * we move focus only — the second click/trigger on the
+   * already-focused row activates. Footer / sort / exit hits fire on
+   * the first press regardless.
+   *
+   * Without this both surfaces had a "point-and-shoot" feel where the
+   * tiniest aim-and-trigger jumped the player into a chart they
+   * weren't looking at. The two-step pattern matches the long-
+   * standing DOM SongWheel behaviour. */
+  private applyHitWithFocusJump(hit: ButtonHit): void {
+    if (hit.action.kind === 'activate' && hit.action.entryIdx !== this.focusIdx) {
+      const delta = hit.action.entryIdx - this.focusIdx;
+      this.focusIdx = hit.action.entryIdx;
+      this.wheelScroll = startWheelScroll(
+        this.wheelScroll,
+        Math.abs(delta) === 1 ? (delta > 0 ? 1 : -1) : 0,
+      );
+      this.onFocusedSongChanged();
+      void this.loadCoverForFocused();
+      this.paint();
+      return;
+    }
+    this.invokeHit(hit);
+  }
+
   /** Test-only: fire the action of whichever button's rect covers
-   * (px, py) on the panel canvas. Mirrors what tick() does once it
-   * projects a controller ray into panel UV space — same code path
-   * reached from a unit test without standing up an XRSession. */
+   * (px, py) on the panel canvas. Routes through the same
+   * focus-jump/activate helper the desktop pointer click and the XR
+   * trigger pull both use, so a test exercises the production
+   * semantics rather than a stripped-down shortcut. */
   __testClickAt(px: number, py: number): boolean {
     const hit = this.hits.find(
       (h) => px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h,
     );
     if (!hit) return false;
-    this.invokeHit(hit);
+    this.applyHitWithFocusJump(hit);
     return true;
   }
 
@@ -671,8 +683,15 @@ export class SongSelectCanvas {
       const squeezed = src?.gamepad?.buttons[1]?.pressed ?? false;
       if (pressed && !this.wasPressed[i]) {
         if (rayHitIdx >= 0) {
-          this.invokeHit(this.hits[rayHitIdx]!);
+          // Trigger semantics match desktop pointer click: pulling
+          // trigger on a non-focused row jumps focus first; the
+          // second pull on the same row activates. Footer/sort hits
+          // fire immediately. See applyHitWithFocusJump for the why.
+          this.applyHitWithFocusJump(this.hits[rayHitIdx]!);
         } else {
+          // Free-aim trigger pull (laser missed every rect) just
+          // activates the currently focused entry — back-compat with
+          // the "trigger anywhere = play this song" muscle memory.
           this.activateFocused();
         }
       }
@@ -956,7 +975,14 @@ export class SongSelectCanvas {
   }
 
   private paint(): void {
-    const ctx = this.ctx;
+    // Snapshot which wheel entry the laser/cursor is hovering BEFORE
+    // we clear the hit-rect list. The new hits get rebuilt from
+    // scratch each paint, so hoveredIdx (which indexes the previous
+    // paint's hits) is otherwise unusable for cross-paint state. The
+    // snapshot lets paintWheelBar give the targeted-but-not-focused
+    // row a visible hover overlay so the player can see where their
+    // laser is pointing.
+    const hoveredEntryIdx = this.snapshotHoveredEntryIdx();
     this.hits = [];
 
     this.paintBackground();
@@ -967,13 +993,20 @@ export class SongSelectCanvas {
     // order paints the wheel ON TOP so the focused bar punches
     // through the comment ribbon.
     this.paintCommentBar();
-    this.paintWheel();
+    this.paintWheel(hoveredEntryIdx);
     this.paintScrollbar();
     this.paintHeaderAndBreadcrumb();
     if (!this.desktopMode) this.paintFooter();
     this.paintWipBanner();
 
     this.texture.needsUpdate = true;
+  }
+
+  private snapshotHoveredEntryIdx(): number {
+    if (this.hoveredIdx < 0) return -1;
+    const hit = this.hits[this.hoveredIdx];
+    if (!hit) return -1;
+    return hit.action.kind === 'activate' ? hit.action.entryIdx : -1;
   }
 
   private paintBackground(): void {
@@ -1005,7 +1038,7 @@ export class SongSelectCanvas {
     );
   }
 
-  private paintWheel(): void {
+  private paintWheel(hoveredEntryIdx: number): void {
     const ctx = this.ctx;
     if (this.entries.length === 0) {
       ctx.fillStyle = '#cbd5e1';
@@ -1036,7 +1069,8 @@ export class SongSelectCanvas {
           y: lerp(from.y, target.y, progress),
         };
       }
-      this.paintWheelBar(entry, i, offset === 0, idx, anchor);
+      const hovered = idx === hoveredEntryIdx && offset !== 0;
+      this.paintWheelBar(entry, i, offset === 0, idx, anchor, hovered);
     }
   }
 
@@ -1046,6 +1080,7 @@ export class SongSelectCanvas {
     focused: boolean,
     entryIdx: number,
     anchor: BarAnchor,
+    hovered: boolean,
   ): void {
     const ctx = this.ctx;
     const tex = this.getAsset(barTextureName(entry, focused));
@@ -1061,6 +1096,19 @@ export class SongSelectCanvas {
       ctx.strokeStyle = focused ? '#fbbf24' : '#475569';
       ctx.lineWidth = 1;
       ctx.strokeRect(anchor.x + 0.5, anchor.y + 0.5, barW - 1, barH - 1);
+    }
+
+    // Laser-hover overlay on non-focused rows. The user can otherwise
+    // pull the trigger and feel like nothing changed because (a) the
+    // unfocused-row "selected" texture isn't painted and (b) the
+    // first trigger pull only moves focus rather than activating —
+    // they need to see *which* row is being targeted.
+    if (hovered) {
+      ctx.fillStyle = 'rgba(251, 191, 36, 0.20)';
+      ctx.fillRect(anchor.x, anchor.y, barW, barH);
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(anchor.x + 1, anchor.y + 1, barW - 2, barH - 2);
     }
 
     // Box folders with a #FONTCOLOR from box.def get a coloured left

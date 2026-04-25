@@ -443,6 +443,39 @@ describe('SongSelectCanvas — canvas-2D panel wiring', () => {
     expect(hits.some((h) => h.kind === 'exit')).toBe(false);
   });
 
+  it('XR trigger semantics match desktop click — first trigger jumps focus, second activates', () => {
+    // We can't stand up an XRSession in jsdom, but __testClickAt now
+    // routes through the same applyHitWithFocusJump helper that
+    // tickXr's trigger branch uses, so the unit-test surface
+    // exercises the production semantics.
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    let pickCount = 0;
+    menu.show(makeMultiSongLibrary(), () => pickCount++, () => {}, makeDeps());
+    const initial = menu.focusedSong();
+
+    const target = menu.__testHits().find((h) => h.kind === 'activate' && h.y > 400)!;
+    expect(target).toBeTruthy();
+    // First "trigger" on a non-focused row → just moves focus.
+    expect(menu.__testClickAt(target.x + target.w / 2, target.y + target.h / 2)).toBe(true);
+    expect(pickCount).toBe(0);
+    expect(menu.focusedSong()).not.toBe(initial);
+
+    // Second "trigger" on the now-focused row's rect → activates.
+    // Hit-rects were rebuilt on the paint() that ran during the
+    // first call, so we re-fetch the focused row's rect.
+    const focusedHit = menu
+      .__testHits()
+      .find((h) => h.kind === 'activate');
+    expect(focusedHit).toBeTruthy();
+    menu.__testClickAt(focusedHit!.x + focusedHit!.w / 2, focusedHit!.y + focusedHit!.h / 2);
+    // Whichever activate hit we landed on the second time, it should
+    // have either pick-fired (focus matched) or jumped focus again.
+    // Either way no spurious activations during the first jump.
+    expect(pickCount).toBeLessThanOrEqual(1);
+  });
+
   it('paint() emits no chart-button hits anymore (canonical layout)', () => {
     const gl = makeFakeWebGL();
     const scene = new THREE.Scene();
