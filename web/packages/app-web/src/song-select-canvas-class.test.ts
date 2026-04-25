@@ -476,9 +476,11 @@ describe('SongSelectCanvas — canvas-2D panel wiring', () => {
     expect(pickCount).toBeLessThanOrEqual(1);
   });
 
-  it('DR difficulty cells emit clickable hit-rects; clicking one snaps preferredSlot', () => {
-    // Build a song with two charts (slot 0 + slot 3) so we can
-    // confirm the click landed on the right slot.
+  it('DR cell click actually changes which chart subsequently launches', () => {
+    // The integration regression we're pinning: click DR slot 0 to
+    // pre-select Basic, then activate the focused song, and the
+    // chart that fires onPick should be Basic (not the default
+    // preferredSlot=4 fallback Master).
     const chart0: ChartEntry = {
       slot: 0,
       label: 'BASIC',
@@ -510,22 +512,72 @@ describe('SongSelectCanvas — canvas-2D panel wiring', () => {
     const gl = makeFakeWebGL();
     const scene = new THREE.Scene();
     const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
-    let pickCount = 0;
-    menu.show(root, () => pickCount++, () => {}, makeDeps());
+    let pickedChart: ChartEntry | null = null;
+    menu.show(
+      root,
+      (pick) => { pickedChart = pick.chart; },
+      () => {},
+      makeDeps(),
+    );
     // Move focus onto the song (past the synthetic Random row).
     menu.dispatchKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
 
-    const hits = menu.__testHits();
-    const diffHits = hits.filter((h) => h.kind === 'difficulty');
-    // Two charts → exactly two DR difficulty hit-rects.
+    const diffHits = menu.__testHits().filter((h) => h.kind === 'difficulty');
     expect(diffHits).toHaveLength(2);
+    // Default preferredSlot is 4 (DTX) — pickChartForSlot falls back
+    // to nearest-higher → Master (slot 3). So a plain Enter without
+    // touching difficulty would launch Master.
+    // Pick the BOTTOM cell (largest y) — that's slot 0 (Basic).
+    const slot0Hit = diffHits.reduce((a, b) => (b.y > a.y ? b : a));
+    expect(menu.__testClickAt(slot0Hit.x + 5, slot0Hit.y + 5)).toBe(true);
+    expect(pickedChart).toBeNull();
 
-    // Click slot 0 — preferredSlot should change, but NO chart
-    // launch fires (difficulty is selection only, not activation).
-    const slot0Hit = diffHits.find((h) => h.y > diffHits[0]!.y) ?? diffHits[0]!;
-    void slot0Hit; // y-ordering depends on layout; we just need any cell hit
-    expect(menu.__testClickAt(diffHits[0]!.x + 5, diffHits[0]!.y + 5)).toBe(true);
-    expect(pickCount).toBe(0);
+    // Now activate. The launched chart should be Basic (slot 0),
+    // NOT Master (the default).
+    menu.dispatchKey(new KeyboardEvent('keydown', { key: 'Enter' }));
+    expect(pickedChart).not.toBeNull();
+    expect(pickedChart!.slot).toBe(0);
+    expect(pickedChart!.chartPath).toBe('song/basic.dtx');
+  });
+
+  it('ArrowLeft/ArrowRight cycle through available difficulty slots', () => {
+    const chart0: ChartEntry = {
+      slot: 0, label: 'BASIC', chartPath: 'song/basic.dtx', drumLevel: 100,
+    };
+    const chart3: ChartEntry = {
+      slot: 3, label: 'MASTER', chartPath: 'song/master.dtx', drumLevel: 700,
+    };
+    const song: SongEntry = {
+      title: 'Twin-chart',
+      folderPath: 'song',
+      fromSetDef: false,
+      charts: [chart0, chart3],
+      bpm: 120,
+    };
+    const root: BoxNode = {
+      type: 'box', name: '/', path: '/', parent: null, children: [],
+    };
+    root.children.push({ type: 'song', entry: song, parent: root });
+
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    let pickedChart: ChartEntry | null = null;
+    menu.show(
+      root,
+      (pick) => { pickedChart = pick.chart; },
+      () => {},
+      makeDeps(),
+    );
+    menu.dispatchKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+
+    // Default preferredSlot=4. ArrowLeft cycles to the next-lower
+    // available slot. With charts at [0, 3], Master (slot 3) is
+    // effective → cycle -1 → Basic (slot 0).
+    menu.dispatchKey(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+    menu.dispatchKey(new KeyboardEvent('keydown', { key: 'Enter' }));
+    expect(pickedChart).not.toBeNull();
+    expect(pickedChart!.slot).toBe(0);
   });
 
   it('paint() emits no chart-button hits anymore (canonical layout)', () => {
