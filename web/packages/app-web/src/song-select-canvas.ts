@@ -456,6 +456,66 @@ export class SongSelectCanvas {
     }
   }
 
+  /** The underlying 2D canvas element. Exposed so the desktop driver
+   * can mount it into the DOM where the legacy DOM SongWheel used to
+   * live; in VR the same canvas backs a Three.js CanvasTexture, which
+   * works simultaneously without contention. */
+  getCanvasElement(): HTMLCanvasElement {
+    return this.canvas;
+  }
+
+  /** Desktop keyboard handler. Returns `true` when the event was
+   * consumed so the caller can `preventDefault()` accordingly. Mirrors
+   * the legacy `SongWheel.handleKey` semantics: arrows for focus and
+   * difficulty, Enter/Space to activate, Escape to back. */
+  dispatchKey(e: KeyboardEvent): boolean {
+    if (!this.shown) return false;
+    switch (e.key) {
+      case 'ArrowUp':
+        this.moveFocus(-1);
+        return true;
+      case 'ArrowDown':
+        this.moveFocus(1);
+        return true;
+      case 'ArrowLeft':
+        this.cycleDifficulty(-1);
+        return true;
+      case 'ArrowRight':
+        this.cycleDifficulty(1);
+        return true;
+      case 'Enter':
+      case ' ':
+        this.activateFocused();
+        return true;
+      case 'Escape':
+        this.goBack();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /** Desktop pointer-move (mouse hover). Coordinates are in the
+   * canvas's logical 1280×720 space — the caller scales `clientX/Y`
+   * against the rendered element size before passing in. */
+  dispatchPointerMove(px: number, py: number): void {
+    if (!this.shown) return;
+    const next = findButtonAtPoint(this.hits, px, py);
+    if (next === this.hoveredIdx) return;
+    this.hoveredIdx = next;
+    this.paint();
+  }
+
+  /** Desktop pointer-down (click). Returns `true` if a hit-rect was
+   * activated. Same rect-table the XR raycaster consults via tickXr. */
+  dispatchPointerDown(px: number, py: number): boolean {
+    if (!this.shown) return false;
+    const idx = findButtonAtPoint(this.hits, px, py);
+    if (idx < 0) return false;
+    this.invokeHit(this.hits[idx]!);
+    return true;
+  }
+
   /** Test-only: fire the action of whichever button's rect covers
    * (px, py) on the panel canvas. Mirrors what tick() does once it
    * projects a controller ray into panel UV space — same code path
@@ -516,21 +576,31 @@ export class SongSelectCanvas {
 
   /** Per-frame: poll laser rays (hover feedback + clickable buttons),
    * right-hand thumbstick (focus / difficulty), trigger + squeeze (activate
-   * + back). Cheap no-op when the menu is hidden. */
+   * + back). Animation timers run on every shown frame so the desktop
+   * driver's render loop sees the same fade/scroll behaviour as VR.
+   * Cheap no-op when the menu is hidden. */
   tick(): void {
     if (!this.shown) return;
-    const session = this.webgl.xr.getSession();
-    if (!session) return;
 
-    // Animation timers run once per tick. dt is wall-clock so a frame
-    // hitch doesn't stretch a fade. First tick after show() seeds
-    // lastTickMs without advancing — animations start fresh on the
-    // first paint after the panel comes up.
+    // Animation timers run once per tick regardless of XR — the desktop
+    // driver appends this canvas to the DOM and relies on the same
+    // RAF-driven tick to advance fade/scroll/wheel-slide.
     const now = performance.now();
     const dtMs = this.lastTickMs === null ? 0 : Math.max(0, now - this.lastTickMs);
     this.lastTickMs = now;
     if (dtMs > 0) this.advanceAnimations(dtMs);
 
+    const session = this.webgl.xr.getSession();
+    if (session) {
+      this.tickXr();
+    } else if (this.isAnimating()) {
+      // Desktop animation-driven repaint. XR path repaints inside
+      // tickXr (covers hover changes too).
+      this.paint();
+    }
+  }
+
+  private tickXr(): void {
     // Hover + ray-cast trigger-click
     let hovered = -1;
     for (let i = 0; i < 2; i++) {

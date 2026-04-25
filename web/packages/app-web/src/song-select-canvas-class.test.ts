@@ -326,6 +326,72 @@ describe('SongSelectCanvas — canvas-2D panel wiring', () => {
     expect(restoredHits).toBeGreaterThan(0);
   });
 
+  it('getCanvasElement returns the underlying HTMLCanvasElement', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    const el = menu.getCanvasElement();
+    expect(el).toBeInstanceOf(globalThis.HTMLCanvasElement);
+    expect(el.width).toBeGreaterThan(0);
+    expect(el.height).toBeGreaterThan(0);
+  });
+
+  it('dispatchKey: ArrowDown + ArrowUp move focus through the entry list', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    menu.show(makeMultiSongLibrary(), () => {}, () => {}, makeDeps());
+    // After ArrowDown the focused song should change. We can't peek at
+    // focusIdx but focusedSong() reflects the change.
+    const before = menu.focusedSong();
+    expect(menu.dispatchKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }))).toBe(true);
+    const after = menu.focusedSong();
+    expect(after).not.toBe(before);
+    expect(menu.dispatchKey(new KeyboardEvent('keydown', { key: 'ArrowUp' }))).toBe(true);
+    expect(menu.focusedSong()).toBe(before);
+  });
+
+  it('dispatchKey: returns false for unhandled keys', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    menu.show(makeLibrary(), () => {}, () => {}, makeDeps());
+    expect(menu.dispatchKey(new KeyboardEvent('keydown', { key: 'a' }))).toBe(false);
+    expect(menu.dispatchKey(new KeyboardEvent('keydown', { key: 'F1' }))).toBe(false);
+  });
+
+  it('dispatchKey: Enter on a focused song fires onPick', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    let pickCount = 0;
+    menu.show(makeLibrary(), () => pickCount++, () => {}, makeDeps());
+    // Move focus past Random (synthetic row) onto the first song.
+    menu.dispatchKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    menu.dispatchKey(new KeyboardEvent('keydown', { key: 'Enter' }));
+    expect(pickCount).toBe(1);
+  });
+
+  it('dispatchKey: ignored when the menu is hidden', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    expect(menu.dispatchKey(new KeyboardEvent('keydown', { key: 'ArrowDown' }))).toBe(false);
+  });
+
+  it('dispatchPointerDown fires the hit at the Exit VR button rect', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    let exitCount = 0;
+    menu.show(makeLibrary(), () => {}, () => exitCount++, makeDeps());
+    const exit = menu.__testHits().find((h) => h.kind === 'exit')!;
+    expect(menu.dispatchPointerDown(exit.x + exit.w / 2, exit.y + exit.h / 2)).toBe(true);
+    expect(exitCount).toBe(1);
+    // A click in empty space returns false and changes nothing.
+    expect(menu.dispatchPointerDown(0, 0)).toBe(false);
+  });
+
   it('hint-text baseline sits strictly above the Exit VR + utility button tops', () => {
     // Spot-check the geometry invariant at the integration layer —
     // SONG_SELECT_FOOTER.hintBaselineY() already has its own unit test,

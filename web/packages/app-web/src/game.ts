@@ -161,7 +161,10 @@ export class Game {
   private autoPlayLanes = new Set<LaneValue>();
   private bgmSources: AudioBufferSourceNode[] = [];
   private readonly xrControllers: XrControllers;
-  private readonly songSelect: SongSelectCanvas;
+  /** Exposed read-only so main.ts can mount its canvas into the
+   *  desktop overlay and wire keyboard/pointer events directly. The
+   *  Game still owns lifetime + show/hide. */
+  readonly songSelect: SongSelectCanvas;
   private readonly vrCalibrate: VrCalibrate;
   private readonly vrConfig: VrConfig;
   private readonly vrLog: VrOnScreenLog;
