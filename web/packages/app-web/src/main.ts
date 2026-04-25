@@ -214,7 +214,7 @@ function closeSearch(): void {
 }
 
 // Preload skin PNGs once at boot. Games created later reuse these textures.
-const skinPromise: Promise<SkinTextures> = loadSkin(import.meta.env.BASE_URL);
+const skinPromise: Promise<SkinTextures> = loadSkin();
 
 /**
  * Game is built eagerly (with empty skin) so the Enter-VR click handler
