@@ -52,8 +52,9 @@ is used by both the desktop DOM view and the VR canvas view, move it into
 a `*-model.ts` module that depends on nothing view-specific. The views then
 become thin subscribers. Examples:
 
-- `song-wheel-model.ts` — shared by `song-wheel.ts` (DOM) and `song-select-canvas.ts`
-  (canvas). Constants like `WHEEL_VISIBLE_ROWS`, the `DisplayEntry` type,
+- `song-wheel-model.ts` — consumed by `song-select-canvas.ts`, which renders
+  the wheel for both desktop (mounted into the overlay) and VR (CanvasTexture).
+  Constants like `WHEEL_VISIBLE_ROWS`, the `DisplayEntry` type,
   `buildDisplayEntries()`, `cycleFocus()`, `buildBreadcrumbPath()`, etc.
 
 Don't copy-paste navigation logic into the VR view "because it's shorter" —

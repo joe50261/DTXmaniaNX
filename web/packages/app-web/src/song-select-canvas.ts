@@ -190,6 +190,11 @@ export class SongSelectCanvas {
   /** Lower-cased substring filter. Same persistence reasoning as
    * `sortMode`. Empty string = no filter. */
   private searchQuery = '';
+  /** Desktop driver flips this on so the footer (Settings / Calibrate /
+   * Exit VR) and the input-hint string are skipped — the desktop overlay
+   * already exposes those controls in DOM, and "Exit VR" is meaningless
+   * outside an XR session. Default false preserves the VR layout. */
+  private desktopMode = false;
   /** Breadcrumb persisted across show/hide cycles so re-opening the
    * menu (after a song / after exit-and-re-enter VR) lands the player
    * back where they were. Stored as path string because the BoxNode
@@ -462,6 +467,17 @@ export class SongSelectCanvas {
    * works simultaneously without contention. */
   getCanvasElement(): HTMLCanvasElement {
     return this.canvas;
+  }
+
+  /** Switch the canvas's footer rendering: desktop mode hides the VR
+   * footer (Settings / Calibrate / Exit VR + the stick/trigger hint
+   * line), since the desktop overlay already exposes those controls
+   * in DOM. The wheel, status panel, preimage, comment bar, and
+   * scrollbar are unchanged. Default is VR mode. */
+  setDesktopMode(enabled: boolean): void {
+    if (enabled === this.desktopMode) return;
+    this.desktopMode = enabled;
+    if (this.shown) this.paint();
   }
 
   /** Desktop keyboard handler. Returns `true` when the event was
@@ -933,7 +949,7 @@ export class SongSelectCanvas {
     this.paintCommentBar();
     this.paintScrollbar();
     this.paintHeaderAndBreadcrumb();
-    this.paintFooter();
+    if (!this.desktopMode) this.paintFooter();
     this.paintWipBanner();
 
     this.texture.needsUpdate = true;

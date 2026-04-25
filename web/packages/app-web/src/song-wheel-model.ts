@@ -3,13 +3,15 @@ import type { BoxNode, ChartEntry, LibraryNode, SongEntry } from '@dtxmania/dtx-
 /**
  * Pure data/logic model for the song-selection wheel.
  *
- * Shared by the desktop DOM view (`song-wheel.ts`) and the canvas
- * panel view (`song-select-canvas.ts`). Nothing in this module touches DOM,
- * Three.js, or Canvas — the same concepts (wheel size, difficulty slots,
- * entry list, focus/slot cycling, sort, breadcrumb path) were previously
- * copy-pasted across both views and drifted on small details. A single
- * model keeps them in lock-step and means adding a new sort mode or
- * synthetic entry is a one-line change instead of two.
+ * Consumed by `song-select-canvas.ts`, which is the single view used
+ * for both desktop (mounted into the overlay) and VR (uploaded as a
+ * Three.js CanvasTexture). Nothing in this module touches DOM,
+ * Three.js, or Canvas — the same concepts (wheel size, difficulty
+ * slots, entry list, focus/slot cycling, sort, breadcrumb path) used
+ * to be copy-pasted between a DOM SongWheel and the canvas, and drifted
+ * on small details. A single model keeps the rendering paths in
+ * lock-step and means adding a new sort mode or synthetic entry is a
+ * one-line change.
  */
 
 /** Number of visible rows. Odd so there's one focused center row. */
