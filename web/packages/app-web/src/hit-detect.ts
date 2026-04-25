@@ -46,6 +46,17 @@ export const HIT_VELOCITY_THRESHOLD_MPS = 1.0;
  *  circle. */
 export const BD_HIT_HALF_M = 0.25;
 
+/** LP's hit zone follows the same foot-pedal-abstraction reasoning as
+ *  BD: the visual is small (size 0.18 → ±0.09 m) because it represents
+ *  a real left pedal, but Quest has no foot tracking so the player
+ *  taps it from above with a stick while watching the chart. A 9 cm
+ *  square would be far harder than the 25 cm BD zone — the asymmetry
+ *  was a real bug, players were missing LP hits while landing BD
+ *  reliably. 0.18 m (~half the BD zone, generous but smaller because
+ *  LP fires less often and is closer to surrounding pads) lands in a
+ *  middle ground. */
+export const PEDAL_HIT_HALF_M = 0.18;
+
 export interface HitDetectInput {
   /** Sample position last frame, world space. */
   prev: Vec3;
@@ -101,7 +112,11 @@ export function detectPadHit(
   threshold: number = HIT_VELOCITY_THRESHOLD_MPS,
 ): HitResult | null {
   const { prev, curr, dtSec } = input;
-  if (dtSec <= 0) return null;
+  // `!(dtSec > 0)` instead of `dtSec <= 0` so NaN rejects too — a
+  // pathological frame with a NaN delta would otherwise fall through
+  // and rely on every downstream comparison short-circuiting to false
+  // by accident.
+  if (!(dtSec > 0)) return null;
 
   // BD is special: visual is a vertical kick face, but hit detection
   // happens on a horizontal plane through pad.y (no foot tracking on
@@ -163,7 +178,11 @@ export function detectPadHit(
   // footprint to match the previous lenient behaviour — tightening
   // to a circle (sqrt(u^2+v^2) ≤ size/2) would cost edge hits and
   // wasn't requested.
-  const half = pad.size / 2;
+  //
+  // `pedal` shape (LP) gets an enlarged generous zone — same
+  // foot-pedal-abstraction reasoning as BD's `face` branch above.
+  // See PEDAL_HIT_HALF_M's comment for the rationale.
+  const half = pad.shape === 'pedal' ? PEDAL_HIT_HALF_M : pad.size / 2;
   const rel = sub(hit, pad.position);
   const u = rel.x;
   const V = padTangentV(pad.tiltDeg);

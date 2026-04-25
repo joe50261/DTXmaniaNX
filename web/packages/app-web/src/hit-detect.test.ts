@@ -6,6 +6,7 @@ import {
   HIT_VELOCITY_THRESHOLD_MPS,
   padNormal,
   padTangentV,
+  PEDAL_HIT_HALF_M,
 } from './hit-detect.js';
 import type { PadSpec } from './kit-preset.js';
 
@@ -33,6 +34,15 @@ const bassPad: PadSpec = {
   size: 0.30,
   tiltDeg: 0,
   shape: 'face',
+  stand: false,
+};
+
+const pedalPad: PadSpec = {
+  lane: Lane.LP,
+  position: { x: -0.30, y: 0.20, z: -0.25 },
+  size: 0.18,
+  tiltDeg: 0,
+  shape: 'pedal',
   stand: false,
 };
 
@@ -232,6 +242,44 @@ describe('hit-detect — bass drum face (stays horizontal-plane special case)', 
   });
 });
 
+describe('hit-detect — left pedal (foot-pedal abstraction, generous hit zone)', () => {
+  // BD already has its own generous zone; LP used to fall through to
+  // pad.size/2 (= ±9 cm), an asymmetry the PR review flagged as a
+  // real miss source. PEDAL_HIT_HALF_M expands that to a
+  // foot-pedal-like target.
+
+  it('PEDAL_HIT_HALF_M is wider than the visual half-size and narrower than BD', () => {
+    expect(PEDAL_HIT_HALF_M).toBeGreaterThan(pedalPad.size / 2);
+    expect(PEDAL_HIT_HALF_M).toBeLessThan(BD_HIT_HALF_M);
+  });
+
+  it('accepts a strike outside the visual disc but inside PEDAL_HIT_HALF_M', () => {
+    // Visual half = 0.09; PEDAL_HIT_HALF_M = 0.18. Strike at u = 0.15
+    // (outside visual) must register.
+    const r = detectPadHit(
+      {
+        prev: { x: -0.30 + 0.15, y: 0.25, z: -0.25 },
+        curr: { x: -0.30 + 0.15, y: 0.15, z: -0.25 },
+        dtSec: 0.016,
+      },
+      pedalPad,
+    );
+    expect(r).not.toBeNull();
+  });
+
+  it('rejects a strike outside PEDAL_HIT_HALF_M', () => {
+    const r = detectPadHit(
+      {
+        prev: { x: -0.30 + 0.30, y: 0.25, z: -0.25 },
+        curr: { x: -0.30 + 0.30, y: 0.15, z: -0.25 },
+        dtSec: 0.016,
+      },
+      pedalPad,
+    );
+    expect(r).toBeNull();
+  });
+});
+
 describe('hit-detect — defensive', () => {
   it('returns null when dtSec is zero or negative — pathological frame', () => {
     expect(
@@ -243,6 +291,18 @@ describe('hit-detect — defensive', () => {
     expect(
       detectPadHit(
         { prev: { x: 0, y: 0.85, z: -0.4 }, curr: { x: 0, y: 0.75, z: -0.4 }, dtSec: -0.016 },
+        flatPad,
+      ),
+    ).toBeNull();
+  });
+
+  it('returns null when dtSec is NaN — guards a clock-glitch frame from leaking through to the geometry math', () => {
+    // The previous `dtSec <= 0` guard let NaN pass (NaN comparisons are
+    // always false); the rest of the function then short-circuited to
+    // null by accident. The hardened `!(dtSec > 0)` rejects explicitly.
+    expect(
+      detectPadHit(
+        { prev: { x: 0, y: 0.85, z: -0.4 }, curr: { x: 0, y: 0.75, z: -0.4 }, dtSec: NaN },
         flatPad,
       ),
     ).toBeNull();

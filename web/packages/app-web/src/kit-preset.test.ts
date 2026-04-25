@@ -54,8 +54,14 @@ describe('kit-preset — Galaxy Wave arcade calibration', () => {
   // justification in the PR; arcade-muscle-memory transfer is the whole
   // point of this preset.
   const galaxy = getKitPreset('gitadora-galaxy-wave');
-  const find = (l: number): PadSpec =>
-    galaxy.pads.find((p) => p.lane === l)!;
+  // Surface a missing-lane regression as a clear `expect` diff
+  // ("expected pad for lane <n> to be defined") instead of a `TypeError`
+  // on the non-null assertion path.
+  const find = (l: number): PadSpec => {
+    const p = galaxy.pads.find((pad) => pad.lane === l);
+    expect(p, `Galaxy Wave preset is missing lane ${l}`).toBeDefined();
+    return p!;
+  };
 
   it('TP-65-class pads (HH/SD/Toms) are ~22 cm — the arcade rubber pad spec', () => {
     for (const lane of [Lane.HH, Lane.SD, Lane.HT, Lane.LT, Lane.FT]) {

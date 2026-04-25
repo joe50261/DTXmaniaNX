@@ -8,7 +8,7 @@ import {
   getKitPreset,
   type PadSpec,
 } from './kit-preset.js';
-import { detectPadHit, HIT_VELOCITY_THRESHOLD_MPS } from './hit-detect.js';
+import { detectPadHit } from './hit-detect.js';
 
 /**
  * VR virtual drum kit.
@@ -370,11 +370,11 @@ export class XrControllers {
         if (!c || !p) continue;
 
         for (const pad of this.currentPads) {
-          const result = detectPadHit(
-            { prev: p, curr: c, dtSec },
-            pad,
-            HIT_VELOCITY_THRESHOLD_MPS,
-          );
+          // Threshold is left at detectPadHit's default
+          // (HIT_VELOCITY_THRESHOLD_MPS) — passing it explicitly was
+          // redundant and obscured that the velocity threshold lives
+          // in the detector module.
+          const result = detectPadHit({ prev: p, curr: c, dtSec }, pad);
           if (!result) continue;
 
           const lastMs = this.lastHitMs.get(pad.lane) ?? -Infinity;

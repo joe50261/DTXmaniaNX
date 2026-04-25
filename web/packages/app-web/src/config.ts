@@ -12,7 +12,7 @@
  *   4. Optionally subscribe(...) somewhere to apply it live
  */
 
-import { DEFAULT_KIT_PRESET_ID } from './kit-preset.js';
+import { clampSeatYOffset, DEFAULT_KIT_PRESET_ID } from './kit-preset.js';
 
 /** Per-lane auto-play toggles. Each key is a lane identifier matching
  * the Lane enum names from @dtxmania/input; `true` means Game auto-
@@ -271,6 +271,16 @@ export function loadConfig(): Config {
   if (stored.autoKick === true && !('autoPlay' in stored)) {
     merged.autoPlay.BD = true;
     merged.autoPlay.LBD = true;
+  }
+  // Sanitise seatYOffset: a corrupt blob (NaN / Infinity / out-of-range
+  // number) flowing through to applySeatYOffset would lift the kit off
+  // into the void, and the `formatSeatOffsetWithHeight` label would
+  // print garbage. Drop to default (0) on non-finite, otherwise clamp
+  // to the supported slider range.
+  if (!Number.isFinite(merged.seatYOffset)) {
+    merged.seatYOffset = DEFAULT_CONFIG.seatYOffset;
+  } else {
+    merged.seatYOffset = clampSeatYOffset(merged.seatYOffset);
   }
   try {
     localStorage.removeItem(LEGACY_AUTOKICK_KEY);

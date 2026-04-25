@@ -166,6 +166,30 @@ describe('loadConfig — migrations', () => {
     expect(cfg.kitPresetId).toBe('compact');
     expect(cfg.seatYOffset).toBe(0.4);
   });
+
+  it('out-of-range stored seatYOffset gets clamped to the slider bounds (defends against a corrupt blob lifting the kit into the void)', () => {
+    // Above max
+    localStorage.setItem('dtxmania.config', JSON.stringify({ seatYOffset: 99 }));
+    expect(loadConfig().seatYOffset).toBe(0.6); // SEAT_Y_OFFSET_MAX
+    localStorage.clear();
+    // Below min
+    localStorage.setItem('dtxmania.config', JSON.stringify({ seatYOffset: -99 }));
+    expect(loadConfig().seatYOffset).toBe(-0.2); // SEAT_Y_OFFSET_MIN
+  });
+
+  it('non-finite stored seatYOffset (NaN / Infinity / wrong type) drops to the default 0', () => {
+    localStorage.setItem('dtxmania.config', JSON.stringify({ seatYOffset: null }));
+    expect(loadConfig().seatYOffset).toBe(0);
+    localStorage.clear();
+    // JSON can't carry NaN literally, but a hand-edited string that
+    // parses to a non-finite via Number.parseFloat would survive into
+    // the merged blob — emulate by setting the property to a string.
+    localStorage.setItem(
+      'dtxmania.config',
+      JSON.stringify({ seatYOffset: 'not-a-number' }),
+    );
+    expect(loadConfig().seatYOffset).toBe(0);
+  });
 });
 
 describe('isPracticeRun — best-score gate', () => {
