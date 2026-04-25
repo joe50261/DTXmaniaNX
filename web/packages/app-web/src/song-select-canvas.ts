@@ -958,6 +958,8 @@ export class SongSelectCanvas {
       '5_difficulty panel.png',
       '5_difficulty frame.png',
       '5_level number.png',
+      '5_BPM.png',
+      '5_bpm font.png',
       '5_comment bar.png',
       '5_scrollbar.png',
     ];
@@ -1297,16 +1299,23 @@ export class SongSelectCanvas {
       }
     }
 
-    // BPM block under the grid (canonical position 32, 258 sits under
-    // the skill point area; we render under the panel for now and tag
-    // [WIP] until the panel-internal layout is completed).
-    const bpm = song.bpm ? Math.round(song.bpm).toString() : '—';
-    ctx.font = 'bold 16px ui-monospace, monospace';
-    ctx.fillStyle = '#fff';
-    ctx.textAlign = 'left';
-    ctx.fillText(`BPM ${bpm}`, STATUS_X + 8, STATUS_Y + 312);
+    // BPM block — canonical position (90, 275) for the
+    // `5_BPM.png` label (Length / BPM stacked) and (135, 298) for
+    // the numeric BPM, per C#'s `CActSelectStatusPanel` lines 290-401.
+    // The numeric is right-aligned 3-digit (`{0,3:###}`) so a 99-bpm
+    // chart displays as " 99" with one glyph of leading space, just
+    // like the canonical render. Length / Duration value would sit
+    // at (132, 268) but needs song.duration which the chart layer
+    // hasn't surfaced yet.
+    const bpmLabel = this.getAsset('5_BPM.png');
+    if (bpmLabel) ctx.drawImage(bpmLabel, 90, 275);
+    const bpmFont = this.getAsset('5_bpm font.png');
+    if (song.bpm && bpmFont) {
+      const bpmText = Math.round(song.bpm).toString().padStart(3, ' ');
+      drawBpmGlyphs(ctx, bpmFont, bpmText, 135, 298);
+    }
 
-    drawWipLabel(ctx, '[WIP] skill % / gauge / perf history', STATUS_X + 8, STATUS_Y + 336);
+    drawWipLabel(ctx, '[WIP] skill % / gauge / perf history', STATUS_X + 8, STATUS_Y + 312);
   }
 
   private paintCommentBar(): void {
@@ -1525,6 +1534,41 @@ function drawLevelGlyphs(
     } else if (ch === '.') {
       ctx.drawImage(sprite, 200, 0, 10, GLYPH_H, x, y, 10, GLYPH_H);
       x += 10;
+    }
+  }
+}
+
+/** Paint a BPM-style numeric string using the canonical
+ *  `5_bpm font.png` glyph sprite. Per C# DTXMania's
+ *  CActSelectStatusPanel.st数字 table:
+ *    digit i → source rect (i*12, 0, 12, 20)
+ *    ':'    → source rect (123, 0, 6, 20)
+ *    'p'    → source rect (132, 0, 12, 20)
+ *  Spaces (used for `{0,3:###}` left-padding) advance 12 px without
+ *  drawing — matches C#'s `currCharWidth = 12` default. */
+function drawBpmGlyphs(
+  ctx: CanvasRenderingContext2D,
+  sprite: HTMLImageElement,
+  text: string,
+  x: number,
+  y: number,
+): void {
+  const GLYPH_H = 20;
+  for (const ch of text) {
+    if (ch >= '0' && ch <= '9') {
+      const idx = ch.charCodeAt(0) - '0'.charCodeAt(0);
+      ctx.drawImage(sprite, idx * 12, 0, 12, GLYPH_H, x, y, 12, GLYPH_H);
+      x += 12;
+    } else if (ch === ':') {
+      ctx.drawImage(sprite, 123, 0, 6, GLYPH_H, x, y, 6, GLYPH_H);
+      x += 6;
+    } else if (ch === 'p') {
+      ctx.drawImage(sprite, 132, 0, 12, GLYPH_H, x, y, 12, GLYPH_H);
+      x += 12;
+    } else {
+      // Spaces / unknowns advance 12 px (C# default char width) so
+      // right-aligned `{0,3:###}` formats land BPM in a fixed slot.
+      x += 12;
     }
   }
 }
