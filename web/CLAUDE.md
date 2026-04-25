@@ -101,14 +101,28 @@ instead.
 
 Quest Browser ships no DevTools, so debugging in-headset is push-and-pray.
 For desktop / Cloudflare-preview verification we ship **IWER** (Meta's
-Immersive Web Emulation Runtime) wired through `src/dev/xr-emulator.ts`:
+Immersive Web Emulation Runtime) wired through `src/dev/xr-emulator.ts`.
 
-- `pnpm dev` on a desktop without an HMD: IWER auto-installs, so
-  clicking "Enter VR" gives a synthetic Quest 3 + DevUI control panel.
-- Anywhere (incl. `pnpm preview` / Cloudflare): append `?xr-emu=1` to
-  force-install. `?xr-emu=0` opts back out.
-- Programmatic control: the `XRDevice` instance is exposed on
-  `window.__xrEmu` for console-driven pose / button manipulation.
+Two activation modes (URL `?xr-emu=…`):
+
+- `1` (default): runtime-only. Installs the polyfill on `navigator.xr`
+  so `requestSession('immersive-vr', …)` works, plus a small
+  bottom-right control panel with Trigger L / R, Recenter, and head-Y
+  step buttons. Pointer-events are scoped to that panel; the rest of
+  the page stays operable.
+- `devui`: same runtime, plus `@iwer/devui` (the React-based FPS-style
+  control overlay). Use this when you need full 6-DoF head /
+  controller dragging. Caveat: DevUI installs `keydown` and
+  `mousedown` listeners on `document` and `window` from inside its
+  `InputLayer`, which races the app's own hotkeys (`[`, `]`, `\`) and
+  click handlers — the page can feel unresponsive. Stick to `?xr-emu=1`
+  unless you specifically need DevUI's transform handles.
+- `0` / `off`: opt out even when `pnpm dev` would have auto-installed.
+
+Auto-install: `pnpm dev` on a desktop without a real `navigator.xr`
+falls into `1` automatically. Programmatic control is always
+available via `window.__xrEmu` (the `XRDevice`); use it for things
+like `__xrEmu.controllers.right.position.set(...)` from console.
 
 `installRuntime` is called with `polyfillLayers: true`, so the
 WebXR Layers code (XrLayerManager + Quad layers) gets exercised on
