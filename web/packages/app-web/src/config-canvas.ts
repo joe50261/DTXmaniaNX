@@ -105,6 +105,32 @@ export class ConfigCanvas {
   }
 
   /**
+   * Paint header + footer chrome strips scaled to a custom canvas
+   * width / height. The canonical `paintFrame()` assumes the
+   * canonical 1280×720 grid; this helper exists for hosts whose
+   * canvas is a different aspect ratio (notably the VR config
+   * panel at 1024×1260) but who still want the canonical chrome.
+   *
+   * Header sits at the top scaled to fit the canvas width. Footer
+   * mirrors that at the bottom. Background / menu-panel /
+   * description-panel are intentionally skipped — those are pinned
+   * to the 1280×720 grid and would warp on a different aspect.
+   */
+  paintHeaderFooter(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    const header = this.getByKey('header');
+    const footer = this.getByKey('footer');
+    if (header) {
+      // Source is 1280×105; scale width to canvas, keep aspect.
+      const scaledH = Math.round(HEADER_H * (w / HEADER_W));
+      ctx.drawImage(header, 0, 0, w, scaledH);
+    }
+    if (footer) {
+      const scaledH = Math.round(FOOTER_H * (w / FOOTER_W));
+      ctx.drawImage(footer, 0, h - scaledH, w, scaledH);
+    }
+  }
+
+  /**
    * Paint a menu cursor pair (left + right bracket) around a row.
    * The C# code re-uses the same source sprite twice with two
    * sub-rects; we honour that exactly.

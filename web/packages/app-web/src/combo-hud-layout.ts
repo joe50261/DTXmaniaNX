@@ -17,12 +17,26 @@ export const COMBO_LABEL_W = 250;
 /** Height of the "COMBO" label strip. */
 export const COMBO_LABEL_H = 60;
 
-/** Web-port placement on the 1280×720 canvas (relative to the
- *  judge line — Renderer.judgeLineY). Hard-coded here so tests can
- *  pin them without spinning up a renderer. */
-export const COMBO_DIGITS_OFFSET_Y = -200;
-export const COMBO_LABEL_OFFSET_Y = -60;
-export const COMBO_CENTRE_X = 640;
+/** Web-port placement on the 1280×720 canvas. The C# game offers
+ *  several positions via `ドラムコンボ文字の表示位置` (top, side, off);
+ *  the web port pins the combo to the **right of the chip stream**
+ *  so it never blocks falling chips. The right edge of the playfield
+ *  sits around x = 839 (RD lane right edge); centre the combo at
+ *  x = 1040 with a ~50% scale so the "999" max-width digits + label
+ *  fit between the playfield and the canvas right edge.
+ *
+ *  Centre y is anchored *above* the judge line so the digits don't
+ *  collide with the chip-fire bursts at the judge row. */
+export const COMBO_CENTRE_X = 1040;
+/** Y centre for the digits; relative to the judge line, *negative*
+ *  = above. */
+export const COMBO_DIGITS_OFFSET_Y = -160;
+/** Y centre for the COMBO label; sits below the digits. */
+export const COMBO_LABEL_OFFSET_Y = -40;
+/** Render scale applied to both digits and label. The source atlas
+ *  glyphs are 120×160 — full size dominates the canvas. 0.5 keeps
+ *  the readability of the canonical sprite without crowding chips. */
+export const COMBO_RENDER_SCALE = 0.5;
 
 /** Cap for the rendered digit count. Combos >= 1000 collapse to a
  *  fixed "999+" glyph fallback rather than swap to combo_2.png. */

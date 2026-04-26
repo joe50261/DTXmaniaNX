@@ -749,10 +749,17 @@ export class Renderer {
    *
    * The renderer detects the playing → finished transition and tells
    * the sub-canvas when to anchor its reveal counter; from there the
-   * sub-canvas owns asset loading, layout, and animation. Painted
-   * inside the same dim-curtain envelope the previous in-renderer
-   * draw used so the transition feels identical even when the
-   * 8_x and ScreenResult x assets are absent.
+   * sub-canvas owns asset loading, layout, and animation.
+   *
+   * The result canvas paints `8_background.jpg` edge-to-edge as its
+   * own background (per the C# `CStageResult` `tx背景.tDraw2D(0, 0)`
+   * call), which fully covers the playfield underneath — so we no
+   * longer paint a separate dim curtain. The previous curtain
+   * (rgba 0,0,0,0.78) was being overdrawn by 8_background.jpg
+   * anyway; the only effect was to paint a black flash for one frame
+   * on the playing → finished transition before the bg loaded, and
+   * the new contrast-strip backings inside ResultCanvas do that job
+   * better while preserving the bg's authored look.
    */
   private drawResult(state: RenderState): void {
     const now = performance.now();
@@ -769,11 +776,12 @@ export class Renderer {
     ctx.save();
     ctx.globalAlpha = alpha;
 
-    // Dim curtain over the in-play scene — kept here (not in
-    // ResultCanvas) so the result paint stays a pure overlay and a
-    // future "render straight onto 8_background.jpg" path doesn't
-    // need to special-case curtain removal.
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
+    // Pre-bg fill: a single dark frame so the transition doesn't
+    // flash whatever the playfield was painting through. Once the
+    // 8_background.jpg paint inside ResultCanvas runs, this is
+    // entirely covered. No curtain over the bg — the bg IS the new
+    // canvas, per the C# original.
+    ctx.fillStyle = '#0b0f1a';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
     this.resultCanvas.paint(

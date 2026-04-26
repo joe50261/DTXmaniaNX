@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ConfigCanvas } from './config-canvas.js';
 import {
   AUTO_PLAY_LANES,
   getConfig,
@@ -159,6 +160,12 @@ export class VrConfig {
 
   private unsubConfig: (() => void) | null = null;
 
+  /** Canonical 4_x.png chrome painter — shared with the eventual
+   *  DOM config-panel skinning. Drawn over the procedural panel
+   *  fill so the VR config gains the original game's visual frame
+   *  without changing the interaction model. */
+  private readonly chrome = new ConfigCanvas();
+
   constructor(
     private readonly webgl: THREE.WebGLRenderer,
     private readonly scene: THREE.Scene
@@ -182,6 +189,15 @@ export class VrConfig {
     this.mesh.position.copy(PANEL_POS);
     this.mesh.visible = false;
     this.scene.add(this.mesh);
+
+    // Kick off the canonical chrome asset preload. Fire-and-forget;
+    // first paints fall back gracefully (the procedural panel is
+    // already filled in beneath). Once these resolve, subsequent
+    // paints will overlay 4_header panel.png + 4_footer panel.png.
+    void this.chrome.load().then(() => {
+      this.dirty = true;
+      if (this.shown) this.paint();
+    });
 
     for (let i = 0; i < 2; i++) {
       const controller = this.webgl.xr.getController(i);
@@ -339,7 +355,17 @@ export class VrConfig {
     ctx.fillStyle = '#0a0f18';
     ctx.fillRect(0, 0, PANEL_W_PX, PANEL_H_PX);
 
-    // Header
+    // Canonical 4_x.png chrome — header strip at top, footer strip
+    // at bottom. Paints over the procedural fill so the panel reads
+    // as the original DTXMania config screen frame. Header / footer
+    // are width-scaled to PANEL_W_PX (the canonical assets are
+    // 1280-wide); other 4_x.png pieces (background, menu panel)
+    // stay out because their fixed positions don't fit the
+    // 1024×1260 panel aspect.
+    this.chrome.paintHeaderFooter(ctx, PANEL_W_PX, PANEL_H_PX);
+
+    // Header label — sits on top of the painted 4_header panel.png
+    // strip when the asset is loaded, on the dark fill otherwise.
     ctx.fillStyle = '#e2e8f0';
     ctx.font = 'bold 30px ui-monospace, monospace';
     ctx.textAlign = 'center';

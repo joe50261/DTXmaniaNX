@@ -32,15 +32,25 @@ critically low). Wailing bonus / fillin / bonus 100 are deferred.
 
 ### Position
 
-C# centre: `(nX中央位置px, nY上辺位置px)` chosen by the host. The
-web port pins centre x to the canvas centre (`640`) and the COMBO
-label baseline ~60 px above the judgement line so the digits don't
-overlap the chip stream.
+C# centre: `(nX中央位置px, nY上辺位置px)` chosen by the host —
+DTXMania exposes `ドラムコンボ文字の表示位置` (top / side / off) so the
+combo never has to sit in the middle of the chip stream. The
+web port pins it to the **right of the playfield** (RD lane right
+edge sits at x ≈ 839) at half scale so the canonical sprite reads
+without crowding chips.
 
 ```
-combo digit centre y = judgeLineY − 200
-COMBO label centre y = judgeLineY − 60
+combo centre x        = 1040       // right gutter, between playfield + canvas right edge
+combo digit centre y  = judgeLineY − 160
+COMBO label centre y  = judgeLineY − 40
+render scale          = 0.5        // 120×160 source → 60×80 rendered
 ```
+
+**Why not centre?** The first preview pass anchored the combo at
+`x = 640` (canvas centre) at full scale — the digits dropped right
+on top of the chip stream and blocked falling notes. Original DTXMania
+never paints the combo over the playfield centre; this matches that
+canonical layout.
 
 ### Layout
 

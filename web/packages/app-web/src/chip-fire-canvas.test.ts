@@ -78,7 +78,7 @@ describe('ChipFireCanvas — fallback path', () => {
 });
 
 describe('ChipFireCanvas — sprite path', () => {
-  it('uses drawImage with additive composite when asset is present', () => {
+  it('uses drawImage with default source-over composite when asset is present', () => {
     const cf = new ChipFireCanvas();
     const fakeImage = {
       complete: true,
@@ -92,7 +92,10 @@ describe('ChipFireCanvas — sprite path', () => {
     cf.paint(ctx2d(), { lastPadHitMs: lastHits, nowMs: 200, judgeLineY: 600 });
     const draws = ctx.calls.filter((c) => c.method === 'drawImage');
     expect(draws.length).toBe(1);
-    expect(draws[0]!.comp).toBe('lighter');
+    // Honour the PNG's own alpha cut — additive `lighter` paints
+    // square opaque halos on busy backgrounds (regression caught in
+    // the first CF Pages preview).
+    expect(draws[0]!.comp).toBe('source-over');
   });
 });
 

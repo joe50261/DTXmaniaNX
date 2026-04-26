@@ -18,6 +18,7 @@ import {
   COMBO_LABEL_H,
   COMBO_LABEL_OFFSET_Y,
   COMBO_LABEL_W,
+  COMBO_RENDER_SCALE,
   comboDigitAtlasX,
   comboDigitAtlasY,
   comboDigits,
@@ -110,44 +111,49 @@ export class ComboHudCanvas {
       return;
     }
 
-    // Digits centred on COMBO_CENTRE_X. Walk left-to-right starting
-    // at (centre − digits.length/2 × W) so the rendered string lines
-    // up regardless of count. Reverse iterate digits since they're
-    // ones-first.
-    const totalW = digits.length * COMBO_DIGIT_W;
-    const startX = COMBO_CENTRE_X - totalW / 2;
-    const digitsY = input.judgeLineY + COMBO_DIGITS_OFFSET_Y - COMBO_DIGIT_H / 2;
+    // Digits centred on COMBO_CENTRE_X. Source atlas glyphs are
+    // 120x160; we render at COMBO_RENDER_SCALE so a 4-digit combo
+    // fits in the right-side gutter without crowding the chip
+    // stream. Walk left-to-right from (centre − totalRenderedW/2);
+    // reverse-iterate `digits` since they're ones-first.
+    const renderDigitW = COMBO_DIGIT_W * COMBO_RENDER_SCALE;
+    const renderDigitH = COMBO_DIGIT_H * COMBO_RENDER_SCALE;
+    const totalRenderedW = digits.length * renderDigitW;
+    const startX = COMBO_CENTRE_X - totalRenderedW / 2;
+    const digitsY = input.judgeLineY + COMBO_DIGITS_OFFSET_Y - renderDigitH / 2;
 
     ctx.save();
     for (let i = digits.length - 1; i >= 0; i--) {
       const digit = digits[i]!;
-      const dx = startX + (digits.length - 1 - i) * COMBO_DIGIT_W;
+      const dx = startX + (digits.length - 1 - i) * renderDigitW;
       ctx.drawImage(
         tex,
         comboDigitAtlasX(digit), comboDigitAtlasY(digit),
         COMBO_DIGIT_W, COMBO_DIGIT_H,
-        dx, digitsY, COMBO_DIGIT_W, COMBO_DIGIT_H
+        dx, digitsY, renderDigitW, renderDigitH
       );
     }
 
     if (overflow) {
       // Overflow tag — small "+" rendered with text since the atlas
-      // has no '+' glyph slot.
+      // has no '+' glyph slot. Sized to match the rendered digit height.
       ctx.fillStyle = '#fde047';
-      ctx.font = 'bold 64px ui-monospace, monospace';
+      ctx.font = `bold ${Math.round(renderDigitH / 2.5)}px ui-monospace, monospace`;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      ctx.fillText('+', startX + totalW + 8, digitsY + COMBO_DIGIT_H / 2);
+      ctx.fillText('+', startX + totalRenderedW + 4, digitsY + renderDigitH / 2);
     }
 
     // COMBO label — full atlas strip pulled from y=320, drawn under
-    // the digits.
-    const labelX = COMBO_CENTRE_X - COMBO_LABEL_W / 2;
-    const labelY = input.judgeLineY + COMBO_LABEL_OFFSET_Y - COMBO_LABEL_H / 2;
+    // the digits at the same render scale.
+    const renderLabelW = COMBO_LABEL_W * COMBO_RENDER_SCALE;
+    const renderLabelH = COMBO_LABEL_H * COMBO_RENDER_SCALE;
+    const labelX = COMBO_CENTRE_X - renderLabelW / 2;
+    const labelY = input.judgeLineY + COMBO_LABEL_OFFSET_Y - renderLabelH / 2;
     ctx.drawImage(
       tex,
       0, COMBO_LABEL_ATLAS_Y, COMBO_LABEL_W, COMBO_LABEL_H,
-      labelX, labelY, COMBO_LABEL_W, COMBO_LABEL_H
+      labelX, labelY, renderLabelW, renderLabelH
     );
     ctx.restore();
   }

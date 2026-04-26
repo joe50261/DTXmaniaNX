@@ -88,11 +88,13 @@ export class ChipFireCanvas {
     ctx.save();
     ctx.globalAlpha = alpha;
     if (asset) {
-      // Additive-ish blend: matches the C# texture's
-      // `bAdditiveBlending = true` for the chip notes scatter family
-      // (line 510). Works well enough for the burst too — keeps the
-      // chips behind it readable.
-      ctx.globalCompositeOperation = 'lighter';
+      // Plain `source-over` — the per-lane chip-fire PNGs already
+      // ship with their own alpha channel cut around the burst
+      // shape. The previous `'lighter'` (additive) path looked
+      // correct on a black background but produced opaque-looking
+      // square halos on the busy 7_background.jpg because additive
+      // blend ignores the source alpha and just adds RGB. Honour
+      // the canonical alpha cut instead.
       ctx.drawImage(asset, dx, dy, drawW, drawH);
     } else {
       // Procedural fallback: a coloured circle that matches the

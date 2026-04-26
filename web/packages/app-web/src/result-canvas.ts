@@ -156,6 +156,11 @@ export class ResultCanvas {
     const elapsed = nowMs - this.startedAtMs;
 
     this.paintBackground(ctx);
+    // Contrast strip painted *after* the bg, *before* the metrics +
+    // judgement columns, so the white-on-busy-bg legibility issue
+    // observed on the first preview is fixed without dimming the
+    // bg's authored palette.
+    this.paintMetricsBacking(ctx);
     this.paintBanner(ctx, state);
     this.paintRank(ctx, state, elapsed);
     this.paintTitle(ctx, state);
@@ -164,6 +169,23 @@ export class ResultCanvas {
     this.paintNewRecord(ctx, state);
     this.paintProgressBar(ctx, state);
     this.paintFooterHint(ctx, state, elapsed);
+  }
+
+  /**
+   * Semi-opaque backing rect spanning the metrics + judgement
+   * columns. Pinned just below the rank glyph so the numbers read
+   * cleanly against the busy `8_background.jpg` (concert silhouettes
+   * + colour rays). The rect width covers both the left judgement
+   * column (x ≈ 280..520) and the right metrics column (x ≈ 748..1000)
+   * with comfortable margin.
+   */
+  private paintMetricsBacking(ctx: CanvasRenderingContext2D): void {
+    ctx.save();
+    ctx.fillStyle = 'rgba(11, 15, 26, 0.55)';
+    // Spans from PERFECT row top (y ≈ 460) to MISS row bottom (y ≈ 660),
+    // wide enough to cover both columns plus the title row above.
+    ctx.fillRect(220, 425, 820, 245);
+    ctx.restore();
   }
 
   private paintBackground(ctx: CanvasRenderingContext2D): void {
@@ -265,10 +287,12 @@ export class ResultCanvas {
     this.paintNumberRightAligned(ctx, state.maxCombo.toString(), METRICS_RIGHT_X, MAXCOMBO_Y);
 
     // Labels (text — no canonical label sprite ships with the game's
-    // base skin for these rows). Drawn left of the numbers.
+    // base skin for these rows). Drawn left of the numbers. Bright
+    // grey + bold weight so they read against the metrics backing
+    // strip (translucent slate) without relying on the bg.
     ctx.save();
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '20px ui-monospace, monospace';
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = 'bold 20px ui-monospace, monospace';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
     ctx.fillText('SCORE',     METRICS_RIGHT_X - LARGE_DIGIT_W * 9,  SCORE_Y    + LARGE_DIGIT_H / 2);
