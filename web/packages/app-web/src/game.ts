@@ -136,7 +136,7 @@ export class Game {
   private onChartFinished:
     | ((chartPath: string, snap: ScoreSnapshot, didLoop: boolean) => void)
     | null = null;
-  private currentChartPath: string | null = null;
+  private currentChartPathField: string | null = null;
   /** Fires when the VR right-hand face-button captures a loop marker in
    * the current chart. Host (main.ts) maps into `updateConfig`. Only
    * fired during `status === 'playing'`. */
@@ -297,6 +297,49 @@ export class Game {
     return this.renderer.inXR;
   }
 
+  /** True while the song-select panel is being painted (desktop or
+   * in-VR — the canvas is shared). Used by e2e specs to assert the
+   * menu appeared on enterXR when a library was already loaded. */
+  get songSelectShown(): boolean {
+    return this.songSelect.isShown;
+  }
+
+  /** Currently-focused row title on the song-select panel, or `null`
+   * when the panel has no entries. Used by e2e stick-navigation
+   * specs to assert focus moved across XR frames without re-
+   * implementing the wheel-row title format. */
+  get songSelectFocusedTitle(): string | null {
+    return this.songSelect.getFocusedRowTitle();
+  }
+
+  /** True while the in-VR Settings panel is shown. Surfaced for the
+   * laser-aim e2e spec that fires the trigger pointing at the
+   * song-select Settings button and asserts the panel actually
+   * opened — closing the loop on the real-raycast → button-rect
+   * pipeline that unit tests can only partially cover. */
+  get vrConfigShown(): boolean {
+    return this.vrConfig.isShown;
+  }
+
+  /** Snapshot of the current VR config panel button rects, in panel
+   * pixel coordinates. Length varies with which sections `paint()`
+   * rendered this frame. Used by laser-aim specs to compute the
+   * world position of a target button (e.g. Sit) without hardcoding
+   * a layout that drifts. */
+  get vrConfigHits(): ReadonlyArray<{ x: number; y: number; w: number; h: number }> {
+    return this.vrConfig.__testHits();
+  }
+
+  /** chartPath of the chart currently loaded (or `null` between
+   * picks / before the first pick / after `leaveSong`). Surfaced
+   * for the mid-VR-change e2e spec so it can prove a NEW chart
+   * landed after the second pulse-trigger, distinct from the first
+   * pick's path — `hasChart` flipping false→true alone doesn't rule
+   * out reloading the same song from stale state. */
+  get currentChartPath(): string | null {
+    return this.currentChartPathField;
+  }
+
   /** True if loadAndStart has been called at least once. */
   get hasChart(): boolean {
     return this.song !== null;
@@ -393,7 +436,7 @@ export class Game {
     this.onRestart = opts.onRestart ?? null;
     this.onChartFinished = opts.onChartFinished ?? null;
     this.onLoopMarkerCaptured = opts.onLoopMarkerCaptured ?? null;
-    this.currentChartPath = opts.chartPath ?? null;
+    this.currentChartPathField = opts.chartPath ?? null;
     if (opts.autoPlayLanes !== undefined) {
       this.autoPlayLanes = new Set(opts.autoPlayLanes);
     }
@@ -786,10 +829,10 @@ export class Game {
       // persist the best-of record. Only fires on natural completion,
       // not on leaveSong() bail-outs — incomplete plays shouldn't
       // overwrite a real attempt's medal.
-      if (this.onChartFinished && this.currentChartPath) {
+      if (this.onChartFinished && this.currentChartPathField) {
         try {
           this.onChartFinished(
-            this.currentChartPath,
+            this.currentChartPathField,
             this.tracker.snapshot(),
             this.loopedAtLeastOnce,
           );

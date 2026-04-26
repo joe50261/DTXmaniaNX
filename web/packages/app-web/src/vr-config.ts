@@ -254,6 +254,13 @@ export class VrConfig {
     return this.hits.map(({ x, y, w, h }) => ({ x, y, w, h }));
   }
 
+  /** Read-only mirror of the private `shown` flag. Used by Game's
+   * `vrConfigShown` getter, which e2e specs poll to assert the
+   * Settings click reached the panel through the laser raycast. */
+  get isShown(): boolean {
+    return this.shown;
+  }
+
   hide(): void {
     this.shown = false;
     this.mesh.visible = false;

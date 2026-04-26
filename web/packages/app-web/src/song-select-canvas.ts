@@ -244,6 +244,23 @@ export class SongSelectCanvas {
   private onExit: (() => void) | null = null;
   private shown = false;
 
+  /** Read-only mirror of the private `shown` flag. Surfaced for the
+   * Game `songSelectShown` getter, which e2e specs poll to assert the
+   * panel actually appeared (entering VR with a library, etc.). */
+  get isShown(): boolean {
+    return this.shown;
+  }
+
+  /** The display-row title of the currently-focused entry, or `null`
+   * when no entries are loaded. Surfaced so e2e stick-navigation
+   * specs can assert the focus actually moved across XR frames
+   * without re-implementing `rowTitle()`. Title formatting matches
+   * what gets painted onto the wheel rows (emoji + name). */
+  getFocusedRowTitle(): string | null {
+    const entry = this.entries[this.focusIdx];
+    return entry ? rowTitle(entry) : null;
+  }
+
   private readonly raycaster = new THREE.Raycaster();
   /** Controllers the menu attached a laser + listeners to. Populated
    * once in the constructor — re-creating per show() was leaking Line
