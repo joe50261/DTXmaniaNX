@@ -84,10 +84,29 @@ module.exports = {
           'packages/app-web/src/vr-lifecycle\\.ts$',
           'packages/app-web/src/hud-toast\\.ts$',
           'packages/app-web/src/skin-url\\.ts$',
+          'packages/app-web/src/scene-state\\.ts$',
         ],
         pathNot: '\\.test\\.ts$',
       },
       to: { path: '^node_modules/three($|/)' },
+    },
+    {
+      name: 'scene-state-no-view-imports',
+      severity: 'error',
+      comment:
+        'scene-state.ts is the pure transition function for app scenes. ' +
+        'It must not import view modules so the canvas renderers can ' +
+        'depend on it without circles.',
+      from: { path: 'packages/app-web/src/scene-state\\.ts$', pathNot: '\\.test\\.ts$' },
+      to: {
+        path: [
+          'packages/app-web/src/.*-canvas\\.ts$',
+          'packages/app-web/src/renderer\\.ts$',
+          'packages/app-web/src/main\\.ts$',
+          'packages/app-web/src/game\\.ts$',
+          'packages/app-web/src/xr-controllers\\.ts$',
+        ],
+      },
     },
   ],
   options: {
