@@ -23,7 +23,7 @@ import com.dtxmania.quest.dtxcore.model.Song
  */
 fun computeTiming(song: Song): Song {
     val chips = song.chips
-    chips.sortWith(::compareChipsByPosition)
+    chips.sortWith(POSITION_COMPARATOR)
 
     if (chips.isEmpty()) {
         song.durationMs = 0.0
@@ -76,11 +76,16 @@ fun computeTiming(song: Song): Song {
     return song
 }
 
-private fun compareChipsByPosition(a: Chip, b: Chip): Int {
-    if (a.measure != b.measure) return a.measure - b.measure
-    if (a.tick != b.tick) return a.tick - b.tick
-    // Stable within a tick; control channels first keeps semantics explicit.
-    return controlRank(a.channel) - controlRank(b.channel)
+// (measure, tick, controlRank) — control channels (BPM/BarLength) come first
+// inside the same tick so a BPM change scheduled at the same position as a
+// note is processed deterministically. Defined as an explicit Comparator
+// to avoid ambiguity around SAM conversion of top-level function references.
+private val POSITION_COMPARATOR: Comparator<Chip> = Comparator { a, b ->
+    when {
+        a.measure != b.measure -> a.measure - b.measure
+        a.tick != b.tick -> a.tick - b.tick
+        else -> controlRank(a.channel) - controlRank(b.channel)
+    }
 }
 
 private fun controlRank(channel: Int): Int = when (channel) {

@@ -19,7 +19,7 @@ import com.dtxmania.quest.dtxcore.model.Song
  * Ported from `web/packages/dtx-core/src/timing/measure-index.ts`.
  */
 fun buildMeasureStartMsIndex(song: Song): DoubleArray {
-    val ordered = song.chips.sortedWith(::comparePosition)
+    val ordered = song.chips.sortedWith(POSITION_COMPARATOR)
 
     val maxMeasure = ordered.lastOrNull()?.measure ?: 0
     val out = DoubleArray(maxMeasure + 2)
@@ -62,10 +62,15 @@ fun buildMeasureStartMsIndex(song: Song): DoubleArray {
     return out
 }
 
-private fun comparePosition(a: Chip, b: Chip): Int {
-    if (a.measure != b.measure) return a.measure - b.measure
-    if (a.tick != b.tick) return a.tick - b.tick
-    return controlRank(a.channel) - controlRank(b.channel)
+// Same ordering rule as Timing.kt's POSITION_COMPARATOR but kept local to
+// preserve the file-by-file 1:1 port from measure-index.ts (the TS source
+// inlines its own copy of the comparator + controlRank helper).
+private val POSITION_COMPARATOR: Comparator<Chip> = Comparator { a, b ->
+    when {
+        a.measure != b.measure -> a.measure - b.measure
+        a.tick != b.tick -> a.tick - b.tick
+        else -> controlRank(a.channel) - controlRank(b.channel)
+    }
 }
 
 private fun controlRank(channel: Int): Int = when (channel) {
