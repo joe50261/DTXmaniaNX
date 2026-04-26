@@ -5,6 +5,7 @@ import { PAD_ATLAS, PAD_SIZE, padRect } from './pad-atlas.js';
 import { CHIP_ATLAS_Y, CHIP_ATLAS_H, chipRect } from './chip-atlas.js';
 import { JUDGE_ROWS, JUDGE_SPRITE_W, JUDGE_SPRITE_H } from './judge-atlas.js';
 import { linearFadeIn, linearFadeOut, padBounceOffset } from './renderer-math.js';
+import { PlayfieldCanvas } from './playfield-canvas.js';
 import { ResultCanvas } from './result-canvas.js';
 import type { JudgmentKind, Rank } from '@dtxmania/dtx-core';
 import type { LaneValue } from '@dtxmania/input';
@@ -160,6 +161,11 @@ export class Renderer {
   /** 7_gauge_bar.png — scaled horizontally by gauge value. */
   private gaugeBarImage: HTMLImageElement | null = null;
 
+  /** Playfield sub-canvas (07.Performance port — lane-flush slice).
+   *  Paints the 2D lane-flush overlay on top of the chip stream.
+   *  3D pad meshes still live on `padMeshes` for now. */
+  private readonly playfieldCanvas = new PlayfieldCanvas();
+
   /** Result-screen sub-canvas (08.Result port). Owns its own asset
    *  preload + reveal animation; renderer just hands it the 2D
    *  context when `state.status === 'finished'`. */
@@ -214,10 +220,14 @@ export class Renderer {
 
     this.applySkin(skin);
 
-    // Result-screen sub-canvas owns its own asset preload (8_*/ScreenResult*).
-    // Fire-and-forget so the renderer keeps booting; first paints fall back
-    // to procedural draws while images stream in.
+    // Result-screen sub-canvas owns its own asset preload (8_x and
+    // ScreenResult x assets). Fire-and-forget so the renderer keeps
+    // booting; first paints fall back to procedural draws while
+    // images stream in.
     void this.resultCanvas.load();
+    // Playfield lane-flush sub-canvas — same pattern. Loads the 9
+    // ScreenPlayDrums lane-flush PNGs.
+    void this.playfieldCanvas.load();
 
     // Resize observer keeps the WebGL backbuffer sharp when the window / canvas
     // changes size (only relevant in desktop mode; XR owns its own framebuffer).
@@ -498,6 +508,14 @@ export class Renderer {
     this.drawChips(state);
     this.drawPedalFlash(state);   // wide red bar — sits behind per-lane radial
     this.drawHitFlashes(state);
+    // Lane-flush overlay — per-lane vertical streak that rides up on
+    // each hit. Skinned via PlayfieldCanvas; falls back to a coloured
+    // rectangle when its assets are absent.
+    this.playfieldCanvas.paint(ctx, {
+      lastPadHitMs: state.lastPadHitMs,
+      nowMs: performance.now(),
+      canvasH: CANVAS_H,
+    });
     this.drawHUD(state);
     this.drawJudgmentFlash(state);
     this.drawToast(state);        // highest z — pinned top-center, both desktop & VR

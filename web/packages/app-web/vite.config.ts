@@ -36,6 +36,17 @@ const STAGE7_ALLOWLIST = [
   'ScreenPlay judge strings 1.png',
   '7_Gauge.png',
   '7_gauge_bar.png',
+  // Lane-flush per-lane forward textures — loaded by PlayfieldCanvas.
+  // See playfield-design.md for the lane → filename map.
+  'ScreenPlayDrums lane flush leftcymbal.png',
+  'ScreenPlayDrums lane flush hihat.png',
+  'ScreenPlayDrums lane flush leftpedal.png',
+  'ScreenPlayDrums lane flush snare.png',
+  'ScreenPlayDrums lane flush hitom.png',
+  'ScreenPlayDrums lane flush bass.png',
+  'ScreenPlayDrums lane flush lowtom.png',
+  'ScreenPlayDrums lane flush floortom.png',
+  'ScreenPlayDrums lane flush cymbal.png',
 ];
 const STAGE8_ALLOWLIST = [
   '8_background.jpg',
