@@ -58,16 +58,66 @@ import type { XrPoseSnapshot } from '../xr-controllers.js';
  * mid-run aren't reflected — matches how `Game.autoPlayLanes` is set
  * once per loadAndStart. */
 export function buildHitEvent(
-  _e: HitProcessedEvent,
-  _autoPlayLanes: ReadonlySet<LaneValue>,
+  e: HitProcessedEvent,
+  autoPlayLanes: ReadonlySet<LaneValue>,
 ): HitEvent {
-  throw new Error('buildHitEvent: not implemented');
+  // Hand mapping for human input; keyboard / MIDI / gamepad (hand=undefined)
+  // collapses to xr-right since the viewer only paints a pad flash.
+  const handSource: 'xr-left' | 'xr-right' =
+    e.hand === 'left' ? 'xr-left' : 'xr-right';
+
+  if (e.matched === null) {
+    // Stray: real human pad strike with no chip in window. Viewer still
+    // paints a flash on the striking hand, so source mirrors hand mapping.
+    return {
+      songTimeMs: e.songTimeMs,
+      lane: e.lane,
+      source: autoPlayLanes.has(e.lane) ? 'auto' : handSource,
+      chipIndex: -1,
+      lagMs: null,
+      judgment: Judgment.MISS,
+    };
+  }
+
+  // Auto-detected miss: chip's POOR window expired without input. Per
+  // game.ts contract, this manifests as `deltaMs === null` AND
+  // `judgment === MISS` AND `hand === undefined`. We treat any of those
+  // last two as the signal alongside the canonical null check, so the
+  // dispatch is robust to upstream callers that fill a sentinel deltaMs.
+  if (
+    e.matched.deltaMs === null ||
+    (e.hand === undefined && e.matched.judgment === Judgment.MISS)
+  ) {
+    return {
+      songTimeMs: e.songTimeMs,
+      lane: e.lane,
+      source: 'auto',
+      chipIndex: e.matched.idx,
+      lagMs: null,
+      judgment: e.matched.judgment,
+    };
+  }
+
+  // Matched human input — autoPlay-lane wins as a defensive label.
+  return {
+    songTimeMs: e.songTimeMs,
+    lane: e.lane,
+    source: autoPlayLanes.has(e.lane) ? 'auto' : handSource,
+    chipIndex: e.matched.idx,
+    lagMs: e.matched.deltaMs,
+    judgment: e.matched.judgment,
+  };
 }
 
 /** Trivial shape transform; pinned in tests so a future change to
  * `XrPoseSnapshot` is forced through this layer. */
-export function buildPoseSample(_snap: XrPoseSnapshot, _songTimeMs: number): PoseSample {
-  throw new Error('buildPoseSample: not implemented');
+export function buildPoseSample(snap: XrPoseSnapshot, songTimeMs: number): PoseSample {
+  return {
+    songTimeMs,
+    head: snap.head,
+    left: snap.left,
+    right: snap.right,
+  };
 }
 
 /** Project the live-play `ScoreSnapshot` (from
@@ -80,8 +130,14 @@ export function buildPoseSample(_snap: XrPoseSnapshot, _songTimeMs: number): Pos
  *   importing for one-line semantics.
  * - `counts`: shallow-copied so a mutation on the snapshot doesn't
  *   leak through. */
-export function buildFinalSnapshot(_snap: ScoreSnapshot): FinalSnapshot {
-  throw new Error('buildFinalSnapshot: not implemented');
+export function buildFinalSnapshot(snap: ScoreSnapshot): FinalSnapshot {
+  return {
+    finalScoreNorm: snap.score / 1_000_000,
+    comboMax: snap.maxCombo,
+    fullCombo:
+      snap.totalNotes > 0 && snap.counts.POOR === 0 && snap.counts.MISS === 0,
+    counts: { ...snap.counts },
+  };
 }
 
 /** A wired replay-capture session. Methods are bound so they can be
@@ -107,9 +163,36 @@ export interface ReplayCapture {
  * subsequent hit translations (matches how `Game.autoPlayLanes`
  * works). */
 export function createReplayCapture(
-  _autoPlayLanes: ReadonlySet<LaneValue>,
+  autoPlayLanes: ReadonlySet<LaneValue>,
 ): ReplayCapture {
-  throw new Error('createReplayCapture: not implemented');
+  let recorder: Recorder | null = null;
+
+  return {
+    start(meta: ChartMeta, player: PlayerSettings): void {
+      recorder = new Recorder();
+      recorder.start(meta, player);
+    },
+    discard(): void {
+      // Drop the in-flight recording entirely; never persist.
+      recorder = null;
+    },
+    async finish(snap: ScoreSnapshot): Promise<string> {
+      if (recorder === null) {
+        throw new Error('ReplayCapture.finish: called without an active recording');
+      }
+      const replay = recorder.finish(buildFinalSnapshot(snap));
+      recorder = null;
+      return saveReplay(replay);
+    },
+    onHit(e: HitProcessedEvent): void {
+      if (recorder === null || !recorder.isRecording()) return;
+      recorder.recordHit(buildHitEvent(e, autoPlayLanes));
+    },
+    onPose(snap: XrPoseSnapshot, songTimeMs: number): void {
+      if (recorder === null || !recorder.isRecording()) return;
+      recorder.recordPose(buildPoseSample(snap, songTimeMs));
+    },
+  };
 }
 
 // Re-export so consumers see the `Recorder` lifecycle if they want
