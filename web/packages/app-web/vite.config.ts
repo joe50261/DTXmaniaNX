@@ -17,7 +17,17 @@ const base = process.env.GITHUB_ACTIONS ? '/DTXmaniaNX/' : '/';
 //  - Stage 8 (result): explicit allowlist (~14 files). Loaded by
 //    `ResultCanvas` — see `result-design.md` for which file maps to
 //    which sub-element.
+//  - Stages 1 / 2 / 6 / 9 (splash): minimal — one or two files each,
+//    loaded by `SplashCanvas` (see `splash-design.md`).
 const RUNTIME_GRAPHICS = '../../../Runtime/System/Graphics';
+const SPLASH_ALLOWLIST = [
+  '1_background.jpg',
+  '2_background.jpg',
+  '2_menu.png',
+  '6_background.jpg',
+  '6_FadeOut.jpg',
+  '9_background.jpg',
+];
 const STAGE7_ALLOWLIST = [
   '7_background.jpg',
   '7_pads.png',
@@ -66,6 +76,11 @@ export default defineConfig({
           rename: { stripBase: true as const },
         })),
         ...STAGE8_ALLOWLIST.map((name) => ({
+          src: `${RUNTIME_GRAPHICS}/${name}`,
+          dest: 'skin',
+          rename: { stripBase: true as const },
+        })),
+        ...SPLASH_ALLOWLIST.map((name) => ({
           src: `${RUNTIME_GRAPHICS}/${name}`,
           dest: 'skin',
           rename: { stripBase: true as const },
