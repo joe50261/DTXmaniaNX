@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test
  * `assertEquals(expected, actual, 0.001)`.
  */
 class TimingTest {
-    @Test fun `at 120 BPM, one measure = 2000ms; snare at tick 0 of measure 1 lands at 2000ms`() {
+    @Test fun `at 120 BPM one measure equals 2000ms - snare at tick 0 of measure 1 lands at 2000ms`() {
         val dtx = listOf("#BPM 120", "#WAV01 s.wav", "#00112:01000000").joinToString("\n")
         val song = computeTiming(parseDtx(dtx))
         val snare = song.chips.first { it.channel == Channel.SNARE }
