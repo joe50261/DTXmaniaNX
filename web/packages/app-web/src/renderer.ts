@@ -6,6 +6,7 @@ import { CHIP_ATLAS_Y, CHIP_ATLAS_H, chipRect } from './chip-atlas.js';
 import { JUDGE_ROWS, JUDGE_SPRITE_W, JUDGE_SPRITE_H } from './judge-atlas.js';
 import { linearFadeIn, linearFadeOut, padBounceOffset } from './renderer-math.js';
 import { ChipFireCanvas } from './chip-fire-canvas.js';
+import { ComboHudCanvas } from './combo-hud-canvas.js';
 import { PlayfieldCanvas } from './playfield-canvas.js';
 import { ResultCanvas } from './result-canvas.js';
 import type { JudgmentKind, Rank } from '@dtxmania/dtx-core';
@@ -173,6 +174,11 @@ export class Renderer {
    *  so a single timestamp drives both effects. */
   private readonly chipFireCanvas = new ChipFireCanvas();
 
+  /** Combo-HUD sub-canvas (07.Performance port — combo + danger).
+   *  Paints the combo number sprite + the gauge-driven danger
+   *  overlay. Replaces the old in-renderer fillText combo path. */
+  private readonly comboHudCanvas = new ComboHudCanvas();
+
   /** Result-screen sub-canvas (08.Result port). Owns its own asset
    *  preload + reveal animation; renderer just hands it the 2D
    *  context when `state.status === 'finished'`. */
@@ -238,6 +244,8 @@ export class Renderer {
     // Chip-fire bursts — loads the 9 unique ScreenPlayDrums chip
     // fire PNGs (10 lanes minus RD/CY share).
     void this.chipFireCanvas.load();
+    // Combo HUD — loads the combo digit atlas + danger overlay.
+    void this.comboHudCanvas.load();
 
     // Resize observer keeps the WebGL backbuffer sharp when the window / canvas
     // changes size (only relevant in desktop mode; XR owns its own framebuffer).
@@ -706,15 +714,17 @@ export class Renderer {
       ctx.textAlign = 'right';
       ctx.fillText(state.score.toString().padStart(7, '0'), CANVAS_W - 40, 80);
 
-      ctx.fillStyle = state.combo >= 10 ? '#fbbf24' : '#9ca3af';
-      ctx.font = 'bold 64px ui-monospace, monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(state.combo > 0 ? `${state.combo}` : '', CANVAS_W / 2, this.judgeLineY - 90);
-      if (state.combo > 0) {
-        ctx.fillStyle = '#6b7280';
-        ctx.font = 'bold 20px ui-monospace, monospace';
-        ctx.fillText('COMBO', CANVAS_W / 2, this.judgeLineY - 60);
-      }
+      // Combo digits + COMBO label + danger overlay — delegated to
+      // ComboHudCanvas so the sprite atlas is used when present and
+      // a fillText fallback covers the skinless path.
+      this.comboHudCanvas.paint(ctx, {
+        combo: state.combo,
+        gauge: state.gauge,
+        judgeLineY: this.judgeLineY,
+        canvasW: CANVAS_W,
+        canvasH: CANVAS_H,
+        nowMs: performance.now(),
+      });
 
       ctx.fillStyle = '#4b5563';
       ctx.font = '14px ui-monospace, monospace';

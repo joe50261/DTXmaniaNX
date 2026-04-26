@@ -58,6 +58,9 @@ const STAGE7_ALLOWLIST = [
   'ScreenPlayDrums chip fire_FT.png',
   'ScreenPlayDrums chip fire_CY.png',
   'ScreenPlayDrums chip fire_Bonus.png',
+  // Combo HUD — combo digit atlas + danger overlay.
+  'ScreenPlayDrums combo.png',
+  '7_Danger.png',
 ];
 const STAGE8_ALLOWLIST = [
   '8_background.jpg',
