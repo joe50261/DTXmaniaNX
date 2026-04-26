@@ -47,16 +47,30 @@ android {
         unitTests.all {
             it.useJUnitPlatform()
         }
+        // Robolectric needs the merged test resources + manifest so it
+        // can construct an Application instance and resolve resources
+        // during JVM unit tests.
+        unitTests.isIncludeAndroidResources = true
     }
 }
 
 dependencies {
     implementation(libs.androidx.documentfile)
+    implementation(libs.androidx.activity)
 
     // Meta Spatial SDK is intentionally NOT yet wired in — coords and
     // Maven repo need verification against the official sample project
     // first. See gradle/libs.versions.toml for context.
 
+    // JUnit 5 (Jupiter) drives the platform; junit-vintage-engine lets
+    // the same `gradlew testDebugUnitTest` run also pick up the JUnit-4
+    // -style Robolectric tests in `io/`. The two engines coexist on the
+    // platform without interference.
     testImplementation(libs.junit.jupiter.api)
     testRuntimeOnly(libs.junit.jupiter.engine)
+    testRuntimeOnly(libs.junit.vintage.engine)
+    testImplementation(libs.junit4)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.test.ext.junit)
 }

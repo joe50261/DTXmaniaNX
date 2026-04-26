@@ -1,17 +1,19 @@
 package com.dtxmania.quest
 
-import android.app.Activity
 import android.os.Bundle
+import androidx.activity.ComponentActivity
 import com.dtxmania.quest.app.Stage
 
 /**
- * Phase 0 stub. Currently extends a vanilla [Activity] so the build
- * does not depend on the Meta Spatial SDK before its Maven coordinates
- * are verified against Meta's official sample project. Once verified,
- * swap the base class to the SDK's `AppSystemActivity` and move the
- * Stage handoff into `onSceneReady()`.
+ * Phase 0/2 stub. Currently extends [ComponentActivity] (rather than the
+ * Spatial SDK's `AppSystemActivity`) so we can register
+ * `ActivityResultContracts.OpenDocumentTree` for the Phase 2 SAF picker
+ * without first wiring the real SDK base class. Once the Spatial SDK
+ * coordinates are pinned, swap the base class to the SDK's
+ * `AppSystemActivity` (which itself extends ComponentActivity, so the
+ * SAF launcher continues to work).
  */
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
 
     private lateinit var stage: Stage
 
