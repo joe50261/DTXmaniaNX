@@ -14,6 +14,9 @@ const base = process.env.GITHUB_ACTIONS ? '/DTXmaniaNX/' : '/';
 //  - Stage 5 (song select): full set, 716KB. Cheap enough to ship all.
 //  - Stage 7 (gameplay): explicit allowlist; the full set is ~13MB and
 //    most of it is unused. Add to this list when a new asset is needed.
+//  - Stage 8 (result): explicit allowlist (~14 files). Loaded by
+//    `ResultCanvas` — see `result-design.md` for which file maps to
+//    which sub-element.
 const RUNTIME_GRAPHICS = '../../../Runtime/System/Graphics';
 const STAGE7_ALLOWLIST = [
   '7_background.jpg',
@@ -23,6 +26,22 @@ const STAGE7_ALLOWLIST = [
   'ScreenPlay judge strings 1.png',
   '7_Gauge.png',
   '7_gauge_bar.png',
+];
+const STAGE8_ALLOWLIST = [
+  '8_background.jpg',
+  '8_rankSS.png',
+  '8_rankS.png',
+  '8_rankA.png',
+  '8_rankB.png',
+  '8_rankC.png',
+  '8_rankD.png',
+  '8_rankE.png',
+  '8_New Record.png',
+  '8_numbers_large.png',
+  '8_progress_bar_panel.png',
+  'ScreenResult Excellent.png',
+  'ScreenResult fullcombo.png',
+  'ScreenResult StageCleared.png',
 ];
 
 export default defineConfig({
@@ -42,6 +61,11 @@ export default defineConfig({
           rename: { stripBase: true },
         },
         ...STAGE7_ALLOWLIST.map((name) => ({
+          src: `${RUNTIME_GRAPHICS}/${name}`,
+          dest: 'skin',
+          rename: { stripBase: true as const },
+        })),
+        ...STAGE8_ALLOWLIST.map((name) => ({
           src: `${RUNTIME_GRAPHICS}/${name}`,
           dest: 'skin',
           rename: { stripBase: true as const },

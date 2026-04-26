@@ -5,6 +5,7 @@ import { PAD_ATLAS, PAD_SIZE, padRect } from './pad-atlas.js';
 import { CHIP_ATLAS_Y, CHIP_ATLAS_H, chipRect } from './chip-atlas.js';
 import { JUDGE_ROWS, JUDGE_SPRITE_W, JUDGE_SPRITE_H } from './judge-atlas.js';
 import { linearFadeIn, linearFadeOut, padBounceOffset } from './renderer-math.js';
+import { ResultCanvas } from './result-canvas.js';
 import type { JudgmentKind, Rank } from '@dtxmania/dtx-core';
 import type { LaneValue } from '@dtxmania/input';
 
@@ -18,10 +19,6 @@ export const DEFAULT_JUDGE_LINE_Y = 600;
  * runtime via `Renderer.setScrollSpeed`. */
 export const DEFAULT_SCROLL_SPEED = 0.45;
 export const CHIP_H = 14;
-
-function truncate(s: string, max: number): string {
-  return s.length <= max ? s : s.slice(0, max - 1) + '…';
-}
 
 export interface JudgmentFlash {
   text: string;
@@ -163,6 +160,15 @@ export class Renderer {
   /** 7_gauge_bar.png — scaled horizontally by gauge value. */
   private gaugeBarImage: HTMLImageElement | null = null;
 
+  /** Result-screen sub-canvas (08.Result port). Owns its own asset
+   *  preload + reveal animation; renderer just hands it the 2D
+   *  context when `state.status === 'finished'`. */
+  private readonly resultCanvas = new ResultCanvas();
+  /** Previous frame's playback status — used to detect the
+   *  playing → finished transition so the rank reveal counter
+   *  resets when a fresh play ends. */
+  private prevStatus: 'idle' | 'playing' | 'finished' = 'idle';
+
   /** XR session (null when in desktop ortho mode). */
   private xrSession: XRSession | null = null;
 
@@ -207,6 +213,11 @@ export class Renderer {
     this.playfield.add(this.hudMesh);
 
     this.applySkin(skin);
+
+    // Result-screen sub-canvas owns its own asset preload (8_*/ScreenResult*).
+    // Fire-and-forget so the renderer keeps booting; first paints fall back
+    // to procedural draws while images stream in.
+    void this.resultCanvas.load();
 
     // Resize observer keeps the WebGL backbuffer sharp when the window / canvas
     // changes size (only relevant in desktop mode; XR owns its own framebuffer).
@@ -680,107 +691,65 @@ export class Renderer {
 
     if (state.status === 'finished') {
       this.drawResult(state);
+    } else if (this.prevStatus === 'finished') {
+      // Leaving the result scene — clear the start anchor so the
+      // next play's reveal animation runs from the start.
+      this.resultCanvas.start(performance.now());
     }
+    this.prevStatus = state.status;
   }
 
+  /**
+   * Result screen — delegated to `ResultCanvas` (08.Result port).
+   *
+   * The renderer detects the playing → finished transition and tells
+   * the sub-canvas when to anchor its reveal counter; from there the
+   * sub-canvas owns asset loading, layout, and animation. Painted
+   * inside the same dim-curtain envelope the previous in-renderer
+   * draw used so the transition feels identical even when the
+   * 8_x and ScreenResult x assets are absent.
+   */
   private drawResult(state: RenderState): void {
-    const ctx = this.ctx;
     const now = performance.now();
+
+    // Anchor reveal counter on the playing → finished edge so a fresh
+    // play starts the rank slot-machine from frame 0.
+    if (this.prevStatus !== 'finished') {
+      this.resultCanvas.start(now);
+    }
+
+    const ctx = this.ctx;
     const age = state.finishedAtMs !== null ? now - state.finishedAtMs : 0;
     const alpha = linearFadeIn(age, 400);
     ctx.save();
     ctx.globalAlpha = alpha;
 
-    // Dim curtain over the in-play scene.
+    // Dim curtain over the in-play scene — kept here (not in
+    // ResultCanvas) so the result paint stays a pure overlay and a
+    // future "render straight onto 8_background.jpg" path doesn't
+    // need to special-case curtain removal.
     ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-    // Header.
-    ctx.fillStyle = '#e5e7eb';
-    ctx.font = 'bold 56px ui-monospace, monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('RESULTS', CANVAS_W / 2, 80);
-
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '20px ui-monospace, monospace';
-    ctx.fillText(truncate(state.titleLine, 70), CANVAS_W / 2, 110);
-
-    // Giant rank letter.
-    const rankColors: Record<Rank, string> = {
-      SS: '#fde047',
-      S: '#fbbf24',
-      A: '#4ade80',
-      B: '#60a5fa',
-      C: '#a78bfa',
-      D: '#f472b6',
-      E: '#94a3b8',
-    };
-    ctx.fillStyle = rankColors[state.rank];
-    ctx.font = 'bold 260px ui-monospace, monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(state.rank, CANVAS_W / 2, 370);
-
-    // Achievement %.
-    ctx.fillStyle = '#e5e7eb';
-    ctx.font = 'bold 36px ui-monospace, monospace';
-    const rateText = state.totalNotes === 0
-      ? '---'
-      : `${state.achievementRate.toFixed(2)}%`;
-    ctx.fillText(rateText, CANVAS_W / 2, 420);
-
-    // Left column: judgment counts.
-    const leftX = 260;
-    const numberX = 520;
-    const judgeRows: Array<{ label: string; key: JudgmentKind; color: string }> = [
-      { label: 'PERFECT', key: 'PERFECT', color: '#7dd3fc' },
-      { label: 'GREAT', key: 'GREAT', color: '#4ade80' },
-      { label: 'GOOD', key: 'GOOD', color: '#fbbf24' },
-      { label: 'POOR', key: 'POOR', color: '#f472b6' },
-      { label: 'MISS', key: 'MISS', color: '#ef4444' },
-    ];
-    ctx.font = '22px ui-monospace, monospace';
-    let rowY = 480;
-    for (const row of judgeRows) {
-      ctx.fillStyle = row.color;
-      ctx.textAlign = 'left';
-      ctx.fillText(row.label, leftX, rowY);
-      ctx.textAlign = 'right';
-      ctx.fillStyle = '#e5e7eb';
-      ctx.fillText(String(state.counts[row.key]), numberX, rowY);
-      rowY += 36;
-    }
-
-    // Right column: score + max combo + optional badge.
-    const rightX = 720;
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#e5e7eb';
-    ctx.font = 'bold 40px ui-monospace, monospace';
-    ctx.fillText(`SCORE ${state.score.toString().padStart(7, '0')}`, rightX, 500);
-
-    ctx.font = '24px ui-monospace, monospace';
-    ctx.fillStyle = '#9ca3af';
-    ctx.fillText(`MAX COMBO ${state.maxCombo}`, rightX, 540);
-
-    if (state.excellent) {
-      ctx.fillStyle = '#fde047';
-      ctx.font = 'bold 28px ui-monospace, monospace';
-      ctx.fillText('EXCELLENT', rightX, 600);
-    } else if (state.fullCombo) {
-      ctx.fillStyle = '#fbbf24';
-      ctx.font = 'bold 28px ui-monospace, monospace';
-      ctx.fillText('FULL COMBO', rightX, 600);
-    }
-
-    // Footer hint (delay so it doesn't flash in during fade-in).
-    if (age > 400) {
-      ctx.fillStyle = '#6b7280';
-      ctx.font = '16px ui-monospace, monospace';
-      ctx.textAlign = 'center';
-      const hint = state.inXR
-        ? 'Hit any pad to return (auto-return in 5s)'
-        : 'Press Esc to return';
-      ctx.fillText(hint, CANVAS_W / 2, 690);
-    }
+    this.resultCanvas.paint(
+      ctx,
+      {
+        rank: state.rank,
+        excellent: state.excellent,
+        fullCombo: state.fullCombo,
+        score: state.score,
+        achievementRate: state.achievementRate,
+        maxCombo: state.maxCombo,
+        totalNotes: state.totalNotes,
+        counts: state.counts,
+        titleLine: state.titleLine,
+        // newRecord wiring lives in Game; until that lands the
+        // badge stays hidden so we don't show a misleading flag.
+        newRecord: false,
+        inXR: state.inXR,
+      },
+      now
+    );
 
     ctx.restore();
   }
