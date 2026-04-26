@@ -244,6 +244,13 @@ export class SongSelectCanvas {
   private onExit: (() => void) | null = null;
   private shown = false;
 
+  /** Read-only mirror of the private `shown` flag. Surfaced for the
+   * Game `songSelectShown` getter, which e2e specs poll to assert the
+   * panel actually appeared (entering VR with a library, etc.). */
+  get isShown(): boolean {
+    return this.shown;
+  }
+
   private readonly raycaster = new THREE.Raycaster();
   /** Controllers the menu attached a laser + listeners to. Populated
    * once in the constructor — re-creating per show() was leaking Line

@@ -297,6 +297,13 @@ export class Game {
     return this.renderer.inXR;
   }
 
+  /** True while the song-select panel is being painted (desktop or
+   * in-VR — the canvas is shared). Used by e2e specs to assert the
+   * menu appeared on enterXR when a library was already loaded. */
+  get songSelectShown(): boolean {
+    return this.songSelect.isShown;
+  }
+
   /** True if loadAndStart has been called at least once. */
   get hasChart(): boolean {
     return this.song !== null;
