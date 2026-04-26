@@ -36,7 +36,7 @@ import {
 import { applyAutoFire } from './autofire.js';
 import { detectMisses, matchLaneHit } from './matcher.js';
 import { channelToLane, LANE_LAYOUT, laneSpec } from './lane-layout.js';
-import { XrControllers, type XrPoseSnapshot } from './xr-controllers.js';
+import { XrControllers, type XrLaneEvent, type XrPoseSnapshot } from './xr-controllers.js';
 import { emptyChartState, resetStateOnVrExit } from './vr-lifecycle.js';
 import {
   applyGaugeDelta,
@@ -93,6 +93,10 @@ interface PlayableChip {
 export interface HitProcessedEvent {
   lane: LaneValue;
   songTimeMs: number;
+  /** Which controller fired this — present for XR hits, `undefined`
+   * for keyboard / MIDI / gamepad / auto-detected misses. Threaded
+   * through from `XrLaneEvent.hand`. */
+  hand: 'left' | 'right' | undefined;
   matched: {
     idx: number;
     /** ms offset from chip; `null` for auto-detected misses. */
@@ -812,6 +816,8 @@ export class Game {
       this.onHitProcessed?.({
         lane: m.lane,
         songTimeMs: songTime,
+        // Auto-detected miss has no controller — chip just expired.
+        hand: undefined,
         matched: { idx: m.idx, deltaMs: null, judgment: Judgment.MISS },
       });
     }
@@ -943,7 +949,7 @@ export class Game {
     }
   }
 
-  private handleLaneHit(event: LaneHitEvent): void {
+  private handleLaneHit(event: LaneHitEvent | XrLaneEvent): void {
     // Result-screen early-exit: any pad hit after a short dwell returns to
     // the song picker (primarily for VR, where there is no keyboard). The
     // 400 ms dwell keeps the last in-song strike from double-firing as a
@@ -991,7 +997,12 @@ export class Game {
       this.playStrayHit(event.lane, songTime);
       this.hitFlashes.push({ lane: event.lane, spawnedMs: songTime });
       this.lastPadHitMs.set(event.lane, performance.now());
-      this.onHitProcessed?.({ lane: event.lane, songTimeMs: songTime, matched: null });
+      this.onHitProcessed?.({
+        lane: event.lane,
+        songTimeMs: songTime,
+        hand: 'hand' in event ? event.hand : undefined,
+        matched: null,
+      });
       return;
     }
 
@@ -1020,6 +1031,7 @@ export class Game {
     this.onHitProcessed?.({
       lane: event.lane,
       songTimeMs: songTime,
+      hand: 'hand' in event ? event.hand : undefined,
       matched: { idx: match.idx, deltaMs: match.deltaMs, judgment: match.judgment },
     });
   }

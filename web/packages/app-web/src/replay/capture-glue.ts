@@ -33,11 +33,6 @@
  *    `handleLaneHit`. Replays of autoplay-on charts will show those
  *    chips as falling past the judge line without any visual /
  *    score event. Fix is a 1-line emit in `autoFireLanes`.
- *  - `HitSource` is hard-coded `'xr-right'` for human input. The input
- *    pipeline merges keyboard + XR events into a generic
- *    `LaneHitEvent` before reaching `handleLaneHit`, so the originating
- *    side is lost. To distinguish hands, tag the event at the input
- *    boundary (`KeyboardInput.onLaneHit` / `XrControllers.onHit`).
  */
 
 import { Recorder, type ChartMeta, type FinalSnapshot, type HitEvent, type PlayerSettings, type PoseSample } from './recorder-model.js';
@@ -48,12 +43,16 @@ import type { HitProcessedEvent } from '../game.js';
 import type { XrPoseSnapshot } from '../xr-controllers.js';
 
 /** Translate a Game `HitProcessedEvent` into the replay schema's
- * `HitEvent`. Three flavours, distinguished by `e.matched`:
- *  - `matched === null` → stray (chipIndex=-1, lagMs=null, judgment=MISS placeholder).
- *  - `matched.deltaMs === null` → auto-detected miss (source='auto', judgment=MISS).
- *  - `matched.deltaMs !== null` → human input matched a chip; source is
- *    'auto' if the lane is on autoplay (defensive — autoplay-lane hits
- *    don't currently reach this path), else 'xr-right' placeholder.
+ * `HitEvent`. Source priority:
+ *  - lane on autoplay → `'auto'` (defensive — autoplay-lane hits
+ *    rarely reach `handleLaneHit`, but if they do the run wasn't
+ *    "human input on that lane").
+ *  - `matched.deltaMs === null` (auto-detected miss) → `'auto'`.
+ *  - `e.hand === 'left'` → `'xr-left'`.
+ *  - `e.hand === 'right'` → `'xr-right'`.
+ *  - hand `undefined` (keyboard / MIDI / gamepad) → `'xr-right'`
+ *    placeholder; visually a pad flash with no ghost hand, so any
+ *    side label is benign here.
  *
  * `autoPlayLanes` is a snapshot at recording start; live changes
  * mid-run aren't reflected — matches how `Game.autoPlayLanes` is set

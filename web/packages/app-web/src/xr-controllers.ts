@@ -44,6 +44,11 @@ export interface XrLaneEvent {
   lane: LaneValue;
   timestampMs: number;
   key: string;
+  /** Which controller fired this hit. Populated from the input source's
+   * `handedness` at fire time. Falls back to `'right'` only in the
+   * pathological case where handedness is `'none'` (trackers, not real
+   * controllers) — drum sticks always report a real hand on Quest. */
+  hand: 'left' | 'right';
 }
 export type XrLaneListener = (e: XrLaneEvent) => void;
 
@@ -435,10 +440,14 @@ export class XrControllers {
           if (nowMs - lastMs < HIT_COOLDOWN_MS) continue;
           this.lastHitMs.set(pad.lane, nowMs);
 
+          const handedness = this.inputSources[i]?.handedness;
+          const hand: 'left' | 'right' =
+            handedness === 'left' ? 'left' : handedness === 'right' ? 'right' : 'right';
           this.listener({
             lane: pad.lane,
             timestampMs: nowMs,
             key: `xr-pad-${laneLabel(pad.lane)}`,
+            hand,
           });
           this.pulseHaptic(i);
           fired = true;

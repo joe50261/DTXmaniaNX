@@ -51,12 +51,19 @@ const POSE_SNAP: XrPoseSnapshot = {
 };
 
 function strayHpe(over: Partial<HitProcessedEvent> = {}): HitProcessedEvent {
-  return { lane: Lane.SD, songTimeMs: 100, matched: null, ...over };
+  return {
+    lane: Lane.SD,
+    songTimeMs: 100,
+    hand: 'right',
+    matched: null,
+    ...over,
+  };
 }
 
 function matchedHpe(over: {
   lane?: LaneValue;
   songTimeMs?: number;
+  hand?: 'left' | 'right' | undefined;
   idx?: number;
   deltaMs?: number | null;
   judgment?: HitProcessedEvent['matched'] extends infer M
@@ -66,6 +73,7 @@ function matchedHpe(over: {
   return {
     lane: over.lane ?? Lane.SD,
     songTimeMs: over.songTimeMs ?? 100,
+    hand: 'hand' in over ? over.hand : 'right',
     matched: {
       idx: over.idx ?? 5,
       deltaMs: over.deltaMs ?? 12,
@@ -80,10 +88,9 @@ describe('buildHitEvent', () => {
     expect(ev.chipIndex).toBe(-1);
     expect(ev.lagMs).toBeNull();
     expect(ev.judgment).toBe(Judgment.MISS);
-    expect(ev.source).toBe('xr-right');
   });
 
-  it('matched human input → carries idx + deltaMs + judgment, source=xr-right', () => {
+  it('matched human input → carries idx + deltaMs + judgment', () => {
     const ev = buildHitEvent(
       matchedHpe({ idx: 7, deltaMs: -8, judgment: Judgment.GREAT }),
       NO_AUTO,
@@ -91,12 +98,31 @@ describe('buildHitEvent', () => {
     expect(ev.chipIndex).toBe(7);
     expect(ev.lagMs).toBe(-8);
     expect(ev.judgment).toBe(Judgment.GREAT);
+  });
+
+  it('hand=left → source=xr-left', () => {
+    const ev = buildHitEvent(matchedHpe({ hand: 'left' }), NO_AUTO);
+    expect(ev.source).toBe('xr-left');
+  });
+
+  it('hand=right → source=xr-right', () => {
+    const ev = buildHitEvent(matchedHpe({ hand: 'right' }), NO_AUTO);
     expect(ev.source).toBe('xr-right');
+  });
+
+  it('hand=undefined (keyboard / MIDI / gamepad) → source=xr-right placeholder', () => {
+    const ev = buildHitEvent(matchedHpe({ hand: undefined }), NO_AUTO);
+    expect(ev.source).toBe('xr-right');
+  });
+
+  it('stray with hand=left → source=xr-left (visual flash on the striking hand)', () => {
+    const ev = buildHitEvent(strayHpe({ hand: 'left' }), NO_AUTO);
+    expect(ev.source).toBe('xr-left');
   });
 
   it('auto-detected miss (matched.deltaMs===null) → source=auto, judgment=MISS', () => {
     const ev = buildHitEvent(
-      matchedHpe({ idx: 3, deltaMs: null, judgment: Judgment.MISS }),
+      matchedHpe({ hand: undefined, idx: 3, deltaMs: null, judgment: Judgment.MISS }),
       NO_AUTO,
     );
     expect(ev.source).toBe('auto');
@@ -105,16 +131,16 @@ describe('buildHitEvent', () => {
     expect(ev.judgment).toBe(Judgment.MISS);
   });
 
-  it('matched on autoPlay lane → source=auto (defensive — usually unreachable)', () => {
+  it('autoPlay lane wins over hand → source=auto (defensive)', () => {
     const auto = new Set<LaneValue>([Lane.BD]);
-    const ev = buildHitEvent(matchedHpe({ lane: Lane.BD }), auto);
+    const ev = buildHitEvent(matchedHpe({ lane: Lane.BD, hand: 'left' }), auto);
     expect(ev.source).toBe('auto');
   });
 
-  it('matched on non-autoPlay lane stays xr-right even if other lanes are auto', () => {
+  it('matched on non-autoPlay lane uses hand even if other lanes are auto', () => {
     const auto = new Set<LaneValue>([Lane.BD]);
-    const ev = buildHitEvent(matchedHpe({ lane: Lane.SD }), auto);
-    expect(ev.source).toBe('xr-right');
+    const ev = buildHitEvent(matchedHpe({ lane: Lane.SD, hand: 'left' }), auto);
+    expect(ev.source).toBe('xr-left');
   });
 
   it('preserves songTimeMs + lane verbatim', () => {
@@ -247,16 +273,18 @@ describe('createReplayCapture — lifecycle', () => {
     expect(saved?.hits[0]?.songTimeMs).toBe(200);
   });
 
-  it('source derivation respects autoPlayLanes captured at construction', async () => {
+  it('source derivation respects autoPlayLanes + hand captured at the event', async () => {
     const auto = new Set<LaneValue>([Lane.BD]);
     const capture = createReplayCapture(auto);
     capture.start(META, PLAYER);
-    capture.onHit(matchedHpe({ lane: Lane.BD }));
-    capture.onHit(matchedHpe({ lane: Lane.SD }));
+    capture.onHit(matchedHpe({ lane: Lane.BD, hand: 'right' }));
+    capture.onHit(matchedHpe({ lane: Lane.SD, hand: 'left' }));
+    capture.onHit(matchedHpe({ lane: Lane.HH, hand: 'right' }));
     const id = await capture.finish(snap());
     const saved = await loadReplay(id);
-    expect(saved?.hits[0]?.source).toBe('auto');
-    expect(saved?.hits[1]?.source).toBe('xr-right');
+    expect(saved?.hits[0]?.source).toBe('auto');     // autoPlay wins
+    expect(saved?.hits[1]?.source).toBe('xr-left');  // hand-driven
+    expect(saved?.hits[2]?.source).toBe('xr-right');
   });
 
   it('finish stores the FinalSnapshot derived from the live ScoreSnapshot', async () => {
