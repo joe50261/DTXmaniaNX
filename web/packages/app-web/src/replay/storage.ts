@@ -93,23 +93,53 @@ function newId(): string {
 }
 
 /** Persist a replay; returns the generated id. */
-export function saveReplay(_replay: Replay): Promise<string> {
-  throw new Error('saveReplay: not implemented');
+export async function saveReplay(replay: Replay): Promise<string> {
+  const id = newId();
+  await tx<IDBValidKey>('readwrite', (s) => s.put(replay, id));
+  return id;
 }
 
 /** List every saved replay's summary. Caller sorts by `startedAt`. */
-export function listReplaySummaries(): Promise<ReplaySummary[]> {
-  throw new Error('listReplaySummaries: not implemented');
+export async function listReplaySummaries(): Promise<ReplaySummary[]> {
+  const db = await open();
+  return new Promise<ReplaySummary[]>((resolve, reject) => {
+    const transaction = db.transaction(STORE_REPLAYS, 'readonly');
+    const store = transaction.objectStore(STORE_REPLAYS);
+    const req = store.openCursor();
+    const out: ReplaySummary[] = [];
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (!cursor) return; // transaction.oncomplete resolves
+      const id = cursor.key as string;
+      const replay = cursor.value as Replay;
+      out.push(summarise(id, replay));
+      cursor.continue();
+    };
+    transaction.oncomplete = () => {
+      db.close();
+      resolve(out);
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error);
+    };
+    transaction.onabort = () => {
+      db.close();
+      reject(transaction.error);
+    };
+  });
 }
 
 /** Load the full envelope by id, or null if not found. */
-export function loadReplay(_id: string): Promise<Replay | null> {
-  throw new Error('loadReplay: not implemented');
+export async function loadReplay(id: string): Promise<Replay | null> {
+  const value = await tx<unknown>('readonly', (s) => s.get(id));
+  if (value === undefined) return null;
+  return value as Replay;
 }
 
 /** Idempotent — deleting a nonexistent id is a no-op. */
-export function deleteReplay(_id: string): Promise<void> {
-  throw new Error('deleteReplay: not implemented');
+export async function deleteReplay(id: string): Promise<void> {
+  await tx<undefined>('readwrite', (s) => s.delete(id));
 }
 
 /** Project a stored Replay row + its key into a summary. Exposed
