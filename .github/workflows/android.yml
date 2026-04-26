@@ -53,13 +53,45 @@ jobs:
           sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1"
 
       - name: Unit tests
-        # --stacktrace + --info so the actual cause surfaces in the
-        # GitHub Actions log when the WebFetch render of the page
-        # truncates the deep error context.
-        run: gradle :app:testDebugUnitTest --no-daemon --stacktrace --info
+        # tee the gradle output to a file. On failure, copy the tail to
+        # $GITHUB_STEP_SUMMARY so the run-summary page (which is
+        # WebFetch-readable without auth) shows the actual error
+        # instead of just "Process completed with exit code 1".
+        run: |
+          set -o pipefail
+          if ! gradle :app:testDebugUnitTest --no-daemon --stacktrace --info 2>&1 | tee unit-tests.log; then
+            {
+              echo "## :app:testDebugUnitTest FAILED"
+              echo '```'
+              tail -200 unit-tests.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Assemble debug APK
-        run: gradle :app:assembleDebug --no-daemon --stacktrace --info
+        run: |
+          set -o pipefail
+          if ! gradle :app:assembleDebug --no-daemon --stacktrace --info 2>&1 | tee assemble-debug.log; then
+            {
+              echo "## :app:assembleDebug FAILED"
+              echo '```'
+              tail -200 assemble-debug.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Upload gradle logs (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-logs-${{ github.run_id }}
+          path: |
+            native/quest-spatial/unit-tests.log
+            native/quest-spatial/assemble-debug.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
