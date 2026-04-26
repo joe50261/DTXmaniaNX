@@ -550,8 +550,17 @@ export class Renderer {
   /**
    * BD + LBD strikes paint a full-width red horizontal bar across the
    * entire drum region at the judgment line, on top of the per-lane
-   * radial flash. Mirrors the canonical DTXmania "腳腳" effect — every
-   * kick punctuates the whole playfield, not just its column.
+   * radial flash.
+   *
+   * **Web-port custom — NOT canonical DTXmania.** The canonical game
+   * has no full-row kick effect; it just paints the
+   * `ScreenPlayDrums chip fire_BD.png` footprint sprite at the BD
+   * lane position (now handled by `chipFireCanvas` in paintHud).
+   * The wide bar here is a web-port-only decoration that was added
+   * for VR tactile feedback before the chip-fire sub-cluster
+   * landed. Consider removing once the chip-fire BD footprint
+   * provides enough strike feedback in the VR view — the C# game
+   * runs without it.
    *
    * Reuses state.hitFlashes (which already records lane + spawnedMs
    * for every drum strike including kicks) so no new state plumbing.

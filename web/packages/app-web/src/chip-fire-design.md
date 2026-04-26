@@ -50,6 +50,21 @@ every frame at slightly offset positions* (radial fan); the web
 port uses one sprite per hit and fades it out over the lifetime to
 get the same "puff and disperse" feel cheaply.
 
+## Composite mode (load-bearing)
+
+The PNGs are authored as **black-background sprites** — corner
+pixels sample as `(0, 0, 0, alpha=192-255)`, not transparent. C#
+flags this texture family with `bAdditiveBlending = true`
+(`CActPerfDrumsChipFireD.cs:510`); the web port mirrors that with
+`globalCompositeOperation = 'lighter'`. Plain `source-over` would
+paint visible black squares around every burst (the corner RGB is
+opaque black) — visible as the "黑底" regression in the second CF
+Pages preview before the revert.
+
+This is **not** an alpha-channel bug in the source asset — it's
+the canonical authoring convention: additive-blend sprites can
+encode "no contribution" as RGB=(0,0,0) regardless of alpha.
+
 ## Animation
 
 C# defaults: `nExplosionFrames = 70`, `nExplosionInterval = 3 ms`

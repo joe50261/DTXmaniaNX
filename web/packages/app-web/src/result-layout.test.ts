@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BANNER_X,
   BANNER_Y,
+  digitAtlas,
   digitAtlasX,
   JUDGE_NUMBER_RIGHT_X,
   JUDGE_LABEL_X,
@@ -22,17 +23,36 @@ describe('result-layout — pinned constants match the C# reference', () => {
     expect(BANNER_Y).toBe(100);
   });
 
-  it('large digit strip matches CActResultParameterPanel table', () => {
-    expect(LARGE_DIGIT_W).toBe(28);
-    expect(LARGE_DIGIT_COUNT).toBe(11);
-    // Spot-check the per-glyph atlas X for digits and the colon.
+  it('large digit strip matches CActResultParameterPanel st特大文字位置 table', () => {
+    // Normal-mode glyph cell — 18×24 in a 5×2 grid (with '.' / '%').
+    // First-pass code had 28×24 in a 1×11 strip, which sampled empty
+    // space on digits 5-9 and overlapping cells on 0-4 (visible as
+    // garbled "12%" / "01.%" overlay on the first preview).
+    expect(LARGE_DIGIT_W).toBe(18);
+    expect(LARGE_DIGIT_COUNT).toBe(12); // 0..9 + '.' + '%'
+    // Row 0: digits 0..4 at y=0.
     expect(digitAtlasX('0')).toBe(0);
-    expect(digitAtlasX('5')).toBe(140);
-    expect(digitAtlasX('9')).toBe(252);
-    expect(digitAtlasX(':')).toBe(280);
+    expect(digitAtlasX('4')).toBe(72);
+    // Row 1: digits 5..9 at y=24.
+    expect(digitAtlasX('5')).toBe(0);
+    expect(digitAtlasX('9')).toBe(72);
+    // Punctuation slots.
+    expect(digitAtlasX('.')).toBe(90);
+    expect(digitAtlasX('%')).toBe(90);
   });
 
-  it('digitAtlasX returns null for non-digit characters', () => {
+  it('digitAtlas returns the (sx, sy) tuple for each canonical char', () => {
+    // Pinned to CActResultParameterPanel st特大文字位置 lines 116-165.
+    expect(digitAtlas('0')).toEqual({ sx: 0,  sy: 0  });
+    expect(digitAtlas('5')).toEqual({ sx: 0,  sy: 24 });
+    expect(digitAtlas('9')).toEqual({ sx: 72, sy: 24 });
+    expect(digitAtlas('.')).toEqual({ sx: 90, sy: 24 });
+    expect(digitAtlas('%')).toEqual({ sx: 90, sy: 0  });
+    expect(digitAtlas('a')).toBe(null);
+    expect(digitAtlas('')).toBe(null);
+  });
+
+  it('digitAtlasX (back-compat) still returns null for unknown chars', () => {
     expect(digitAtlasX('a')).toBe(null);
     expect(digitAtlasX('-')).toBe(null);
     expect(digitAtlasX('')).toBe(null);

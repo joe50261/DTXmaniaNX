@@ -24,16 +24,26 @@ export const BANNER_OFFSET_Y = 100;
 export const BANNER_X = RANK_X + BANNER_OFFSET_X; // 315
 export const BANNER_Y = RANK_Y + BANNER_OFFSET_Y; // 100
 
-/** Sprite-sheet column step in `8_numbers_large.png` (28 px per
- *  glyph, table at `CActResultParameterPanel` 24-66). */
-export const LARGE_DIGIT_W = 28;
+/** Sprite-sheet glyph cell geometry in `8_numbers_large.png`. The
+ *  asset is a 142×112 atlas; the *normal* mode (used everywhere on
+ *  the result screen) reads 18×24 cells laid out in a 5-col × 2-row
+ *  grid. The bottom half (y ≥ 48) holds extra-large 24×32 cells the
+ *  C# game uses for the SCORE display only — the web port renders
+ *  every metric at the normal size for consistency. Pinned by
+ *  `CActResultParameterPanel.cs` lines 116-165 (`st特大文字位置` table)
+ *  + line 868 (`new Rectangle(..., bExtraLarge ? 24 : 18, ... ? 32 : 24)`). */
+export const LARGE_DIGIT_W = 18;
 export const LARGE_DIGIT_H = 24;
 
-/** Number of glyphs in the strip (0..9 + ':'). */
-export const LARGE_DIGIT_COUNT = 11;
+/** 5 cols × 2 rows in `8_numbers_large.png`'s normal-mode region. */
+export const LARGE_DIGIT_COLS = 5;
 
-/** Atlas y of the digit row in `8_numbers_large.png`. The C# table
- *  pins every glyph at y=0 — there's only one row in this sprite. */
+/** Number of glyphs the atlas covers (0..9 + '.' + '%'). */
+export const LARGE_DIGIT_COUNT = 12;
+
+/** Atlas x base for the normal-mode region. The C# table reads
+ *  from y = 0 / y = 24 for digit row 0/1 (5 each), with '.' at
+ *  (90, 24) and '%' at (90, 0). */
 export const LARGE_DIGIT_ATLAS_Y = 0;
 
 /** New-record badge position, mirrored from `ptFullCombo位置[0]`. */
@@ -64,15 +74,32 @@ export const JUDGE_ROW_COUNT = 5;
 export const FOOTER_HINT_Y = 700;
 export const FOOTER_HINT_X = RESULT_CANVAS_W / 2;
 
-/** Glyph atlas X for a numeric character. Returns null for
- *  non-digit, non-':' characters so callers fall back to a text
- *  paint. Pinned by the C# table at lines 24-66. */
-export function digitAtlasX(ch: string): number | null {
+/** Glyph atlas (x, y) tuple for a renderable character. Returns
+ *  null for unknown chars so callers can fall back to a text
+ *  paint. Pinned by the `CActResultParameterPanel` `st特大文字位置`
+ *  table (lines 116-165):
+ *    '0'..'4' → row 0 at x = digit×18, y = 0
+ *    '5'..'9' → row 1 at x = (digit-5)×18, y = 24
+ *    '.'      → (90, 24)
+ *    '%'      → (90, 0)
+ */
+export function digitAtlas(ch: string): { sx: number; sy: number } | null {
   if (ch.length !== 1) return null;
   const code = ch.charCodeAt(0);
-  if (code >= 48 && code <= 57) return (code - 48) * LARGE_DIGIT_W;
-  if (ch === ':') return 10 * LARGE_DIGIT_W;
+  if (code >= 48 && code <= 57) {
+    const d = code - 48;
+    return { sx: (d % LARGE_DIGIT_COLS) * LARGE_DIGIT_W, sy: Math.floor(d / LARGE_DIGIT_COLS) * LARGE_DIGIT_H };
+  }
+  if (ch === '.') return { sx: 90, sy: LARGE_DIGIT_H };
+  if (ch === '%') return { sx: 90, sy: 0 };
   return null;
+}
+
+/** Back-compat shim — kept so existing tests that pin `digitAtlasX`
+ *  still link. New code should use `digitAtlas` for the full (sx, sy). */
+export function digitAtlasX(ch: string): number | null {
+  const a = digitAtlas(ch);
+  return a === null ? null : a.sx;
 }
 
 /** Resolve a per-judgement row baseline. `idx` 0..4 maps to

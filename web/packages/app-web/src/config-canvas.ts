@@ -105,22 +105,38 @@ export class ConfigCanvas {
   }
 
   /**
-   * Paint header + footer chrome strips scaled to a custom canvas
-   * width / height. The canonical `paintFrame()` assumes the
-   * canonical 1280×720 grid; this helper exists for hosts whose
+   * Paint background + header + footer + side rail scaled to a
+   * custom canvas width / height. The canonical `paintFrame()`
+   * assumes the 1280×720 grid; this helper exists for hosts whose
    * canvas is a different aspect ratio (notably the VR config
    * panel at 1024×1260) but who still want the canonical chrome.
    *
-   * Header sits at the top scaled to fit the canvas width. Footer
-   * mirrors that at the bottom. Background / menu-panel /
-   * description-panel are intentionally skipped — those are pinned
-   * to the 1280×720 grid and would warp on a different aspect.
+   *   - `4_background.png` stretched edge-to-edge under everything
+   *     so the panel reads as the original DTXMania config screen
+   *     even when the user's VR view doesn't catch the header /
+   *     footer strips at the top / bottom edges.
+   *   - `4_header panel.png` width-scaled at top.
+   *   - `4_footer panel.png` width-scaled at bottom.
+   *   - `4_item bar.png` scaled to canvas height as a left-edge
+   *     vertical rail (canonical x = 400 on the desktop grid → 39%
+   *     of canvas width on any aspect).
    */
   paintHeaderFooter(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    const bg = this.getByKey('background');
     const header = this.getByKey('header');
     const footer = this.getByKey('footer');
+
+    // Background first — stretched across the full canvas at low
+    // alpha so the canonical DTXMania ambient palette tints the
+    // panel without washing out the toggles / sliders. Skipped if
+    // the asset is missing.
+    if (bg) {
+      ctx.save();
+      ctx.globalAlpha = 0.3;
+      ctx.drawImage(bg, 0, 0, w, h);
+      ctx.restore();
+    }
     if (header) {
-      // Source is 1280×105; scale width to canvas, keep aspect.
       const scaledH = Math.round(HEADER_H * (w / HEADER_W));
       ctx.drawImage(header, 0, 0, w, scaledH);
     }
@@ -128,6 +144,10 @@ export class ConfigCanvas {
       const scaledH = Math.round(FOOTER_H * (w / FOOTER_W));
       ctx.drawImage(footer, 0, h - scaledH, w, scaledH);
     }
+    // 4_item bar.png is intentionally skipped here — its canonical
+    // x = 400 on the 1280-wide desktop grid would cut through the
+    // vr-config section labels at 39% of a 1024-wide panel. Wire
+    // it back in once vr-config grows a column-aware layout.
   }
 
   /**

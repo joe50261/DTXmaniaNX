@@ -55,10 +55,19 @@ panels at varying x; the web port omits the skill-panel chrome (no
 guitar/bass yet) and lays the metrics out as a centred column
 underneath the rank banner.
 
-- **Numeric font:** `8_numbers_large.png` is a 308×24 strip — 11
-  glyphs (`0`..`9` + `:` separator), each 28 × 24 px. Glyph table
-  pinned by `CActResultParameterPanel` lines 24-66 (`Point(0..280, 0)`,
-  step 28).
+- **Numeric font:** `8_numbers_large.png` is a **142×112** atlas
+  with two layouts stacked vertically:
+  - **Normal mode** (top half, y ∈ [0, 48)) — 18 × 24 cells in a
+    5-col × 2-row grid: digits 0..4 at row 0, 5..9 at row 1; `'%'`
+    at (90, 0) and `'.'` at (90, 24).
+  - **Extra-large mode** (bottom half, y ∈ [48, 112)) — 24 × 32
+    cells offset by `(num, num2)` per glyph (C# `bExtraLarge=true`
+    branch in `CActResultParameterPanel.cs:830-861`). Used by
+    DTXMania for the SCORE display only.
+
+  The web port uses the **normal mode** for every metric (score,
+  rate, max combo, judgement counts) so the layout reads
+  consistently. Mapping pinned by `digitAtlas()` in `result-layout.ts`.
 - **Web layout (centred column, x-centre = 640):**
     SCORE     y = 470   28-px digits, 7-wide right-aligned
     RATE      y = 510   28-px digits + '%' suffix, 5-wide

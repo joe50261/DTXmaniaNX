@@ -88,13 +88,17 @@ export class ChipFireCanvas {
     ctx.save();
     ctx.globalAlpha = alpha;
     if (asset) {
-      // Plain `source-over` — the per-lane chip-fire PNGs already
-      // ship with their own alpha channel cut around the burst
-      // shape. The previous `'lighter'` (additive) path looked
-      // correct on a black background but produced opaque-looking
-      // square halos on the busy 7_background.jpg because additive
-      // blend ignores the source alpha and just adds RGB. Honour
-      // the canonical alpha cut instead.
+      // Additive blend (`'lighter'`) is mandatory here — the C#
+      // game flags this texture family with `bAdditiveBlending = true`
+      // (`CActPerfDrumsChipFireD.cs:510`), and the source PNGs are
+      // authored as **full 128×128 black backgrounds with the burst
+      // colour painted on top** (sampled corner pixels = (0,0,0,255)).
+      // With plain `source-over` those black corners would draw as
+      // opaque black squares around every burst — the visible
+      // regression in the second CF Pages preview ("hit sprite
+      // 黑底"). `lighter` adds RGB to the destination, so black
+      // (0,0,0) contributes nothing and only the burst colour shows.
+      ctx.globalCompositeOperation = 'lighter';
       ctx.drawImage(asset, dx, dy, drawW, drawH);
     } else {
       // Procedural fallback: a coloured circle that matches the

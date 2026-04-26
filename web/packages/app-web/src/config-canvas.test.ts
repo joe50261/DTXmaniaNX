@@ -90,10 +90,29 @@ describe('ConfigCanvas — paintHeaderFooter (custom canvas size)', () => {
     injectAsset(c, '4_header panel.png');
     c.paintHeaderFooter(ctx2d(), 1024, 1260);
     const draws = ctx.calls.filter((x) => x.method === 'drawImage');
+    // Only the header asset is loaded → exactly one drawImage call.
     expect(draws.length).toBe(1);
     // arg order: img, x, y, w, h. y must be 0; w must be canvas w.
     expect(draws[0]!.args[2]).toBe(0);
     expect(draws[0]!.args[3]).toBe(1024);
+  });
+
+  it('paints background stretched to the full canvas at lower alpha', () => {
+    const c = new ConfigCanvas();
+    const fakeBg = {
+      complete: true,
+      naturalWidth: 1280,
+      naturalHeight: 720,
+      width: 1280,
+      height: 720,
+    } as unknown as HTMLImageElement;
+    (c as unknown as { assets: Map<string, HTMLImageElement> }).assets.set('4_background.png', fakeBg);
+    c.paintHeaderFooter(ctx2d(), 1024, 1260);
+    const draws = ctx.calls.filter((x) => x.method === 'drawImage');
+    expect(draws.length).toBe(1);
+    // Stretched to fill the panel — last two args are canvas w / h.
+    expect(draws[0]!.args[3]).toBe(1024);
+    expect(draws[0]!.args[4]).toBe(1260);
   });
 
   it('paints footer pinned to the bottom', () => {

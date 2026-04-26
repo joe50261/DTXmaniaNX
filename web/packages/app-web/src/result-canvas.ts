@@ -25,7 +25,7 @@ import {
 import {
   BANNER_X,
   BANNER_Y,
-  digitAtlasX,
+  digitAtlas,
   FOOTER_HINT_X,
   FOOTER_HINT_Y,
   JUDGE_LABEL_X,
@@ -33,7 +33,6 @@ import {
   JUDGE_ROW_COUNT,
   JUDGE_TOP_Y,
   judgeRowY,
-  LARGE_DIGIT_ATLAS_Y,
   LARGE_DIGIT_H,
   LARGE_DIGIT_W,
   MAXCOMBO_Y,
@@ -289,15 +288,18 @@ export class ResultCanvas {
     // Labels (text — no canonical label sprite ships with the game's
     // base skin for these rows). Drawn left of the numbers. Bright
     // grey + bold weight so they read against the metrics backing
-    // strip (translucent slate) without relying on the bg.
+    // strip (translucent slate). Position: 8 glyph-widths left of
+    // the metrics right edge so SCORE / RATE / MAX COMBO have room
+    // for their longest values (7-digit score, 6-char rate, 4-digit combo).
+    const labelX = METRICS_RIGHT_X - LARGE_DIGIT_W * 8 - 12;
     ctx.save();
     ctx.fillStyle = '#e2e8f0';
     ctx.font = 'bold 20px ui-monospace, monospace';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
-    ctx.fillText('SCORE',     METRICS_RIGHT_X - LARGE_DIGIT_W * 9,  SCORE_Y    + LARGE_DIGIT_H / 2);
-    ctx.fillText('RATE',      METRICS_RIGHT_X - LARGE_DIGIT_W * 9,  RATE_Y     + LARGE_DIGIT_H / 2);
-    ctx.fillText('MAX COMBO', METRICS_RIGHT_X - LARGE_DIGIT_W * 9,  MAXCOMBO_Y + LARGE_DIGIT_H / 2);
+    ctx.fillText('SCORE',     labelX, SCORE_Y    + LARGE_DIGIT_H / 2);
+    ctx.fillText('RATE',      labelX, RATE_Y     + LARGE_DIGIT_H / 2);
+    ctx.fillText('MAX COMBO', labelX, MAXCOMBO_Y + LARGE_DIGIT_H / 2);
     ctx.restore();
   }
 
@@ -339,23 +341,25 @@ export class ResultCanvas {
   ): void {
     const sprite = this.getAsset(ASSET_NUMBERS);
     if (sprite) {
-      // Walk right-to-left so we don't have to pre-compute total
-      // width (the strip is monospace at 28 px / glyph but '%' has
-      // no slot — we measure by atlas hit/miss and fall back to a
-      // CSS char on miss).
+      // Walk right-to-left, sampling each glyph's (sx, sy) from the
+      // 5x2 normal-mode atlas region. '0'..'9' + '.' + '%' all have
+      // canonical slots; anything else falls back to a CSS char at
+      // the same width step. Each glyph is monospace 18×24 in the
+      // source — drawn 1:1 here so the result reads at the
+      // canonical pixel size (matches C# `bExtraLarge=false` mode).
       let cursorX = rightX;
       for (let i = text.length - 1; i >= 0; i--) {
         const ch = text[i]!;
-        const sx = digitAtlasX(ch);
-        if (sx !== null) {
+        const a = digitAtlas(ch);
+        if (a !== null) {
           cursorX -= LARGE_DIGIT_W;
           ctx.drawImage(
             sprite,
-            sx, LARGE_DIGIT_ATLAS_Y, LARGE_DIGIT_W, LARGE_DIGIT_H,
+            a.sx, a.sy, LARGE_DIGIT_W, LARGE_DIGIT_H,
             cursorX, y, LARGE_DIGIT_W, LARGE_DIGIT_H
           );
         } else {
-          // '%', '.', '-', etc. — paint as text at the same monospace step.
+          // Unknown glyph — paint as CSS text at the same monospace step.
           cursorX -= LARGE_DIGIT_W;
           ctx.save();
           ctx.fillStyle = '#e5e7eb';
