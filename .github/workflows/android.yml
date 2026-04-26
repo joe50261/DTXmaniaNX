@@ -122,10 +122,29 @@ jobs:
           {
             echo "### CI failure: \`$HDR\` (run ${{ github.run_id }}, sha ${GITHUB_SHA:0:7})"
             echo
-            echo '<details><summary>Last 200 lines of '"$LOG"'</summary>'
+            # If JUnit XML reports exist, dump every <failure> / <error>
+            # block — those carry the actual test stack traces, which
+            # the gradle log otherwise hides behind a "see report at:"
+            # pointer.
+            REPORT_DIR=app/build/test-results/testDebugUnitTest
+            if [ -d "$REPORT_DIR" ]; then
+              FAIL_XML=$(grep -lE '<(failure|error)\b' "$REPORT_DIR"/*.xml 2>/dev/null || true)
+              if [ -n "$FAIL_XML" ]; then
+                echo '<details><summary>Failed JUnit XML reports</summary>'
+                echo
+                echo '```xml'
+                # Limit total bytes so the comment stays under GitHub's 65k limit.
+                cat $FAIL_XML | head -c 20000
+                echo
+                echo '```'
+                echo '</details>'
+                echo
+              fi
+            fi
+            echo '<details><summary>Last 300 lines of '"$LOG"'</summary>'
             echo
             echo '```'
-            tail -200 "$LOG"
+            tail -300 "$LOG"
             echo '```'
             echo '</details>'
           } > comment.md
