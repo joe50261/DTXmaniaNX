@@ -57,8 +57,10 @@ export function setSummaries(
   return { summaries, sortKey: state.sortKey, selectedId };
 }
 
-/** Change the active sort. Selection is preserved when possible
- * (same id still exists), otherwise re-defaults to first sorted row. */
+/** Change the active sort. Selection is preserved verbatim — sort is
+ * a display concern; moving the highlight under the user when they
+ * change sort order is jarring. If they want a different row, they
+ * click. */
 export function setSortKey(state: ListState, key: SortKey): ListState {
   return { summaries: state.summaries, sortKey: key, selectedId: state.selectedId };
 }

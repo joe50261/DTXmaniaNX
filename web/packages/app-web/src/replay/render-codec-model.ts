@@ -46,13 +46,7 @@ export function pickCodec(
 ): CodecPick | null {
   for (const mime of candidates) {
     if (isTypeSupported(mime)) {
-      let ext: SupportedExtension;
-      try {
-        ext = extensionForMime(mime);
-      } catch {
-        ext = 'webm';
-      }
-      return { mime, ext };
+      return { mime, ext: extensionForMime(mime) };
     }
   }
   return null;

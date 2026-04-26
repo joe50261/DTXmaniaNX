@@ -43,9 +43,13 @@ describe('pickCodec', () => {
   });
 
   it('respects a custom candidate list (preference order honoured)', () => {
-    const probe = probeFrom(new Set(['x/foo', 'x/bar']));
-    const out = pickCodec(probe, ['x/missing', 'x/bar', 'x/foo']);
-    expect(out?.mime).toBe('x/bar');
+    const customA = 'video/webm;codecs=av01';
+    const customB = 'video/mp4;codecs=hev1';
+    const probe = probeFrom(new Set([customA, customB]));
+    const out = pickCodec(probe, ['video/mp4;codecs=missing', customA, customB]);
+    // First candidate fails the probe; second is the first hit.
+    expect(out?.mime).toBe(customA);
+    expect(out?.ext).toBe('webm');
   });
 
   it('does not call probe more than once per candidate', () => {
