@@ -80,14 +80,8 @@ export function buildHitEvent(
   }
 
   // Auto-detected miss: chip's POOR window expired without input. Per
-  // game.ts contract, this manifests as `deltaMs === null` AND
-  // `judgment === MISS` AND `hand === undefined`. We treat any of those
-  // last two as the signal alongside the canonical null check, so the
-  // dispatch is robust to upstream callers that fill a sentinel deltaMs.
-  if (
-    e.matched.deltaMs === null ||
-    (e.hand === undefined && e.matched.judgment === Judgment.MISS)
-  ) {
+  // game.ts contract, deltaMs is null exactly for this case.
+  if (e.matched.deltaMs === null) {
     return {
       songTimeMs: e.songTimeMs,
       lane: e.lane,

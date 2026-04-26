@@ -76,7 +76,10 @@ function matchedHpe(over: {
     hand: 'hand' in over ? over.hand : 'right',
     matched: {
       idx: over.idx ?? 5,
-      deltaMs: over.deltaMs ?? 12,
+      // `'deltaMs' in over` (not `??`) so an explicit `null` round-trips:
+      // `null ?? 12 === 12` would silently turn auto-detected-miss
+      // fixtures back into matched-human ones.
+      deltaMs: 'deltaMs' in over ? (over.deltaMs ?? null) : 12,
       judgment: over.judgment ?? Judgment.PERFECT,
     },
   };
