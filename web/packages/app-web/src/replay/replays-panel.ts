@@ -67,7 +67,11 @@ export class ReplaysPanel {
     });
 
     const modal = document.createElement('div');
-    modal.className = 'config-modal';
+    // Distinct class name from Settings' `.config-modal` so playwright
+    // selectors targeting the Settings panel (`page.locator('.config-modal')`)
+    // don't pick up two elements once both panels live in the DOM.
+    // Visual style is shared via the CSS selector list in index.html.
+    modal.className = 'replays-modal';
     modal.style.width = '600px';
     this.backdrop.appendChild(modal);
 
