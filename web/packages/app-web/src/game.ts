@@ -303,6 +303,20 @@ export class Game {
     this.songSelect.hide();
   }
 
+  /** Title / artist / duration of the currently-loaded chart, or null
+   * before `loadAndStart` resolves / after `leaveSong`. Exposed for
+   * capture wiring (replay sidecar) so the host can build the
+   * replay's `ChartMeta` without re-parsing the .dtx text. Returns a
+   * fresh object each call; safe to mutate. */
+  chartMeta(): { title: string; artist: string; durationMs: number } | null {
+    if (!this.song) return null;
+    return {
+      title: this.song.title,
+      artist: this.song.artist,
+      durationMs: this.song.durationMs,
+    };
+  }
+
   /** Show the VR calibration panel. Call `hideSongSelect()` first if the
    * menu is currently up — the two UIs share the same controller input
    * and shouldn't be visible simultaneously. `onDone` receives the
