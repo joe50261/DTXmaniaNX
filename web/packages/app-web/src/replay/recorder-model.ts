@@ -165,32 +165,65 @@ export interface Replay {
  * resets the buffers (treated as starting fresh).
  */
 export class Recorder {
+  private state:
+    | { kind: 'idle' }
+    | {
+        kind: 'recording';
+        meta: ChartMeta;
+        player: PlayerSettings;
+        startedAt: string;
+        hits: HitEvent[];
+        poses: PoseSample[];
+      } = { kind: 'idle' };
+
   isRecording(): boolean {
-    throw new Error('Recorder.isRecording: not implemented');
+    return this.state.kind === 'recording';
   }
 
   hitCount(): number {
-    throw new Error('Recorder.hitCount: not implemented');
+    return this.state.kind === 'recording' ? this.state.hits.length : 0;
   }
 
   poseCount(): number {
-    throw new Error('Recorder.poseCount: not implemented');
+    return this.state.kind === 'recording' ? this.state.poses.length : 0;
   }
 
-  start(_meta: ChartMeta, _player: PlayerSettings): void {
-    throw new Error('Recorder.start: not implemented');
+  start(meta: ChartMeta, player: PlayerSettings): void {
+    this.state = {
+      kind: 'recording',
+      meta,
+      player,
+      startedAt: new Date(Date.now()).toISOString(),
+      hits: [],
+      poses: [],
+    };
   }
 
-  recordHit(_e: HitEvent): void {
-    throw new Error('Recorder.recordHit: not implemented');
+  recordHit(e: HitEvent): void {
+    if (this.state.kind !== 'recording') return;
+    this.state.hits.push(e);
   }
 
-  recordPose(_s: PoseSample): void {
-    throw new Error('Recorder.recordPose: not implemented');
+  recordPose(s: PoseSample): void {
+    if (this.state.kind !== 'recording') return;
+    this.state.poses.push(s);
   }
 
-  finish(_final: FinalSnapshot): Replay {
-    throw new Error('Recorder.finish: not implemented');
+  finish(final: FinalSnapshot): Replay {
+    if (this.state.kind !== 'recording') {
+      throw new Error('Recorder.finish: called while idle');
+    }
+    const replay: Replay = {
+      formatVersion: REPLAY_FORMAT_VERSION,
+      meta: this.state.meta,
+      player: this.state.player,
+      startedAt: this.state.startedAt,
+      hits: this.state.hits,
+      poses: this.state.poses,
+      final,
+    };
+    this.state = { kind: 'idle' };
+    return replay;
   }
 }
 
@@ -198,20 +231,35 @@ export class Recorder {
  * round-trip never produces NaN. Field order is not guaranteed by
  * `JSON.stringify`, so do not rely on byte-exact output for hashing —
  * normalise first if you need that. */
-export function serializeReplay(_r: Replay): string {
-  throw new Error('serializeReplay: not implemented');
+export function serializeReplay(r: Replay): string {
+  return JSON.stringify(r);
 }
 
 /** Parse a `Replay` from a JSON string. Returns null on:
  *  - invalid JSON,
  *  - missing/wrong `formatVersion`,
- *  - structurally broken envelope (missing meta/hits/poses/final).
+ *  - structurally broken envelope (missing meta/player/hits/poses/final/startedAt).
  *
  * Field-level validation (sane lane numbers, finite floats) is the
  * viewer's job — this only protects against catastrophic shape
  * mismatches so a corrupted file can't crash the loader. */
-export function deserializeReplay(_s: string): Replay | null {
-  throw new Error('deserializeReplay: not implemented');
+export function deserializeReplay(s: string): Replay | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(s);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object') return null;
+  const o = parsed as Record<string, unknown>;
+  if (o.formatVersion !== REPLAY_FORMAT_VERSION) return null;
+  if (typeof o.startedAt !== 'string') return null;
+  if (o.meta === null || typeof o.meta !== 'object') return null;
+  if (o.player === null || typeof o.player !== 'object') return null;
+  if (!Array.isArray(o.hits)) return null;
+  if (!Array.isArray(o.poses)) return null;
+  if (o.final === null || typeof o.final !== 'object') return null;
+  return o as unknown as Replay;
 }
 
 /** Convenience: does this replay match the chart the user is currently
