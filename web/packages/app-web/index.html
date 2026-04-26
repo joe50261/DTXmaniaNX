@@ -286,6 +286,83 @@
         border-radius: 6px;
         cursor: pointer;
       }
+      .replays-toolbar {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+      .replays-toolbar select {
+        font: inherit;
+        font-size: 13px;
+        background: #1e293b;
+        color: #e2e8f0;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 4px;
+        padding: 4px 8px;
+      }
+      .replays-list {
+        max-height: 56vh;
+        overflow-y: auto;
+        margin-bottom: 12px;
+      }
+      .replays-empty {
+        text-align: center;
+        padding: 30px 0;
+        color: #94a3b8;
+        font-size: 13px;
+      }
+      .replays-row {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 12px;
+        align-items: center;
+        padding: 8px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .replays-row:hover {
+        background: rgba(80, 120, 255, 0.08);
+      }
+      .replays-row.selected {
+        background: rgba(80, 120, 255, 0.18);
+      }
+      .replays-row-title {
+        font-size: 14px;
+      }
+      .replays-row-meta {
+        font-size: 11px;
+        color: #94a3b8;
+        margin-top: 2px;
+      }
+      .replays-row-score {
+        font-variant-numeric: tabular-nums;
+        font-size: 13px;
+        color: #cbd5e1;
+        min-width: 80px;
+        text-align: right;
+      }
+      .replays-row-actions {
+        display: flex;
+        gap: 6px;
+      }
+      .replays-row-actions button {
+        font: inherit;
+        font-size: 12px;
+        padding: 4px 10px;
+        background: #1e293b;
+        color: #e2e8f0;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .replays-row-actions button.danger {
+        color: #fca5a5;
+      }
+      .replays-row-actions button:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
     </style>
   </head>
   <body>
@@ -305,6 +382,7 @@
           <button id="config-btn" class="ghost">⚙ Settings</button>
           <button id="calibrate" class="ghost">Calibrate latency</button>
           <button id="sort-btn" class="ghost">Sort: title</button>
+          <button id="replays-btn" class="ghost">Replays</button>
         </div>
         <input id="search-box" type="text" placeholder="Search songs… (press / to open, Esc to close)" autocomplete="off" spellcheck="false" />
         <div id="song-select-mount"></div>

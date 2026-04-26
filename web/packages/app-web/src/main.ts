@@ -46,6 +46,7 @@ import type { SkinTextures } from './renderer.js';
 import { runCalibration } from './calibrate.js';
 import { loadAudioOffsetMs, saveAudioOffsetMs } from './calibrate-model.js';
 import { createReplayCapture } from './replay/capture-glue.js';
+import { ReplaysPanel } from './replay/replays-panel.js';
 import { activeToast, showToast } from './hud-toast.js';
 
 // Test hook for the Playwright e2e suite. Toast is painted onto the
@@ -88,6 +89,7 @@ const forgetBtn = requireEl<HTMLButtonElement>('forget-folder');
 const rescanBtn = requireEl<HTMLButtonElement>('rescan-folder');
 const calibrateBtn = requireEl<HTMLButtonElement>('calibrate');
 const configBtn = requireEl<HTMLButtonElement>('config-btn');
+const replaysBtn = requireEl<HTMLButtonElement>('replays-btn');
 const xrBtn = requireEl<HTMLButtonElement>('enter-xr');
 const songSelectMount = requireEl<HTMLDivElement>('song-select-mount');
 const scanErrorsEl = requireEl<HTMLDivElement>('scan-errors');
@@ -459,6 +461,14 @@ const configPanel = new ConfigPanel({
   captureLoopMarker: (which) => activeGame?.captureLoopMarker(which) ?? null,
 });
 configBtn.addEventListener('click', () => configPanel.open());
+
+// Replays browser — desktop-only entry. The render integration is
+// deferred to a follow-up slice; for now the Render button on each
+// row is disabled with a tooltip. List + delete already work.
+const replaysPanel = new ReplaysPanel();
+replaysBtn.addEventListener('click', () => {
+  replaysPanel.open().catch((e) => console.warn('[replays] open failed', e));
+});
 
 // Live config → Game / Renderer. The renderer reads scrollSpeed /
 // judgeLineY / reverseScroll fields per frame, so a slider drag
