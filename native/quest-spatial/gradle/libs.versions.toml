@@ -38,6 +38,13 @@ androidx-activity = { module = "androidx.activity:activity", version.ref = "andr
 meta-spatial-sdk = { module = "com.meta.spatial:meta-spatial-sdk", version.ref = "spatialSdk" }
 meta-spatial-sdk-vr = { module = "com.meta.spatial:meta-spatial-sdk-vr", version.ref = "spatialSdk" }
 meta-spatial-sdk-toolkit = { module = "com.meta.spatial:meta-spatial-sdk-toolkit", version.ref = "spatialSdk" }
+# `-isdk` is required even though we don't register IsdkFeature: the
+# toolkit AAR transitively packages libMetaSpatialSDKIsdk.so + the
+# IsdkSystem Kotlin class, but without the matching `-isdk` Maven
+# artifact the system's destroy path crashes inside
+# skrrt::PtrControlBlockSafe::close() during VrActivity.onStop.
+# StarterSample has the same dep with no explicit feature registration.
+meta-spatial-sdk-isdk = { module = "com.meta.spatial:meta-spatial-sdk-isdk", version.ref = "spatialSdk" }
 
 # Test deps
 # JUnit 5 (Jupiter) is the primary test framework. Robolectric still only
