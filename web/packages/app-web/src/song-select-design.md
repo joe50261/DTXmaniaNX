@@ -145,11 +145,27 @@ file first.
    whose data isn't yet routed (skill %, gauge bars). Geometry must
    still be canonical so the eventual fill drops in cleanly.
 2. **Performance history** is currently shown as an empty 5-line
-   stub.
+   stub. `5_play history panel.png` is now in the preload list so
+   the chrome is ready to paint when the history data wiring lands.
 3. **VR floating panel** uses the same 1280×720 canvas as the desktop
    render — the C# game targets a single-resolution skin and we
    inherit that. The Three.js plane is sized so the panel reads at
    roughly the same arc-minutes as the desktop view at 2 m.
+4. **Synthetic-row preimages** (BACK / RANDOM) — *closed* —
+   `5_preimage backbox.png` and `5_preimage random.png` now drive
+   the preimage fallback for those row kinds in `paintPreimage()`.
+   Real cover art is suppressed for synthetic rows so the
+   canonical icon always wins.
+5. **Awaiting paint integration**: `5_skill number on gauge etc.png`
+   (skill % numerals on the difficulty cells), `5_bpm icon.png`
+   (small speaker glyph next to the BPM block),
+   `5_information.png` (info banner). All preloaded so a follow-up
+   commit can wire them without touching the asset pipeline.
+6. **Out of scope (drum-only build)**: `5_graph panel guitar bass.png`,
+   `5_footer song list.png`, `5_header song list.png`,
+   `5_sensor.png`, `5_preimage panel_old.png` (legacy variant).
+   These ship via the existing `5_*.{png,jpg}` glob copy but no
+   paint code consumes them yet.
 
 When closing one of these deviations, remove the `[WIP]` line and
 update the table above.

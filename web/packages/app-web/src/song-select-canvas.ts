@@ -1002,7 +1002,13 @@ export class SongSelectCanvas {
       '5_bar other selected.png',
       '5_preimage panel.png',
       '5_preimage default.png',
+      '5_preimage backbox.png',
+      '5_preimage random.png',
       '5_status panel.png',
+      '5_play history panel.png',
+      '5_skill number on gauge etc.png',
+      '5_bpm icon.png',
+      '5_information.png',
       '5_difficulty panel.png',
       '5_difficulty frame.png',
       '5_level number.png',
@@ -1223,7 +1229,18 @@ export class SongSelectCanvas {
   private paintPreimage(): void {
     const ctx = this.ctx;
     const frame = this.getAsset('5_preimage panel.png');
-    const fallback = this.getAsset('5_preimage default.png');
+    // Pick the right fallback for the focused row's kind. Mirrors the
+    // C# `CActSelectPreimagePanel` priority: BACKBOX / RANDOM nodes
+    // get their dedicated icon; song / folder rows get the default.
+    const focusedEntry = this.entries[this.focusIdx];
+    let fallbackName = '5_preimage default.png';
+    if (focusedEntry?.kind === 'back') {
+      fallbackName = '5_preimage backbox.png';
+    } else if (focusedEntry?.kind === 'random') {
+      fallbackName = '5_preimage random.png';
+    }
+    const fallback =
+      this.getAsset(fallbackName) ?? this.getAsset('5_preimage default.png');
 
     // Frame first (decorative — sits behind the actual image and is
     // drawn at full opacity so the bezel stays visible during the fade).
@@ -1234,7 +1251,10 @@ export class SongSelectCanvas {
     const alpha = preimageOpacity(this.preimageFade);
     const prevAlpha = ctx.globalAlpha;
     ctx.globalAlpha = prevAlpha * alpha;
-    if (this.coverBitmap) {
+    if (this.coverBitmap && focusedEntry?.kind === 'node') {
+      // Real cover art — only for actual song / folder rows, never
+      // for synthetic BACK / RANDOM rows (those should always show
+      // their canonical icon).
       ctx.drawImage(
         this.coverBitmap,
         PREIMAGE_X,
