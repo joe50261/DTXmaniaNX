@@ -42,36 +42,64 @@ export function initialState(): ListState {
  *  - Otherwise, default to the first row of the sorted output, or
  *    null when empty. */
 export function setSummaries(
-  _state: ListState,
-  _summaries: readonly ReplaySummary[],
+  state: ListState,
+  summaries: readonly ReplaySummary[],
 ): ListState {
-  throw new Error('setSummaries: not implemented');
+  let selectedId: string | null;
+  if (state.selectedId !== null && summaries.some((r) => r.id === state.selectedId)) {
+    selectedId = state.selectedId;
+  } else if (summaries.length > 0) {
+    const next: ListState = { summaries, sortKey: state.sortKey, selectedId: null };
+    selectedId = sortedSummaries(next)[0]?.id ?? null;
+  } else {
+    selectedId = null;
+  }
+  return { summaries, sortKey: state.sortKey, selectedId };
 }
 
 /** Change the active sort. Selection is preserved when possible
  * (same id still exists), otherwise re-defaults to first sorted row. */
-export function setSortKey(_state: ListState, _key: SortKey): ListState {
-  throw new Error('setSortKey: not implemented');
+export function setSortKey(state: ListState, key: SortKey): ListState {
+  return { summaries: state.summaries, sortKey: key, selectedId: state.selectedId };
 }
 
 /** Move the highlight to a specific row, or clear it (id=null). No-op
  * when id isn't in the current summaries list — defensive against
  * stale clicks during a list refresh. */
-export function setSelected(_state: ListState, _id: string | null): ListState {
-  throw new Error('setSelected: not implemented');
+export function setSelected(state: ListState, id: string | null): ListState {
+  if (id === null) {
+    return { summaries: state.summaries, sortKey: state.sortKey, selectedId: null };
+  }
+  if (!state.summaries.some((r) => r.id === id)) {
+    return state;
+  }
+  return { summaries: state.summaries, sortKey: state.sortKey, selectedId: id };
 }
 
 /** Apply the current `sortKey` to summaries and return the projected
  * order. Pure read — does not mutate state. Caller re-derives on
  * every render; for ~hundreds of replays this is well under the
  * frame budget. */
-export function sortedSummaries(_state: ListState): readonly ReplaySummary[] {
-  throw new Error('sortedSummaries: not implemented');
+export function sortedSummaries(state: ListState): readonly ReplaySummary[] {
+  const copy = [...state.summaries];
+  switch (state.sortKey) {
+    case 'startedAt-desc':
+      copy.sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0));
+      break;
+    case 'startedAt-asc':
+      copy.sort((a, b) => (a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0));
+      break;
+    case 'score-desc':
+      copy.sort((a, b) => b.finalScoreNorm - a.finalScoreNorm);
+      break;
+  }
+  return copy;
 }
 
 /** Convenience: the currently-selected row's full summary, or null
  * when no selection. View layer uses this to populate the action bar
  * (Render / Delete buttons) with the right id. */
-export function selectedSummary(_state: ListState): ReplaySummary | null {
-  throw new Error('selectedSummary: not implemented');
+export function selectedSummary(state: ListState): ReplaySummary | null {
+  if (state.selectedId === null) return null;
+  return state.summaries.find((r) => r.id === state.selectedId) ?? null;
 }

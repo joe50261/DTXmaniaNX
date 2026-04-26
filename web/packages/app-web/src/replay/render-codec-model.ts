@@ -41,15 +41,28 @@ export interface CodecPick {
  * none match — caller should surface a "browser too old" error rather
  * than fall back to an arbitrary codec. */
 export function pickCodec(
-  _isTypeSupported: (mime: string) => boolean,
-  _candidates: readonly string[] = DEFAULT_CODEC_CANDIDATES,
+  isTypeSupported: (mime: string) => boolean,
+  candidates: readonly string[] = DEFAULT_CODEC_CANDIDATES,
 ): CodecPick | null {
-  throw new Error('pickCodec: not implemented');
+  for (const mime of candidates) {
+    if (isTypeSupported(mime)) {
+      let ext: SupportedExtension;
+      try {
+        ext = extensionForMime(mime);
+      } catch {
+        ext = 'webm';
+      }
+      return { mime, ext };
+    }
+  }
+  return null;
 }
 
 /** Convenience: extract the extension from a chosen MIME. Throws on
  * unrecognised — callers should only pass strings that came out of
  * `DEFAULT_CODEC_CANDIDATES`, not arbitrary values. */
-export function extensionForMime(_mime: string): SupportedExtension {
-  throw new Error('extensionForMime: not implemented');
+export function extensionForMime(mime: string): SupportedExtension {
+  if (mime.startsWith('video/mp4')) return 'mp4';
+  if (mime.startsWith('video/webm')) return 'webm';
+  throw new Error(`extensionForMime: unrecognised MIME ${mime}`);
 }
