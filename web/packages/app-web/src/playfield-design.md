@@ -2,17 +2,71 @@
 
 The canonical layout for the in-play scene's lane chrome. Sourced
 from the C# DTXMania reference under
-`DTXMania/Code/Stage/07.Performance/DrumsScreen/`. This doc covers
-the **lane-flush** overlay only — the 3D pad meshes and chip atlas
-are already wired in `renderer.ts` and stay there for now (a
-follow-up will move them into `playfield-canvas.ts` so the whole
-playfield lives behind one entry point).
+`DTXMania/Code/Stage/07.Performance/DrumsScreen/`. Two sub-features
+covered here:
+
+1. **Permanent lane chrome** (`7_Paret.png`) — per-lane vertical
+   strips painted every frame regardless of hit state. Includes
+   the canonical **footprint pattern** stamped down the BD and LP
+   foot-pedal lanes.
+2. **Lane-flush overlay** — vertical streak that lights up the
+   full-height of a struck lane for ~500 ms after a hit.
+
+The 3D pad meshes and chip atlas are already wired in `renderer.ts`
+and stay there for now (a follow-up will move them into
+`playfield-canvas.ts` so the whole playfield lives behind one
+entry point).
 
 ## Frame
 
 - **Logical canvas:** 1280 × 720 px.
 - **Lane geometry source:** `lane-layout.ts` — already pinned to the
   C# `CActPerfDrumsPad` x-table.
+
+## Permanent lane chrome — `CActPerfDrumsLaneFlushD` (txLine path)
+
+Source asset: `7_Paret.png` (558 × 720, RGB). Always-on background
+painted every frame — *not* a hit-triggered effect. The C# code
+reads named slices out of the same asset and pastes one per lane;
+the BD (src x 278..347) and LP (src x 121..172) slices contain the
+canonical **footprint pattern** stamped down those two pedal lanes
+roughly every 120 px. The other slices are vertical separator
+bars and lane tinting.
+
+### Per-lane slice table (Type-A layout)
+
+Pinned to `CActPerfDrumsLaneFlushD.cs:189-298`. C# uses fixed
+destination X values for the canonical 1280-wide grid; the web
+port re-anchors each slice to the lane centre from `lane-layout.ts`
+so the pattern lines up with the chip stream regardless of any
+lane drift.
+
+| Lane | C# dst x | Source rect | Notes                  |
+|------|---------:|-------------|------------------------|
+| LC   | 295      | (0,0,72,720)   | left bar             |
+| HH   | 367      | (72,0,49,720)  |                      |
+| LP   | x2 − 12  | (121,0,51,720) | **footprint motif**  |
+| SD   | 467      | (172,0,57,720) |                      |
+| HT   | 524      | (229,0,49,720) |                      |
+| BD   | 573      | (278,0,69,720) | **footprint motif**  |
+| LT   | 642      | (347,0,49,720) |                      |
+| FT   | 691      | (396,0,54,720) |                      |
+| CY   | 745      | (450,0,70,720) |                      |
+| RD   | xCY−55   | (520,0,38,720) |                      |
+
+Slices paint at native source width — they may extend a few px
+into adjacent lanes, which is the canonical look (the visible
+motif inside each slice is centred narrower than its bounding
+box, so the overlap is mostly transparent).
+
+### Render order
+
+`paintLaneChrome` runs before `paintLaneFlush` so a hit's flush
+streak overlays the chrome rather than being painted under it.
+Mirrors the C# `OnUpdateAndDraw` sequence (`txLine.tDraw2D` → flush
+loop). When `7_Paret.png` is absent the chrome paint is silently
+skipped — the lane fills + colored separators in
+`renderer.drawLanes` keep the playfield readable.
 
 ## Lane-flush overlay — `CActPerfDrumsLaneFlushD`
 

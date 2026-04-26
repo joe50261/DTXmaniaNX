@@ -65,3 +65,51 @@ export const LANE_FLUSH_FORWARD_FILES: readonly string[] =
 export function laneFlushAsset(lane: LaneValue): string | null {
   return LANE_FLUSH_ASSET_FORWARD[lane] ?? null;
 }
+
+// --- 7_Paret.png lane chrome (kick footprint pattern) ----------------
+
+/**
+ * `7_Paret.png` is the canonical *permanent* lane background. It
+ * contains a repeating footprint pattern in the BD / LP slices —
+ * the foot-pedal lanes get a stamped-footprint motif that's drawn
+ * every frame regardless of hit state. Other slices are vertical
+ * separator bars + lane tinting.
+ *
+ * Source asset: `7_Paret.png` (558 × 720). Per-lane slices pinned
+ * to `CActPerfDrumsLaneFlushD.cs:189-298` (Type A layout — the
+ * web port locks to Type A for now).
+ *
+ * The slices are drawn at the C# destination X for the canonical
+ * 1280×720 grid; web port re-anchors each slice to the lane
+ * centre from `lane-layout.ts` so the footprint pattern lines up
+ * with the chip stream regardless of lane-position drift.
+ */
+export interface ParetSlice {
+  /** Source rect in `7_Paret.png`. */
+  sx: number;
+  sw: number;
+  /** Source y / h are always 0 / 720 — the slice is full-height. */
+}
+
+/** Per-lane slice metadata. The keys are LaneValue numerics so the
+ *  paint loop can index by `spec.lane` directly. */
+export const PARET_LANE_SLICE: Partial<Record<LaneValue, ParetSlice>> = {
+  [Lane.LC]: { sx: 0,   sw: 72 },  // left bar / LC
+  [Lane.HH]: { sx: 72,  sw: 49 },  // HH
+  [Lane.HHO]: { sx: 72, sw: 49 },  // HHO shares HH visual
+  [Lane.LP]: { sx: 121, sw: 51 },  // left pedal — *footprint pattern*
+  [Lane.SD]: { sx: 172, sw: 57 },  // snare
+  [Lane.HT]: { sx: 229, sw: 49 },  // hi-tom
+  [Lane.BD]: { sx: 278, sw: 69 },  // bass drum — *footprint pattern*
+  [Lane.LBD]: { sx: 278, sw: 69 }, // LBD shares BD slice
+  [Lane.LT]: { sx: 347, sw: 49 },  // low tom
+  [Lane.FT]: { sx: 396, sw: 54 },  // floor tom
+  [Lane.CY]: { sx: 450, sw: 70 },  // crash
+  [Lane.RD]: { sx: 520, sw: 38 },  // ride
+};
+
+/** Source asset height (full lane chrome covers the playfield). */
+export const PARET_SRC_H = 720;
+
+/** Source filename — included in STAGE7_ALLOWLIST in vite.config.ts. */
+export const PARET_ASSET = '7_Paret.png';

@@ -9,6 +9,8 @@ import {
   LANE_FLUSH_FRAME_W,
   LANE_FLUSH_LIFETIME_MS,
   LANE_FLUSH_TRAVEL_PX,
+  PARET_ASSET,
+  PARET_LANE_SLICE,
 } from './playfield-layout.js';
 
 describe('lane-flush layout — sprite geometry', () => {
@@ -50,5 +52,38 @@ describe('lane-flush layout — laneFlushAsset()', () => {
   it('returns null for an unknown numeric value', () => {
     // Using a non-LaneValue number to simulate corrupt input.
     expect(laneFlushAsset(99 as unknown as typeof Lane.SD)).toBe(null);
+  });
+});
+
+describe('7_Paret.png lane chrome — slice table', () => {
+  it('matches the C# CActPerfDrumsLaneFlushD.cs Type-A slice rects', () => {
+    // Pinned to lines 189-298. Exact src x / w per lane.
+    expect(PARET_LANE_SLICE[Lane.LC]).toEqual({ sx: 0,   sw: 72 });
+    expect(PARET_LANE_SLICE[Lane.HH]).toEqual({ sx: 72,  sw: 49 });
+    expect(PARET_LANE_SLICE[Lane.LP]).toEqual({ sx: 121, sw: 51 });
+    expect(PARET_LANE_SLICE[Lane.SD]).toEqual({ sx: 172, sw: 57 });
+    expect(PARET_LANE_SLICE[Lane.HT]).toEqual({ sx: 229, sw: 49 });
+    expect(PARET_LANE_SLICE[Lane.BD]).toEqual({ sx: 278, sw: 69 });
+    expect(PARET_LANE_SLICE[Lane.LT]).toEqual({ sx: 347, sw: 49 });
+    expect(PARET_LANE_SLICE[Lane.FT]).toEqual({ sx: 396, sw: 54 });
+    expect(PARET_LANE_SLICE[Lane.CY]).toEqual({ sx: 450, sw: 70 });
+    expect(PARET_LANE_SLICE[Lane.RD]).toEqual({ sx: 520, sw: 38 });
+  });
+
+  it('LBD / HHO share their main-lane slices', () => {
+    expect(PARET_LANE_SLICE[Lane.LBD]).toEqual(PARET_LANE_SLICE[Lane.BD]);
+    expect(PARET_LANE_SLICE[Lane.HHO]).toEqual(PARET_LANE_SLICE[Lane.HH]);
+  });
+
+  it('PARET_ASSET filename matches the canonical Runtime path', () => {
+    expect(PARET_ASSET).toBe('7_Paret.png');
+  });
+
+  it('every slice src rect stays inside the 558-px source width', () => {
+    for (const slice of Object.values(PARET_LANE_SLICE)) {
+      if (!slice) continue;
+      expect(slice.sx).toBeGreaterThanOrEqual(0);
+      expect(slice.sx + slice.sw).toBeLessThanOrEqual(558);
+    }
   });
 });

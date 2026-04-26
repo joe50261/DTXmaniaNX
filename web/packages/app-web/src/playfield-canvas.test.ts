@@ -98,3 +98,46 @@ describe('PlayfieldCanvas — multiple simultaneous lanes', () => {
     expect(draws.length).toBe(3);
   });
 });
+
+describe('PlayfieldCanvas — 7_Paret.png lane chrome', () => {
+  it('skips chrome when 7_Paret.png is absent', () => {
+    const pf = new PlayfieldCanvas();
+    pf.paint(ctx2d(), { lastPadHitMs: new Map(), nowMs: 0, canvasH: 720 });
+    expect(ctx.calls.some((c) => c.method === 'drawImage')).toBe(false);
+  });
+
+  it('paints one slice per known lane when the asset is loaded', () => {
+    const pf = new PlayfieldCanvas();
+    const fakeParet = {
+      complete: true,
+      naturalWidth: 558,
+      naturalHeight: 720,
+      width: 558,
+      height: 720,
+    } as unknown as HTMLImageElement;
+    (pf as unknown as { assets: Map<string, HTMLImageElement> }).assets.set('7_Paret.png', fakeParet);
+    pf.paint(ctx2d(), { lastPadHitMs: new Map(), nowMs: 0, canvasH: 720 });
+    const draws = ctx.calls.filter((c) => c.method === 'drawImage');
+    // 10 lanes have slice entries (LC HH LP SD HT BD LT FT CY RD).
+    // HHO/LBD share with HH/BD but they're in LANE_LAYOUT only as
+    // their main lane → still 10 unique paints.
+    expect(draws.length).toBe(10);
+  });
+
+  it('paints chrome BEFORE the lane-flush so flushes overlay it on hit', () => {
+    const pf = new PlayfieldCanvas();
+    const fakeParet = {
+      complete: true, naturalWidth: 558, naturalHeight: 720, width: 558, height: 720,
+    } as unknown as HTMLImageElement;
+    (pf as unknown as { assets: Map<string, HTMLImageElement> }).assets.set('7_Paret.png', fakeParet);
+    pf.paint(ctx2d(), { lastPadHitMs: new Map([[Lane.SD, 100]]), nowMs: 200, canvasH: 720 });
+    // First draws: 10 paret slices. Then 1 lane-flush (procedural
+    // fallback rect since the SD flush asset wasn't injected).
+    const drawableCalls = ctx.calls.filter(
+      (c) => c.method === 'drawImage' || c.method === 'fillRect'
+    );
+    expect(drawableCalls.length).toBe(11);
+    // Lane-flush is a fillRect (no asset injected); should be the last entry.
+    expect(drawableCalls[drawableCalls.length - 1]!.method).toBe('fillRect');
+  });
+});

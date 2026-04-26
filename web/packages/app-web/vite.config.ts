@@ -59,6 +59,10 @@ const STAGE7_ALLOWLIST = [
   'ScreenPlay judge strings 1.png',
   '7_Gauge.png',
   '7_gauge_bar.png',
+  // Permanent lane chrome — per-lane vertical strips including the
+  // canonical BD / LP foot-pedal footprint pattern. Painted by
+  // PlayfieldCanvas before the lane flush. See playfield-design.md.
+  '7_Paret.png',
   // Lane-flush per-lane forward textures — loaded by PlayfieldCanvas.
   // See playfield-design.md for the lane → filename map.
   'ScreenPlayDrums lane flush leftcymbal.png',
