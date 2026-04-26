@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 /**
  * Closing the loop on the legacy "list-less demo injection" path.
@@ -19,9 +19,14 @@ import { test, expect } from '@playwright/test';
  * with the demo entry, so the player can replay or pick another
  * chart from a folder they pick later.
  *
- * This spec pins the closed-loop behaviour: the demo chart appears
- * as a real entry on exit. The pre-fix behaviour (silent no-show)
- * is what we're guarding against regressing back to.
+ * Two scenarios cover the loop and the guard:
+ *   1. Start demo from boot (no library) → Esc → song-select with
+ *      the demo entry visible. Pre-fix this asserted false.
+ *   2. With a real library already loaded, the demo button is
+ *      disabled — clicking it must NOT clobber the picked library
+ *      (review-found bug: `playDemo` previously replaced `library`
+ *      unconditionally, leaving the player on a one-entry list
+ *      after Esc with no path back to their picked folder).
  */
 test.describe('bundled demo — exit returns to a real song list', () => {
   test('start demo, press Esc to leave, song-select panel re-appears with the demo entry', async ({
@@ -95,4 +100,84 @@ test.describe('bundled demo — exit returns to a real song list', () => {
 
     expect(errors, `pageerrors: ${errors.join('\n')}`).toEqual([]);
   });
+
+  test('with a real library loaded, the demo button is disabled and cannot clobber it', async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`));
+
+    await page.goto('/');
+    await expect(page.locator('#overlay')).toBeVisible();
+
+    // Boot state: no library yet, demo button is enabled (the only
+    // way into the app on first launch).
+    const demoBtn = page.locator('#start-demo');
+    await expect(demoBtn).toBeEnabled();
+
+    // Install a synthetic library — same hook the in-VR specs use.
+    // This is the "player picked a folder" state from main.ts's POV
+    // (commitLibrary's path that would normally run after the
+    // FileSystem Access picker resolves).
+    await installFakeLibrary(page, {
+      songs: [
+        { title: 'Picked Song A', charts: [{ slot: 1, label: 'REG', level: 300 }] },
+        { title: 'Picked Song B', charts: [{ slot: 1, label: 'REG', level: 400 }] },
+      ],
+    });
+
+    // Demo button must now be disabled — the guard against playDemo
+    // clobbering the picked library with the synthetic demo root.
+    // Pre-fix `playDemo()` ran unconditionally on click and replaced
+    // `library`, so after Esc the player landed on a one-entry list
+    // (just the demo) with no path back to "Picked Song A/B" without
+    // re-clicking Pick folder.
+    await expect(demoBtn).toBeDisabled();
+
+    // Belt-and-braces: even if a future change accidentally re-
+    // enables the button, force-click via JS should be a no-op
+    // because `disabled` blocks the click handler. We verify by
+    // checking the library titles are still the picked ones, not
+    // the bundled demo's "Bundled demo".
+    await page.evaluate(() => {
+      const btn = document.getElementById('start-demo') as HTMLButtonElement | null;
+      btn?.click();
+    });
+    // Give any pending async runs a chance to settle.
+    await page.waitForTimeout(100);
+
+    // The hook surfaces library state via a quick title probe — we
+    // ride the song-select model through the existing shown getter
+    // chain. After the (suppressed) demo click, focus + entries are
+    // still the picked-library shape.
+    const focusedAfter = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __dtxmaniaTest?: { game?: { songSelectFocusedTitle: string | null } };
+          }
+        ).__dtxmaniaTest?.game?.songSelectFocusedTitle ?? null,
+    );
+    // installFakeLibrary doesn't auto-show the panel, so
+    // songSelectFocusedTitle may be null (no entries painted yet).
+    // Either way it must NOT be the demo's "Bundled demo" entry —
+    // a clobber would have made setRoot rebuild with that title.
+    expect(focusedAfter).not.toBe('Bundled demo');
+
+    expect(errors, `pageerrors: ${errors.join('\n')}`).toEqual([]);
+  });
 });
+
+interface FakeLibrarySpec {
+  songs: Array<{ title: string; charts: Array<{ slot: number; label: string; level?: number }> }>;
+}
+
+async function installFakeLibrary(page: Page, spec: FakeLibrarySpec): Promise<void> {
+  await page.evaluate(async (s) => {
+    const hook = (window as unknown as {
+      __dtxmaniaTest?: { installFakeLibrary?: (spec: unknown) => Promise<void> };
+    }).__dtxmaniaTest;
+    if (!hook?.installFakeLibrary) throw new Error('installFakeLibrary hook missing');
+    await hook.installFakeLibrary(s);
+  }, spec);
+}

@@ -427,6 +427,10 @@ if (isAutomationEnv) {
       root.children.push({ type: 'song', entry, parent: root });
     }
     library = { backend, root, songs: flattenSongs(root) };
+    // Mirror commitLibrary's demoBtn guard so the production-style
+    // "library loaded ⇒ demo disabled" UX shows up under e2e too,
+    // and the demo-exit-to-list spec can pin the guard's wiring.
+    demoBtn.disabled = true;
     songSelect?.setRoot(root);
     refreshXrButton();
   };
@@ -448,6 +452,7 @@ forgetBtn.addEventListener('click', () =>
     activeGame?.hideSongSelect();
     forgetBtn.style.display = 'none';
     rescanBtn.style.display = 'none';
+    demoBtn.disabled = false;
     pickBtn.textContent = 'Pick folder';
     onPick = pickAndScan;
     setStatus('Pick your Songs folder to begin.');
@@ -759,6 +764,10 @@ function applyLibrary(
   pickBtn.textContent = 'Change folder';
   forgetBtn.style.display = 'inline-block';
   rescanBtn.style.display = 'inline-block';
+  // Disable the bundled-demo button so a stray click can't clobber
+  // the freshly-picked library with the synthetic demo root —
+  // re-enabled by forgetBtn when the player drops the folder.
+  demoBtn.disabled = true;
   // Drive the canvas: setRoot updates the entry list in place; show()
   // (via showSongSelectForActive) lights up the panel and hooks up
   // the preview-audio + chart-launch callbacks. Skip the show() if a
@@ -889,6 +898,10 @@ async function playDemo(): Promise<void> {
   };
   demoRoot.children.push({ type: 'song', entry: demoEntry, parent: demoRoot });
   library = { backend, root: demoRoot, songs: flattenSongs(demoRoot) };
+  // Disable the demo button while the synthetic demo library is
+  // active — re-clicking it would only refetch demo.dtx and rebuild
+  // the same one-entry root. Forget folder re-enables it.
+  demoBtn.disabled = true;
   songSelect?.setRoot(demoRoot);
   refreshXrButton();
 

@@ -86,7 +86,7 @@ test.describe('VR session — enter, cleanly reach the immersive state, exit', (
 
     // End the session from outside (no controller to press Exit
     // without a menu). Matches what `onExit` does in main.ts's
-    // showVrMenuForActive. iwer dispatches the 'end' event to the
+    // showSongSelectForActive. iwer dispatches the 'end' event to the
     // XRSession, renderer's listener restores playfield state, and
     // main.ts's onEnded handler re-shows the overlay.
     await page.evaluate(async () => {

@@ -19,13 +19,16 @@ import {
 } from './song-wheel-model.js';
 
 /**
- * Exercises the shared model module that both `song-wheel.ts` (DOM)
- * and `song-select-canvas.ts` (Canvas) subscribe to. These tests are the contract
- * the two views agree on — if one of them starts doing its own thing,
- * it should instead extend this module.
+ * Pure-model tests for the wheel + difficulty helpers consumed by
+ * `song-select-canvas.ts` (the only surviving view since 699cef5
+ * retired the DOM SongWheel). The tests are the contract the canvas
+ * builds against; behaviours that only matter to the canvas layer
+ * (animations, focus reset on setRoot) live in
+ * `song-select-canvas-class.test.ts` instead.
  *
- * `compareNodes`, `findBoxByPath`, `pickChartForSlot` are covered in
- * `song-wheel.test.ts` (their tests predate the extraction).
+ * `compareNodes`, `findBoxByPath`, `pickChartForSlot` are covered by
+ * the canvas-class tests above (the DOM-wheel test file that
+ * historically held them was removed alongside the view).
  */
 
 function makeChart(slot: number, label: string, overrides: Partial<ChartEntry> = {}): ChartEntry {

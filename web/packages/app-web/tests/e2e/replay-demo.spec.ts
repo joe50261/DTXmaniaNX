@@ -44,14 +44,24 @@ test.describe('demo replay path — no residual state between runs', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('#overlay')).toBeVisible({ timeout: 5_000 });
 
-    // Second demo run — this is the replay. If loadAndStart's
-    // state-reset regressed (song/status/hitFlashes not wiped),
-    // tick()'s `if (!this.song) return;` would never fire during the
-    // preload and the render would throw on stale fields, or the
-    // previous run's finishedReturnHandled would make onRestart
-    // double-fire and recurse. Either way the overlay would not hide
-    // cleanly.
-    await page.locator('#start-demo').click();
+    // Second demo run — this is the replay. We can't re-click
+    // #start-demo: the first run installed a synthetic single-entry
+    // library (so the demo-exit path lands on a real picker rather
+    // than an empty overlay), and the demo button is disabled while
+    // any library is loaded — see `demo-exit-to-list.spec.ts` for
+    // the rationale. The expected replay path is the same one a
+    // player uses to re-pick from their real library: arrow down
+    // past the synthetic Random row to the Bundled demo entry, then
+    // Enter to launch.
+    //
+    // If loadAndStart's state-reset regressed (song/status/
+    // hitFlashes not wiped), tick()'s `if (!this.song) return;`
+    // would never fire during the preload and the render would
+    // throw on stale fields; or the previous run's
+    // finishedReturnHandled would make onRestart double-fire and
+    // recurse. Either way the overlay would not hide cleanly here.
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
     await expect(page.locator('#overlay')).toBeHidden({ timeout: 10_000 });
     await expect(page.locator('#game')).toBeAttached();
 
