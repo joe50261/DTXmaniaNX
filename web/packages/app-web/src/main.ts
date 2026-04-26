@@ -47,6 +47,12 @@ import { runCalibration } from './calibrate.js';
 import { loadAudioOffsetMs, saveAudioOffsetMs } from './calibrate-model.js';
 import { createReplayCapture } from './replay/capture-glue.js';
 import { ReplaysPanel } from './replay/replays-panel.js';
+import {
+  renderReplayToBlob,
+  suggestFilename,
+  triggerDownload,
+} from './replay/render.js';
+import { loadReplay } from './replay/storage.js';
 import { activeToast, showToast } from './hud-toast.js';
 
 // Test hook for the Playwright e2e suite. Toast is painted onto the
@@ -462,10 +468,50 @@ const configPanel = new ConfigPanel({
 });
 configBtn.addEventListener('click', () => configPanel.open());
 
-// Replays browser — desktop-only entry. The render integration is
-// deferred to a follow-up slice; for now the Render button on each
-// row is disabled with a tooltip. List + delete already work.
-const replaysPanel = new ReplaysPanel();
+// Replays browser — desktop-only entry. The Render button drives the
+// real-time MediaRecorder pipeline in `replay/render.ts`; failures
+// surface as a status banner since the panel itself doesn't have a
+// progress UI yet (deferred — render takes ~the song's length, so the
+// user sees the page idle for a few minutes).
+const replaysPanel = new ReplaysPanel({
+  onRender: (id) => {
+    run(async () => {
+      if (!library) {
+        setStatus('Pick your songs folder first — render needs WAV access.');
+        return;
+      }
+      const replay = await loadReplay(id);
+      if (!replay) {
+        setStatus('Replay not found (it may have been deleted).');
+        return;
+      }
+      let chartText: string;
+      try {
+        chartText = await library.backend.readText(replay.meta.chartPath);
+      } catch (e) {
+        setStatus(
+          `Render failed: chart not in current folder (${replay.meta.chartPath}).`,
+        );
+        console.warn('[render] readText failed', e);
+        return;
+      }
+      setStatus('Rendering replay… this takes about as long as the song.');
+      try {
+        const skin = await skinPromise.catch(() => undefined);
+        const result = await renderReplayToBlob(replay, chartText, {
+          fs: { backend: library.backend, folder: dirname(replay.meta.chartPath) },
+          ...(skin ? { skin } : {}),
+        });
+        triggerDownload(result.blob, suggestFilename(replay, result.ext));
+        setStatus(`Render done — saved as ${result.ext.toUpperCase()}.`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setStatus(`Render failed: ${msg}`);
+        console.warn('[render] renderReplayToBlob failed', e);
+      }
+    });
+  },
+});
 replaysBtn.addEventListener('click', () => {
   replaysPanel.open().catch((e) => console.warn('[replays] open failed', e));
 });
