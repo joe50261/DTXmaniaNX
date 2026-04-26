@@ -55,10 +55,12 @@ export const REPLAY_FORMAT_VERSION = 1;
 export type HitSource = 'xr-left' | 'xr-right' | 'auto';
 
 export interface ChartMeta {
-  /** Stable identifier of the chart this replay binds to. The viewer
-   * refuses to play a replay against a different chart. Production
-   * caller can use a hash of the .dtx contents; tests pass any string. */
-  chartHash: string;
+  /** Stable identifier of the chart this replay binds to. Mirrors the
+   * codebase-wide convention used by `ChartEntry.chartPath` /
+   * `ChartRecord.chartPath` (scanner + scoring): the .dtx file path
+   * relative to the song-library root. The viewer refuses to play a
+   * replay against a different chart. */
+  chartPath: string;
   /** Display only — surface in replay browser UI. */
   title?: string;
   /** Display only. */
@@ -153,7 +155,7 @@ export interface Replay {
  * In-memory recorder. One instance per recording. Lifecycle:
  *
  *   const r = new Recorder();
- *   r.start({ chartHash, title, artist, durationMs },
+ *   r.start({ chartPath, title, artist, durationMs },
  *           { audioOffsetMs, autoPlayLanes });
  *   // ... per-hit:  r.recordHit({ songTimeMs, lane, ... })
  *   // ... per-frame: r.recordPose({ songTimeMs, head, left, right })
@@ -265,6 +267,6 @@ export function deserializeReplay(s: string): Replay | null {
 /** Convenience: does this replay match the chart the user is currently
  * looking at? Used by the replay browser to gate the "Play replay"
  * button. */
-export function replayMatchesChart(r: Replay, chartHash: string): boolean {
-  return r.meta.chartHash === chartHash;
+export function replayMatchesChart(r: Replay, chartPath: string): boolean {
+  return r.meta.chartPath === chartPath;
 }

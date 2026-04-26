@@ -25,8 +25,8 @@
  *    free (no `three`).
  *  - `durationMs` for the playing → finished flip lives on `replay.meta`
  *    (the chart's duration), not on the replay envelope itself. The replay
- *    binds to the chart by hash, so the chart is the source of truth for
- *    "how long is this song".
+ *    binds to the chart by `chartPath`, so the chart is the source of
+ *    truth for "how long is this song".
  *
  * Out of scope here:
  *  - Building a full `RenderState` (depends on the chart object, the

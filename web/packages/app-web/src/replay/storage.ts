@@ -37,7 +37,7 @@ const STORE_REPLAYS = 'replays';
  * a wheel without paying the full deserialise cost per row. */
 export interface ReplaySummary {
   id: string;
-  chartHash: string;
+  chartPath: string;
   title: string | undefined;
   artist: string | undefined;
   durationMs: number;
@@ -147,7 +147,7 @@ export async function deleteReplay(id: string): Promise<void> {
 export function summarise(id: string, replay: Replay): ReplaySummary {
   return {
     id,
-    chartHash: replay.meta.chartHash,
+    chartPath: replay.meta.chartPath,
     title: replay.meta.title,
     artist: replay.meta.artist,
     durationMs: replay.meta.durationMs,

@@ -35,7 +35,7 @@ afterEach(() => {
 });
 
 const SAMPLE_META: ChartMeta = {
-  chartHash: 'abc123',
+  chartPath: 'abc123',
   title: 'Test Song',
   artist: 'Test Artist',
   durationMs: 180_000,
@@ -140,7 +140,7 @@ describe('Recorder — lifecycle', () => {
     r.start(SAMPLE_META, SAMPLE_PLAYER);
     r.recordHit(makeHit());
     r.recordPose(makePose());
-    r.start({ ...SAMPLE_META, chartHash: 'different' }, SAMPLE_PLAYER);
+    r.start({ ...SAMPLE_META, chartPath: 'different' }, SAMPLE_PLAYER);
     expect(r.isRecording()).toBe(true);
     expect(r.hitCount()).toBe(0);
     expect(r.poseCount()).toBe(0);
@@ -152,7 +152,7 @@ describe('Recorder — lifecycle', () => {
     r.recordHit(makeHit({ songTimeMs: 100 }));
     const first = r.finish(SAMPLE_FINAL);
 
-    r.start({ ...SAMPLE_META, chartHash: 'second' }, SAMPLE_PLAYER);
+    r.start({ ...SAMPLE_META, chartPath: 'second' }, SAMPLE_PLAYER);
     r.recordHit(makeHit({ songTimeMs: 200 }));
     const second = r.finish(SAMPLE_FINAL);
 
@@ -160,8 +160,8 @@ describe('Recorder — lifecycle', () => {
     expect(second.hits).toHaveLength(1);
     expect(first.hits[0]?.songTimeMs).toBe(100);
     expect(second.hits[0]?.songTimeMs).toBe(200);
-    expect(first.meta.chartHash).toBe('abc123');
-    expect(second.meta.chartHash).toBe('second');
+    expect(first.meta.chartPath).toBe('abc123');
+    expect(second.meta.chartPath).toBe('second');
   });
 });
 
@@ -361,17 +361,17 @@ describe('serializeReplay / deserializeReplay', () => {
 });
 
 describe('replayMatchesChart', () => {
-  it('matches when chartHash is equal', () => {
+  it('matches when chartPath is equal', () => {
     const r = new Recorder();
     r.start(SAMPLE_META, SAMPLE_PLAYER);
     const replay = r.finish(SAMPLE_FINAL);
-    expect(replayMatchesChart(replay, SAMPLE_META.chartHash)).toBe(true);
+    expect(replayMatchesChart(replay, SAMPLE_META.chartPath)).toBe(true);
   });
 
-  it('rejects a different chartHash', () => {
+  it('rejects a different chartPath', () => {
     const r = new Recorder();
     r.start(SAMPLE_META, SAMPLE_PLAYER);
     const replay = r.finish(SAMPLE_FINAL);
-    expect(replayMatchesChart(replay, 'different-hash')).toBe(false);
+    expect(replayMatchesChart(replay, 'different-path.dtx')).toBe(false);
   });
 });

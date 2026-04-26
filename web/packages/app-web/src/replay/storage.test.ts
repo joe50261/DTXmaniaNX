@@ -46,7 +46,7 @@ afterEach(async () => {
 });
 
 const META: ChartMeta = {
-  chartHash: 'h-test',
+  chartPath: 'h-test',
   title: 'Test Song',
   artist: 'Test Artist',
   durationMs: 180_000,
@@ -90,7 +90,7 @@ describe('summarise', () => {
     const s = summarise('abc', replay);
     expect(s).toEqual<ReplaySummary>({
       id: 'abc',
-      chartHash: META.chartHash,
+      chartPath: META.chartPath,
       title: META.title,
       artist: META.artist,
       durationMs: META.durationMs,
@@ -109,7 +109,7 @@ describe('summarise', () => {
     const r = new Recorder();
     r.start(
       {
-        chartHash: 'no-meta',
+        chartPath: 'no-meta',
         durationMs: 1000,
       },
       PLAYER,
@@ -154,12 +154,12 @@ describe('listReplaySummaries', () => {
   });
 
   it('returns a summary per saved replay', async () => {
-    await saveReplay(makeReplay({ meta: { chartHash: 'one' } }));
-    await saveReplay(makeReplay({ meta: { chartHash: 'two' } }));
-    await saveReplay(makeReplay({ meta: { chartHash: 'three' } }));
+    await saveReplay(makeReplay({ meta: { chartPath: 'one' } }));
+    await saveReplay(makeReplay({ meta: { chartPath: 'two' } }));
+    await saveReplay(makeReplay({ meta: { chartPath: 'three' } }));
     const out = await listReplaySummaries();
     expect(out).toHaveLength(3);
-    expect(out.map((s) => s.chartHash).sort()).toEqual(['one', 'three', 'two']);
+    expect(out.map((s) => s.chartPath).sort()).toEqual(['one', 'three', 'two']);
   });
 
   it('summary mirrors Replay.final values', async () => {
@@ -203,8 +203,8 @@ describe('deleteReplay', () => {
   });
 
   it('only removes the targeted row', async () => {
-    const a = await saveReplay(makeReplay({ meta: { chartHash: 'a' } }));
-    const b = await saveReplay(makeReplay({ meta: { chartHash: 'b' } }));
+    const a = await saveReplay(makeReplay({ meta: { chartPath: 'a' } }));
+    const b = await saveReplay(makeReplay({ meta: { chartPath: 'b' } }));
     await deleteReplay(a);
     const remaining = await listReplaySummaries();
     expect(remaining).toHaveLength(1);

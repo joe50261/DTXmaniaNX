@@ -30,7 +30,7 @@ import {
  */
 
 const META: ChartMeta = {
-  chartHash: 'h',
+  chartPath: 'h',
   durationMs: 10_000,
 };
 
