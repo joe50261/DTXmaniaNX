@@ -76,22 +76,34 @@ export interface InterpolatedPose {
  *  `totalNotes` is the chart's playable-chip count; the caller knows the
  *  chart, this module doesn't. */
 export function replayScoreSnapshotAt(
-  _replay: Replay,
-  _cutoffSongTimeMs: number,
-  _totalNotes: number,
+  replay: Replay,
+  cutoffSongTimeMs: number,
+  totalNotes: number,
 ): ScoreSnapshot {
-  throw new Error('replayScoreSnapshotAt: not implemented');
+  const tracker = new ScoreTracker(totalNotes);
+  for (const h of replay.hits) {
+    if (h.chipIndex === -1) continue;
+    if (h.songTimeMs > cutoffSongTimeMs) continue;
+    tracker.record(h.judgment);
+  }
+  return tracker.snapshot();
 }
 
 /** All hit-pad flashes still visible at `currentSongTimeMs`, given
  *  `lifeMs` (defaults to `HIT_FLASH_LIFE_MS`). Includes strays — they
  *  are a visual event in live play. Output order matches recorded order. */
 export function replayActiveHitFlashes(
-  _replay: Replay,
-  _currentSongTimeMs: number,
-  _lifeMs?: number,
+  replay: Replay,
+  currentSongTimeMs: number,
+  lifeMs: number = HIT_FLASH_LIFE_MS,
 ): ActiveHitFlash[] {
-  throw new Error('replayActiveHitFlashes: not implemented');
+  const out: ActiveHitFlash[] = [];
+  for (const h of replay.hits) {
+    if (h.songTimeMs > currentSongTimeMs) continue;
+    if (currentSongTimeMs - h.songTimeMs > lifeMs) continue;
+    out.push({ lane: h.lane, spawnedMs: h.songTimeMs });
+  }
+  return out;
 }
 
 /** The most recent matched-chip hit at or before `currentSongTimeMs`, if
@@ -99,11 +111,26 @@ export function replayActiveHitFlashes(
  *  Strays are skipped — live play doesn't paint a judgment flash for
  *  strays, just the pad flash. Returns null when no eligible hit. */
 export function replayActiveJudgmentFlash(
-  _replay: Replay,
-  _currentSongTimeMs: number,
-  _lifeMs?: number,
+  replay: Replay,
+  currentSongTimeMs: number,
+  lifeMs: number = JUDGMENT_FLASH_LIFE_MS,
 ): ActiveJudgmentFlash | null {
-  throw new Error('replayActiveJudgmentFlash: not implemented');
+  let latest: HitEvent | null = null;
+  for (const h of replay.hits) {
+    if (h.chipIndex === -1) continue;
+    if (h.songTimeMs > currentSongTimeMs) continue;
+    if (currentSongTimeMs - h.songTimeMs > lifeMs) continue;
+    if (latest === null || h.songTimeMs >= latest.songTimeMs) {
+      latest = h;
+    }
+  }
+  if (latest === null) return null;
+  return {
+    lane: latest.lane,
+    judgment: latest.judgment,
+    spawnedMs: latest.songTimeMs,
+    deltaMs: latest.lagMs,
+  };
 }
 
 /** Hits whose `songTimeMs` falls in `(fromMs, toMs]` — exclusive low,
@@ -112,20 +139,26 @@ export function replayActiveJudgmentFlash(
  *  pulls the new range each frame. Includes strays so the viewer can
  *  fire the stray-fallback sample. Output order matches recorded order. */
 export function replayHitsInRange(
-  _replay: Replay,
-  _fromMs: number,
-  _toMs: number,
+  replay: Replay,
+  fromMs: number,
+  toMs: number,
 ): HitEvent[] {
-  throw new Error('replayHitsInRange: not implemented');
+  const out: HitEvent[] = [];
+  for (const h of replay.hits) {
+    if (h.songTimeMs > fromMs && h.songTimeMs <= toMs) {
+      out.push(h);
+    }
+  }
+  return out;
 }
 
 /** `'playing'` until `currentSongTimeMs >= replay.meta.durationMs`, then
  *  `'finished'`. Equivalent to Game's status flip. */
 export function replayStatus(
-  _replay: Replay,
-  _currentSongTimeMs: number,
+  replay: Replay,
+  currentSongTimeMs: number,
 ): 'playing' | 'finished' {
-  throw new Error('replayStatus: not implemented');
+  return currentSongTimeMs >= replay.meta.durationMs ? 'finished' : 'playing';
 }
 
 /** Component-wise lerp on position + lerp+renormalise on quaternion,
@@ -141,10 +174,54 @@ export function replayStatus(
  *  field (head/left/right), the output field is null — half-known
  *  bracket isn't interpolated to avoid half-truth poses. */
 export function lerpPoseSample(
-  _poses: readonly PoseSample[],
-  _currentSongTimeMs: number,
+  poses: readonly PoseSample[],
+  currentSongTimeMs: number,
 ): InterpolatedPose | null {
-  throw new Error('lerpPoseSample: not implemented');
+  if (poses.length === 0) return null;
+  const first = poses[0]!;
+  const last = poses[poses.length - 1]!;
+  if (currentSongTimeMs < first.songTimeMs) return null;
+  if (currentSongTimeMs > last.songTimeMs) return null;
+
+  // Find bracket: a (latest sample <= t) and b (earliest sample >= t).
+  let a: PoseSample = first;
+  let b: PoseSample = last;
+  for (let i = 0; i < poses.length; i++) {
+    const s = poses[i]!;
+    if (s.songTimeMs <= currentSongTimeMs) a = s;
+    if (s.songTimeMs >= currentSongTimeMs) {
+      b = s;
+      break;
+    }
+  }
+
+  const span = b.songTimeMs - a.songTimeMs;
+  const t = span === 0 ? 0 : (currentSongTimeMs - a.songTimeMs) / span;
+
+  const lerpField = (pa: Pose | null, pb: Pose | null): Pose | null => {
+    if (pa === null || pb === null) return null;
+    const px = pa.pos[0] + (pb.pos[0] - pa.pos[0]) * t;
+    const py = pa.pos[1] + (pb.pos[1] - pa.pos[1]) * t;
+    const pz = pa.pos[2] + (pb.pos[2] - pa.pos[2]) * t;
+    let qx = pa.quat[0] + (pb.quat[0] - pa.quat[0]) * t;
+    let qy = pa.quat[1] + (pb.quat[1] - pa.quat[1]) * t;
+    let qz = pa.quat[2] + (pb.quat[2] - pa.quat[2]) * t;
+    let qw = pa.quat[3] + (pb.quat[3] - pa.quat[3]) * t;
+    const len = Math.hypot(qx, qy, qz, qw);
+    if (len > 0) {
+      qx /= len;
+      qy /= len;
+      qz /= len;
+      qw /= len;
+    }
+    return { pos: [px, py, pz], quat: [qx, qy, qz, qw] };
+  };
+
+  return {
+    head: lerpField(a.head, b.head),
+    left: lerpField(a.left, b.left),
+    right: lerpField(a.right, b.right),
+  };
 }
 
 // Re-export the ScoreTracker only as a hint that this module's snapshot
