@@ -12,6 +12,7 @@ import {
   joinPath,
   type Chip,
   type FileSystemBackend,
+  type JudgmentKind,
   type ScoreSnapshot,
   type Song,
   type SongEntry,
@@ -35,7 +36,7 @@ import {
 import { applyAutoFire } from './autofire.js';
 import { detectMisses, matchLaneHit } from './matcher.js';
 import { channelToLane, LANE_LAYOUT, laneSpec } from './lane-layout.js';
-import { XrControllers } from './xr-controllers.js';
+import { XrControllers, type XrPoseSnapshot } from './xr-controllers.js';
 import { emptyChartState, resetStateOnVrExit } from './vr-lifecycle.js';
 import {
   applyGaugeDelta,
@@ -75,6 +76,29 @@ interface PlayableChip {
   missed: boolean;
   /** Real WAV sample for this chip, if one was preloaded. null → use synth fallback. */
   buffer: AudioBuffer | null;
+}
+
+/** Payload of `onHitProcessed`. Three flavours, distinguishable by
+ * `matched`:
+ *  - `matched.deltaMs !== null`: human input matched a chip → judgment +
+ *    timing offset surfaced.
+ *  - `matched.deltaMs === null`: auto-detected miss (chip's POOR window
+ *    expired without input) → `judgment === 'MISS'`.
+ *  - `matched === null`: stray (input on a lane with no chip in window).
+ *
+ * Emitted from `handleLaneHit` (matched + stray paths) and from `tick()`'s
+ * miss-detection loop. The shape is intentionally close to matcher.ts
+ * primitives so consumers translate as they need; Game itself has no
+ * dependency on what the consumer does with these. */
+export interface HitProcessedEvent {
+  lane: LaneValue;
+  songTimeMs: number;
+  matched: {
+    idx: number;
+    /** ms offset from chip; `null` for auto-detected misses. */
+    deltaMs: number | null;
+    judgment: JudgmentKind;
+  } | null;
 }
 
 export interface GameFsContext {
@@ -141,6 +165,20 @@ export class Game {
    * the current chart. Host (main.ts) maps into `updateConfig`. Only
    * fired during `status === 'playing'`. */
   private onLoopMarkerCaptured: ((which: 'A' | 'B', measure: number) => void) | null = null;
+  /** Fires for every resolved hit event during play — matched human input,
+   * stray human input, or auto-detected miss (chip past POOR window). The
+   * payload is intentionally raw (the matcher's view + lane + songTime);
+   * shape derivation lives in the consumer. Optional + null-by-default so
+   * Game has no replay-subsystem dependency. Cleared / set in loadAndStart. */
+  private onHitProcessed:
+    | ((e: HitProcessedEvent) => void)
+    | null = null;
+  /** Fires every tick while `status === 'playing'` with the current pose
+   * snapshot + song time. Cadence = render frame rate; throttling is the
+   * consumer's responsibility. Optional + null-by-default. */
+  private onTickPose:
+    | ((snap: XrPoseSnapshot, songTimeMs: number) => void)
+    | null = null;
   /** Built by `loadAndStart`; cleared by `leaveSong`. Empty until a
    * chart is loaded, which is why `setLoopWindow` treats empty as
    * "disable loop" and doesn't error. */
@@ -388,11 +426,20 @@ export class Game {
       /** Fires when the VR right-controller face-button captures a
        * loop marker. Host writes the measure into config. */
       onLoopMarkerCaptured?: (which: 'A' | 'B', measure: number) => void;
+      /** Fires for every resolved hit — matched, stray, or auto-detected
+       * miss. Game has no built-in consumer; the replay subsystem
+       * subscribes from outside. See `HitProcessedEvent` for payload. */
+      onHitProcessed?: (e: HitProcessedEvent) => void;
+      /** Fires every tick while playing with the current pose snapshot +
+       * song time. Cadence = render frame rate; consumer throttles. */
+      onTickPose?: (snap: XrPoseSnapshot, songTimeMs: number) => void;
     } = {}
   ): Promise<void> {
     this.onRestart = opts.onRestart ?? null;
     this.onChartFinished = opts.onChartFinished ?? null;
     this.onLoopMarkerCaptured = opts.onLoopMarkerCaptured ?? null;
+    this.onHitProcessed = opts.onHitProcessed ?? null;
+    this.onTickPose = opts.onTickPose ?? null;
     this.currentChartPath = opts.chartPath ?? null;
     if (opts.autoPlayLanes !== undefined) {
       this.autoPlayLanes = new Set(opts.autoPlayLanes);
@@ -762,7 +809,13 @@ export class Game {
         lane: m.lane,
         spawnedMs: songTime,
       };
+      this.onHitProcessed?.({
+        lane: m.lane,
+        songTimeMs: songTime,
+        matched: { idx: m.idx, deltaMs: null, judgment: Judgment.MISS },
+      });
     }
+    this.onTickPose?.(this.xrControllers.getPoses(), songTime);
 
     // Practice loop: when the chart time crosses the window's end,
     // teleport back to start. Must run BEFORE the finished-state check
@@ -938,6 +991,7 @@ export class Game {
       this.playStrayHit(event.lane, songTime);
       this.hitFlashes.push({ lane: event.lane, spawnedMs: songTime });
       this.lastPadHitMs.set(event.lane, performance.now());
+      this.onHitProcessed?.({ lane: event.lane, songTimeMs: songTime, matched: null });
       return;
     }
 
@@ -963,6 +1017,11 @@ export class Game {
     // playback still happens (~30ms earlier at PERFECT), but overlapping
     // with the keystroke playback feels more responsive than silent feedback.
     this.playChipSample(p, songTime, 0.7);
+    this.onHitProcessed?.({
+      lane: event.lane,
+      songTimeMs: songTime,
+      matched: { idx: match.idx, deltaMs: match.deltaMs, judgment: match.judgment },
+    });
   }
 
   private playStrayHit(lane: LaneValue, songTime: number): void {
