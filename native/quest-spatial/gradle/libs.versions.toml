@@ -1,0 +1,31 @@
+[versions]
+# Android toolchain
+agp = "8.5.2"
+kotlin = "2.0.21"
+
+# Android SDK
+compileSdk = "34"
+minSdk = "29"
+targetSdk = "34"
+
+# Runtime libraries
+# NOTE: Pin the exact Spatial SDK version once the Phase 0 build is exercised
+# against a real Quest 3 device. The Spatial SDK API surface has shifted
+# between minor versions; do not auto-update this without re-verifying the
+# Stage / scene-init code in app/src/main/kotlin/com/dtxmania/quest/app/Stage.kt.
+metaSpatial = "0.5.0"
+documentFile = "1.0.1"
+
+# Test
+junitJupiter = "5.10.2"
+
+[libraries]
+meta-spatial-sdk = { module = "com.meta.spatial:meta-spatial-sdk", version.ref = "metaSpatial" }
+meta-spatial-toolkit = { module = "com.meta.spatial:meta-spatial-toolkit", version.ref = "metaSpatial" }
+androidx-documentfile = { module = "androidx.documentfile:documentfile", version.ref = "documentFile" }
+junit-jupiter-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junitJupiter" }
+junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junitJupiter" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }

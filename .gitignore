@@ -201,3 +201,11 @@ ModelManifest.xml
 test-results/
 playwright-report/
 playwright/.cache/
+
+# Native Quest 3 app (native/quest-spatial/) — Android/Gradle build outputs
+native/**/build/
+native/**/.gradle/
+native/**/.cxx/
+native/**/local.properties
+native/**/*.iml
+native/**/.idea/

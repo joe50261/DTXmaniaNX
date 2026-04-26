@@ -78,7 +78,7 @@ registered.
 - ✅ PWA manifest + service worker (installable, offline shell)
 - 🚧 Gamepad API (non-XR) + MIDI drum kit input
 - 🚧 Practice mode (playback-rate slow-down + loop window)
-- 🚧 Capacitor APK packaging
+- 🚧 Native Quest 3 app (Meta Spatial SDK) — see [`native/quest-spatial/`](../native/quest-spatial/). The web build remains the primary dev harness for `dtx-core` until the native app reaches parity.
 
 ## Deploy (GitHub Pages)
 
