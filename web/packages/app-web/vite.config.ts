@@ -33,6 +33,24 @@ const COMMON_ALLOWLIST = [
   'Tile black 64x64.png',
   'Tile white 64x64.png',
 ];
+// Stage 4 (config) chrome — loaded by `ConfigCanvas`. Both the DOM
+// modal (`config-panel.ts`) and the VR canvas (`vr-config.ts`) can
+// layer this on top of their interaction surfaces.
+const STAGE4_ALLOWLIST = [
+  '4_background.png',
+  '4_header panel.png',
+  '4_footer panel.png',
+  '4_menu cursor.png',
+  '4_menu panel.png',
+  '4_item bar.png',
+  '4_itembox.png',
+  '4_itembox other.png',
+  '4_itembox cursor.png',
+  '4_triangle arrow.png',
+  '4_Arrow.png',
+  '4_Description Panel.png',
+  '4_hit key to assign dialog.png',
+];
 const STAGE7_ALLOWLIST = [
   '7_background.jpg',
   '7_pads.png',
@@ -116,6 +134,11 @@ export default defineConfig({
           rename: { stripBase: true as const },
         })),
         ...COMMON_ALLOWLIST.map((name) => ({
+          src: `${RUNTIME_GRAPHICS}/${name}`,
+          dest: 'skin',
+          rename: { stripBase: true as const },
+        })),
+        ...STAGE4_ALLOWLIST.map((name) => ({
           src: `${RUNTIME_GRAPHICS}/${name}`,
           dest: 'skin',
           rename: { stripBase: true as const },
