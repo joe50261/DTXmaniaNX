@@ -51,9 +51,11 @@ android {
 }
 
 dependencies {
-    implementation(libs.meta.spatial.sdk)
-    implementation(libs.meta.spatial.toolkit)
     implementation(libs.androidx.documentfile)
+
+    // Meta Spatial SDK is intentionally NOT yet wired in — coords and
+    // Maven repo need verification against the official sample project
+    // first. See gradle/libs.versions.toml for context.
 
     testImplementation(libs.junit.jupiter.api)
     testRuntimeOnly(libs.junit.jupiter.engine)

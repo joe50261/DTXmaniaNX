@@ -9,19 +9,20 @@ minSdk = "29"
 targetSdk = "34"
 
 # Runtime libraries
-# NOTE: Pin the exact Spatial SDK version once the Phase 0 build is exercised
-# against a real Quest 3 device. The Spatial SDK API surface has shifted
-# between minor versions; do not auto-update this without re-verifying the
-# Stage / scene-init code in app/src/main/kotlin/com/dtxmania/quest/app/Stage.kt.
-metaSpatial = "0.5.0"
 documentFile = "1.0.1"
 
 # Test
 junitJupiter = "5.10.2"
 
 [libraries]
-meta-spatial-sdk = { module = "com.meta.spatial:meta-spatial-sdk", version.ref = "metaSpatial" }
-meta-spatial-toolkit = { module = "com.meta.spatial:meta-spatial-toolkit", version.ref = "metaSpatial" }
+# Meta Spatial SDK is intentionally NOT pinned here yet. The artifact
+# coordinates and the Maven repository it ships from must be verified
+# against Meta's official Spatial SDK sample project before adoption —
+# the SDK has been published under multiple coordinate names across
+# minor versions, and at least some artifacts ship from a non-Maven-
+# Central repo. This is tracked as the next task on Phase 0; until
+# then, the scaffold compiles as a vanilla Android app so CI can stay
+# green and prove the rest of the toolchain works end to end.
 androidx-documentfile = { module = "androidx.documentfile:documentfile", version.ref = "documentFile" }
 junit-jupiter-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junitJupiter" }
 junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junitJupiter" }
