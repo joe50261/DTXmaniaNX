@@ -47,6 +47,17 @@ const STAGE7_ALLOWLIST = [
   'ScreenPlayDrums lane flush lowtom.png',
   'ScreenPlayDrums lane flush floortom.png',
   'ScreenPlayDrums lane flush cymbal.png',
+  // Per-lane chip-fire bursts — loaded by ChipFireCanvas.
+  'ScreenPlayDrums chip fire_LC.png',
+  'ScreenPlayDrums chip fire_HH.png',
+  'ScreenPlayDrums chip fire_LP.png',
+  'ScreenPlayDrums chip fire_SD.png',
+  'ScreenPlayDrums chip fire_HT.png',
+  'ScreenPlayDrums chip fire_BD.png',
+  'ScreenPlayDrums chip fire_LT.png',
+  'ScreenPlayDrums chip fire_FT.png',
+  'ScreenPlayDrums chip fire_CY.png',
+  'ScreenPlayDrums chip fire_Bonus.png',
 ];
 const STAGE8_ALLOWLIST = [
   '8_background.jpg',

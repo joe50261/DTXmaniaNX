@@ -5,6 +5,7 @@ import { PAD_ATLAS, PAD_SIZE, padRect } from './pad-atlas.js';
 import { CHIP_ATLAS_Y, CHIP_ATLAS_H, chipRect } from './chip-atlas.js';
 import { JUDGE_ROWS, JUDGE_SPRITE_W, JUDGE_SPRITE_H } from './judge-atlas.js';
 import { linearFadeIn, linearFadeOut, padBounceOffset } from './renderer-math.js';
+import { ChipFireCanvas } from './chip-fire-canvas.js';
 import { PlayfieldCanvas } from './playfield-canvas.js';
 import { ResultCanvas } from './result-canvas.js';
 import type { JudgmentKind, Rank } from '@dtxmania/dtx-core';
@@ -166,6 +167,12 @@ export class Renderer {
    *  3D pad meshes still live on `padMeshes` for now. */
   private readonly playfieldCanvas = new PlayfieldCanvas();
 
+  /** Chip-fire sub-canvas (07.Performance port — burst slice).
+   *  Paints the per-lane fire burst at the judgement line on every
+   *  hit. Triggered off the same `lastPadHitMs` map as lane-flush
+   *  so a single timestamp drives both effects. */
+  private readonly chipFireCanvas = new ChipFireCanvas();
+
   /** Result-screen sub-canvas (08.Result port). Owns its own asset
    *  preload + reveal animation; renderer just hands it the 2D
    *  context when `state.status === 'finished'`. */
@@ -228,6 +235,9 @@ export class Renderer {
     // Playfield lane-flush sub-canvas — same pattern. Loads the 9
     // ScreenPlayDrums lane-flush PNGs.
     void this.playfieldCanvas.load();
+    // Chip-fire bursts — loads the 9 unique ScreenPlayDrums chip
+    // fire PNGs (10 lanes minus RD/CY share).
+    void this.chipFireCanvas.load();
 
     // Resize observer keeps the WebGL backbuffer sharp when the window / canvas
     // changes size (only relevant in desktop mode; XR owns its own framebuffer).
@@ -511,10 +521,17 @@ export class Renderer {
     // Lane-flush overlay — per-lane vertical streak that rides up on
     // each hit. Skinned via PlayfieldCanvas; falls back to a coloured
     // rectangle when its assets are absent.
+    const fxNow = performance.now();
     this.playfieldCanvas.paint(ctx, {
       lastPadHitMs: state.lastPadHitMs,
-      nowMs: performance.now(),
+      nowMs: fxNow,
       canvasH: CANVAS_H,
+    });
+    // Chip-fire burst on top of lane-flush — pops at the judge line.
+    this.chipFireCanvas.paint(ctx, {
+      lastPadHitMs: state.lastPadHitMs,
+      nowMs: fxNow,
+      judgeLineY: this.judgeLineY,
     });
     this.drawHUD(state);
     this.drawJudgmentFlash(state);
