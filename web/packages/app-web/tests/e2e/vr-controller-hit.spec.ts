@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { installIwerRuntime } from './iwer-helper';
+import { installIwerRuntime, pulseTrigger } from './iwer-helper';
 
 /**
  * Controller input reaches the song-select panel's tick loop and
@@ -44,16 +44,6 @@ type HookShape = {
     game?: { inXR: boolean; songSelectShown: boolean; hasChart: boolean };
     refreshXrButton?: () => void;
   };
-  __iwerDevice?: {
-    controllers: Record<
-      'left' | 'right',
-      | {
-          updateButtonValue(id: string, v: number): void;
-          setButtonValueImmediate(id: string, v: number): void;
-        }
-      | undefined
-    >;
-  };
 };
 
 async function pollFlag(
@@ -97,20 +87,16 @@ test.describe('controller trigger — drives VR menu via real XRSession inputSou
     // Chart hasn't been loaded yet — the menu is up, waiting for a pick.
     await pollFlag(page, 'hasChart', false);
 
-    // Pulse the right trigger. Iwer's `updateButtonValue` queues the
-    // change until the next XRFrame; `setButtonValueImmediate` is the
-    // one that lands on the gamepad state synchronously. We release
-    // to 0 first (trigger edge-detection in song-select-canvas compares
-    // `pressed` vs `wasPressed` — starting from 0 makes the
-    // 0→1 transition deterministic), wait a frame, then press to 1.
-    await page.evaluate(async () => {
-      const device = (window as unknown as HookShape).__iwerDevice;
-      const right = device?.controllers.right;
-      if (!right) throw new Error('no right controller on emulated device');
-      right.setButtonValueImmediate('trigger', 0);
-      await new Promise<void>((r) => requestAnimationFrame(() => r()));
-      right.setButtonValueImmediate('trigger', 1);
-    });
+    // Pulse the right trigger via the iwer-helper (press 1 → wait
+    // ~120 ms → release 0 in a single round-trip). Trigger is
+    // configured with `eventTrigger: 'select'` in IWER's Quest
+    // profile, so the cycle fires `selectstart → select → selectend`,
+    // which is what `xr-controllers.ts` listens to. SongSelectCanvas's
+    // tick edge-detection compares `pressed` vs `wasPressed` per XR
+    // frame — the helper's bundled press+release means the spec
+    // doesn't have to manually release later, and there's no inter-
+    // evaluate window where the trigger could re-fire.
+    await pulseTrigger(page, 'right');
 
     // SongSelectCanvas.tick runs once per XR frame; the trigger edge
     // fires activateFocused → onPick → launchGame. loadAndStart sets
@@ -121,15 +107,6 @@ test.describe('controller trigger — drives VR menu via real XRSession inputSou
     // assert on hasChart because it's the direct evidence that the
     // `onPick` callback landed in the game layer.
     await pollFlag(page, 'hasChart', true);
-
-    // Release the trigger so we don't accidentally re-fire on a
-    // second frame (SongSelectCanvas.wasPressed latches until release
-    // anyway, but being explicit keeps this spec's state clean if
-    // more assertions get added later).
-    await page.evaluate(() => {
-      const right = (window as unknown as HookShape).__iwerDevice?.controllers.right;
-      right?.setButtonValueImmediate('trigger', 0);
-    });
 
     expect(pageErrors, pageErrors.join('\n')).toEqual([]);
   });
