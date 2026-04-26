@@ -25,11 +25,16 @@ import {
  * in-VR click and leaves players stuck pointing at unresponsive
  * buttons.
  *
- * Two phases, both real raycast:
+ * Three phases, all real raycast:
  *   1. Aim at song-select Settings button → opens VR config panel
  *      (`Game.vrConfigShown` flips true).
  *   2. Aim at vr-config Sit button → `seatYOffset` config flips
  *      to `SEAT_Y_OFFSET_SIT` (read from localStorage).
+ *   3. Aim at vr-config BD auto-play cell → `autoPlay.BD` flips
+ *      to true (read from localStorage). Pins the auto-play grid
+ *      cell-rect math too: a layout regression that shifted the
+ *      grid would have ray missing the cell, not silently writing
+ *      a different lane.
  */
 
 interface FakeLibrarySpec {
@@ -129,7 +134,7 @@ async function aimRightAt(page: Page, panel: PanelGeometry, px: number, py: numb
 }
 
 test.describe('VR controller laser — real raycast clicks panel buttons', () => {
-  test('right-controller laser hits Settings → VR config opens; aim at Sit → seatYOffset = SIT', async ({
+  test('right-controller laser hits Settings → VR config opens; Sit → seatYOffset = SIT; BD cell → autoPlay.BD = true', async ({
     context,
     page,
   }) => {
@@ -215,6 +220,73 @@ test.describe('VR controller laser — real raycast clicks panel buttons', () =>
         { timeout: 3_000 },
       )
       .toBe(SEAT_Y_OFFSET_SIT);
+
+    // ── Phase 3: aim at the BD (Bass Kick) auto-play cell ──
+    // Auto-play cells form a 4-column grid further down the panel.
+    // Locate the grid by its 4-cells-in-a-row geometry (same robust
+    // approach `vr-config-class.test.ts:autoPlayCellPoint` uses), then
+    // index BD by its position in AUTO_PLAY_LANES (LC, HH, LP, SD,
+    // HT, BD, …) — index 5. The cells are ~225 px wide on a 1024 px
+    // panel; everything else is narrower (toggles 100, step buttons
+    // ~56, Sit/Stand 84/132). The lane order + label is pinned in
+    // the unit test.
+    const bdHit = await page.evaluate(() => {
+      const hits =
+        (window as unknown as HookShape).__dtxmaniaTest?.game?.vrConfigHits ?? [];
+      const gridStart = hits.findIndex((h, i, arr) => {
+        if (h.w < 180 || h.w > 240) return false;
+        const next4 = arr.slice(i, i + 4);
+        if (next4.length < 4) return false;
+        return (
+          next4.every((c) => Math.abs(c.w - h.w) < 2) &&
+          next4.every((c) => c.y === h.y)
+        );
+      });
+      if (gridStart < 0) return null;
+      // BD is the 6th lane (idx 5) in AUTO_PLAY_LANES.
+      return hits[gridStart + 5] ?? null;
+    });
+    expect(bdHit, 'BD auto-play cell not found in vrConfigHits').not.toBeNull();
+    const bd = bdHit!;
+
+    // Sanity-check the auto-play row geometry the spec relies on —
+    // a layout change that doubled cell height to 72 px would still
+    // pick *some* hit at gridStart+5 but quietly stop hitting BD.
+    expect(bd.h).toBe(36);
+
+    // Pre-flight assertion: BD starts off. Without this a previous
+    // run that happened to leave BD on (race against the localStorage
+    // reset earlier in this test) would mask a no-op click.
+    const bdBefore = await page.evaluate(
+      (k) =>
+        (JSON.parse(localStorage.getItem(k) ?? '{}') as {
+          autoPlay?: { BD?: boolean };
+        }).autoPlay?.BD ?? false,
+      STORAGE_KEY,
+    );
+    expect(bdBefore).toBe(false);
+
+    await aimRightAt(page, VR_CONFIG_PANEL, bd.x + bd.w / 2, bd.y + bd.h / 2);
+    await page.waitForTimeout(50);
+    await pulseTrigger(page, 'right');
+
+    // Click toggles autoPlay.BD on. The persisted blob is the
+    // observable side effect; this also implicitly verifies that the
+    // shared `toggleAutoPlayLane` path the unit test covers ran for
+    // real through raycast → hit dispatch → updateConfig.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            (k) =>
+              (JSON.parse(localStorage.getItem(k) ?? '{}') as {
+                autoPlay?: { BD?: boolean };
+              }).autoPlay?.BD ?? false,
+            STORAGE_KEY,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe(true);
 
     expect(pageErrors, pageErrors.join('\n')).toEqual([]);
   });

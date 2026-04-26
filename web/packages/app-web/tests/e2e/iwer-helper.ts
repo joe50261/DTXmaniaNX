@@ -93,9 +93,28 @@ export async function installIwerRuntime(context: BrowserContext): Promise<void>
  * keeping press and release in one round-trip avoids inter-evaluate
  * gaps where the trigger sits at 1 indefinitely (which can re-fire
  * `select` on the next frame after the spec's first assertion). */
-export async function pulseTrigger(page: Page, hand: 'left' | 'right'): Promise<void> {
+/** Fire a single press-release pulse on the named button, waiting
+ * `holdMs` between press and release. Resolves after the release.
+ *
+ * `buttonId` is the IWER-internal short id from the Meta Quest
+ * controller config (`iwer/lib/device/configs/controller/meta.js`):
+ *   - both hands: `'trigger'`, `'squeeze'`, `'thumbstick'` (binary
+ *     press), `'thumbrest'`
+ *   - left hand only: `'x-button'`, `'y-button'`
+ *   - right hand only: `'a-button'`, `'b-button'`
+ *
+ * Trigger / squeeze map onto WebXR `'select'` / `'squeeze'` events
+ * via `eventTrigger` in the IWER config; the face buttons are read
+ * by the app via `gamepad.buttons[4]` / `gamepad.buttons[5]` (slot
+ * indices, NOT id strings — IWER fills both representations). */
+export async function pulseButton(
+  page: Page,
+  hand: 'left' | 'right',
+  buttonId: string,
+  holdMs = TRIGGER_PRESS_MS,
+): Promise<void> {
   await page.evaluate(
-    async ({ hand: h, holdMs, buttonId }) => {
+    async ({ hand: h, holdMs: ms, id }) => {
       const device = (
         window as unknown as {
           __iwerDevice?: {
@@ -107,13 +126,20 @@ export async function pulseTrigger(page: Page, hand: 'left' | 'right'): Promise<
         }
       ).__iwerDevice;
       const c = device?.controllers[h];
-      if (!c) throw new Error(`pulseTrigger: no ${h} controller on emulated device`);
-      c.setButtonValueImmediate(buttonId, 1);
-      await new Promise((r) => setTimeout(r, holdMs));
-      c.setButtonValueImmediate(buttonId, 0);
+      if (!c) throw new Error(`pulseButton: no ${h} controller on emulated device`);
+      c.setButtonValueImmediate(id, 1);
+      await new Promise((r) => setTimeout(r, ms));
+      c.setButtonValueImmediate(id, 0);
     },
-    { hand, holdMs: TRIGGER_PRESS_MS, buttonId: TRIGGER_BUTTON_ID },
+    { hand, holdMs, id: buttonId },
   );
+}
+
+/** Convenience wrapper for the most-common case. Retained as a thin
+ * shim over `pulseButton` to keep call-sites that fire the trigger
+ * (the only press most VR specs need) one line shorter. */
+export async function pulseTrigger(page: Page, hand: 'left' | 'right'): Promise<void> {
+  await pulseButton(page, hand, TRIGGER_BUTTON_ID);
 }
 
 /** IWER's stick id on the Meta Quest controller config. Like

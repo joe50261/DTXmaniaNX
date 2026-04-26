@@ -136,7 +136,7 @@ export class Game {
   private onChartFinished:
     | ((chartPath: string, snap: ScoreSnapshot, didLoop: boolean) => void)
     | null = null;
-  private currentChartPath: string | null = null;
+  private currentChartPathField: string | null = null;
   /** Fires when the VR right-hand face-button captures a loop marker in
    * the current chart. Host (main.ts) maps into `updateConfig`. Only
    * fired during `status === 'playing'`. */
@@ -330,6 +330,16 @@ export class Game {
     return this.vrConfig.__testHits();
   }
 
+  /** chartPath of the chart currently loaded (or `null` between
+   * picks / before the first pick / after `leaveSong`). Surfaced
+   * for the mid-VR-change e2e spec so it can prove a NEW chart
+   * landed after the second pulse-trigger, distinct from the first
+   * pick's path — `hasChart` flipping false→true alone doesn't rule
+   * out reloading the same song from stale state. */
+  get currentChartPath(): string | null {
+    return this.currentChartPathField;
+  }
+
   /** True if loadAndStart has been called at least once. */
   get hasChart(): boolean {
     return this.song !== null;
@@ -426,7 +436,7 @@ export class Game {
     this.onRestart = opts.onRestart ?? null;
     this.onChartFinished = opts.onChartFinished ?? null;
     this.onLoopMarkerCaptured = opts.onLoopMarkerCaptured ?? null;
-    this.currentChartPath = opts.chartPath ?? null;
+    this.currentChartPathField = opts.chartPath ?? null;
     if (opts.autoPlayLanes !== undefined) {
       this.autoPlayLanes = new Set(opts.autoPlayLanes);
     }
@@ -819,10 +829,10 @@ export class Game {
       // persist the best-of record. Only fires on natural completion,
       // not on leaveSong() bail-outs — incomplete plays shouldn't
       // overwrite a real attempt's medal.
-      if (this.onChartFinished && this.currentChartPath) {
+      if (this.onChartFinished && this.currentChartPathField) {
         try {
           this.onChartFinished(
-            this.currentChartPath,
+            this.currentChartPathField,
             this.tracker.snapshot(),
             this.loopedAtLeastOnce,
           );
