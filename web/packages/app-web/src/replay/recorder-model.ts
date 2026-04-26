@@ -30,6 +30,13 @@
  *    raw inputs in a parallel stream and recompute.
  *  - lagMs is `number | null`; null = stray (no matched chip). NaN
  *    avoided so JSON round-trips losslessly.
+ *  - `startedAt` is ISO 8601 (not Date.now ms). The byte cost is
+ *    negligible against the rest of the envelope and a stricter
+ *    parser can refuse malformed timestamps before they reach UI.
+ *  - Loop sessions are NOT recorded as replays — by contract, only
+ *    runs that count toward score-results are play. The recorder
+ *    integration layer enforces this by simply not calling `start()`
+ *    when a loop window is active. So no `loopWindow` field here.
  */
 
 import type { JudgmentKind } from '@dtxmania/dtx-core';
@@ -37,16 +44,15 @@ import type { LaneValue } from '@dtxmania/input';
 
 export const REPLAY_FORMAT_VERSION = 1;
 
-/** Where the input came from. Used by the viewer to decide whether to
- * draw a ghost hand (xr-*) or a key flash (keyboard) and by analytics
- * to slice replays by source. */
-export type HitSource =
-  | 'keyboard'
-  | 'xr-left'
-  | 'xr-right'
-  | 'midi'
-  | 'gamepad'
-  | 'auto';
+/** Where a hit came from, in the only granularity the viewer actually
+ * cares about: which (virtual) hand struck the pad, or whether the
+ * lane was auto-played.
+ *
+ * Non-XR inputs (keyboard, MIDI, gamepad) collapse to whichever side
+ * the lane's primary hand is on — visually they all render as a pad
+ * flash with no ghost hand, so finer distinctions buy nothing. The
+ * recorder integration layer applies the lane-handedness lookup. */
+export type HitSource = 'xr-left' | 'xr-right' | 'auto';
 
 export interface ChartMeta {
   /** Stable identifier of the chart this replay binds to. The viewer
@@ -60,6 +66,30 @@ export interface ChartMeta {
   /** Chart duration in ms. Pre-allocated by the viewer for scrub UI;
    * not used for correctness. */
   durationMs: number;
+}
+
+/** Per-run player configuration that affects how the chart was
+ * experienced. Without these, replaying the same chart can render or
+ * judge differently from how the original session played out.
+ *
+ * Why these and not other settings:
+ *  - `audioOffsetMs`: shifts every hit's lag systematically; a 0 ms
+ *    replay viewer would mis-show a +25 ms calibrated player's hits
+ *    as 25 ms early. Must be captured.
+ *  - `autoPlayLanes`: which lanes were on auto-fire at the moment
+ *    of capture. The hit stream still tags `source: 'auto'` per hit,
+ *    but recording the lane set up-front lets the viewer label the
+ *    replay (e.g. "demo run, all lanes auto") without having to
+ *    scan every hit.
+ *
+ * Other settings (skin, kit preset, scroll speed) are deliberately
+ * NOT captured for v1 — they affect presentation, not the simulation
+ * of what was struck and when. If a future viewer feature needs
+ * them, bump `formatVersion`. */
+export interface PlayerSettings {
+  audioOffsetMs: number;
+  /** Lanes the player had on auto-play at the start of the run. */
+  autoPlayLanes: readonly LaneValue[];
 }
 
 export interface HitEvent {
@@ -108,9 +138,12 @@ export interface FinalSnapshot {
 export interface Replay {
   formatVersion: typeof REPLAY_FORMAT_VERSION;
   meta: ChartMeta;
-  /** Wall-clock at recording start (`Date.now()`). Display only —
-   * never used for correctness. */
-  startedAt: number;
+  player: PlayerSettings;
+  /** Wall-clock at recording start, ISO 8601 with millisecond
+   * precision (e.g. `"2025-01-02T03:04:05.678Z"`). Display only —
+   * never used for correctness. ISO over epoch-ms so the file can
+   * be eyeballed in a debugger / issue attachment without converting. */
+  startedAt: string;
   hits: readonly HitEvent[];
   poses: readonly PoseSample[];
   final: FinalSnapshot;
@@ -120,7 +153,8 @@ export interface Replay {
  * In-memory recorder. One instance per recording. Lifecycle:
  *
  *   const r = new Recorder();
- *   r.start({ chartHash, title, artist, durationMs });
+ *   r.start({ chartHash, title, artist, durationMs },
+ *           { audioOffsetMs, autoPlayLanes });
  *   // ... per-hit:  r.recordHit({ songTimeMs, lane, ... })
  *   // ... per-frame: r.recordPose({ songTimeMs, head, left, right })
  *   const replay = r.finish({ finalScoreNorm, comboMax, ... });
@@ -143,7 +177,7 @@ export class Recorder {
     throw new Error('Recorder.poseCount: not implemented');
   }
 
-  start(_meta: ChartMeta): void {
+  start(_meta: ChartMeta, _player: PlayerSettings): void {
     throw new Error('Recorder.start: not implemented');
   }
 

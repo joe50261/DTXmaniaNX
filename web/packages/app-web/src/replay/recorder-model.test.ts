@@ -10,6 +10,7 @@ import {
   type ChartMeta,
   type FinalSnapshot,
   type HitEvent,
+  type PlayerSettings,
   type PoseSample,
   type Replay,
 } from './recorder-model.js';
@@ -22,6 +23,7 @@ import {
  */
 
 const FIXED_WALL_CLOCK = Date.UTC(2025, 0, 2, 3, 4, 5, 678);
+const FIXED_WALL_CLOCK_ISO = '2025-01-02T03:04:05.678Z';
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -37,6 +39,11 @@ const SAMPLE_META: ChartMeta = {
   title: 'Test Song',
   artist: 'Test Artist',
   durationMs: 180_000,
+};
+
+const SAMPLE_PLAYER: PlayerSettings = {
+  audioOffsetMs: 25,
+  autoPlayLanes: [],
 };
 
 const SAMPLE_FINAL: FinalSnapshot = {
@@ -56,7 +63,7 @@ function makeHit(overrides: Partial<HitEvent> = {}): HitEvent {
   return {
     songTimeMs: 1000,
     lane: Lane.SD,
-    source: 'keyboard',
+    source: 'xr-left',
     chipIndex: 5,
     lagMs: 12,
     judgment: Judgment.PERFECT,
@@ -84,7 +91,7 @@ describe('Recorder — lifecycle', () => {
 
   it('start() flips to recording and leaves counts at zero', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     expect(r.isRecording()).toBe(true);
     expect(r.hitCount()).toBe(0);
     expect(r.poseCount()).toBe(0);
@@ -100,7 +107,7 @@ describe('Recorder — lifecycle', () => {
 
   it('recordHit / recordPose while recording increment counts', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     r.recordHit(makeHit());
     r.recordHit(makeHit({ songTimeMs: 1500 }));
     r.recordPose(makePose());
@@ -110,7 +117,7 @@ describe('Recorder — lifecycle', () => {
 
   it('finish() returns a Replay and goes back to idle', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     r.recordHit(makeHit());
     const replay = r.finish(SAMPLE_FINAL);
     expect(replay.formatVersion).toBe(REPLAY_FORMAT_VERSION);
@@ -120,7 +127,7 @@ describe('Recorder — lifecycle', () => {
 
   it('record* after finish() is a silent no-op (does not pollute next recording)', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     r.finish(SAMPLE_FINAL);
     r.recordHit(makeHit());
     r.recordPose(makePose());
@@ -130,10 +137,10 @@ describe('Recorder — lifecycle', () => {
 
   it('start() while already recording resets buffers (idempotent reset)', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     r.recordHit(makeHit());
     r.recordPose(makePose());
-    r.start({ ...SAMPLE_META, chartHash: 'different' });
+    r.start({ ...SAMPLE_META, chartHash: 'different' }, SAMPLE_PLAYER);
     expect(r.isRecording()).toBe(true);
     expect(r.hitCount()).toBe(0);
     expect(r.poseCount()).toBe(0);
@@ -141,11 +148,11 @@ describe('Recorder — lifecycle', () => {
 
   it('two sequential recordings on the same instance do not cross-contaminate', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     r.recordHit(makeHit({ songTimeMs: 100 }));
     const first = r.finish(SAMPLE_FINAL);
 
-    r.start({ ...SAMPLE_META, chartHash: 'second' });
+    r.start({ ...SAMPLE_META, chartHash: 'second' }, SAMPLE_PLAYER);
     r.recordHit(makeHit({ songTimeMs: 200 }));
     const second = r.finish(SAMPLE_FINAL);
 
@@ -161,14 +168,14 @@ describe('Recorder — lifecycle', () => {
 describe('Recorder — Replay payload', () => {
   it('preserves meta verbatim', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     const replay = r.finish(SAMPLE_FINAL);
     expect(replay.meta).toEqual(SAMPLE_META);
   });
 
   it('preserves hits in append order', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     const a = makeHit({ songTimeMs: 100, lane: Lane.SD });
     const b = makeHit({ songTimeMs: 200, lane: Lane.HH });
     const c = makeHit({ songTimeMs: 150, lane: Lane.BD });
@@ -183,7 +190,7 @@ describe('Recorder — Replay payload', () => {
 
   it('preserves poses in append order', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     const p1 = makePose({ songTimeMs: 0 });
     const p2 = makePose({ songTimeMs: 16 });
     const p3 = makePose({ songTimeMs: 32 });
@@ -196,24 +203,38 @@ describe('Recorder — Replay payload', () => {
 
   it('embeds the FinalSnapshot exactly', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     const replay = r.finish(SAMPLE_FINAL);
     expect(replay.final).toEqual(SAMPLE_FINAL);
   });
 
-  it('startedAt is captured at start() time (not finish() time)', () => {
+  it('startedAt is captured at start() time as ISO 8601 (not finish() time)', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     // Advance the clock between start and finish — startedAt should
-    // still reflect the start moment, not finish.
+    // still reflect the start moment, not finish, and must be ISO so
+    // a strict parser can reject malformed timestamps before UI sees
+    // them.
     vi.setSystemTime(FIXED_WALL_CLOCK + 60_000);
     const replay = r.finish(SAMPLE_FINAL);
-    expect(replay.startedAt).toBe(FIXED_WALL_CLOCK);
+    expect(replay.startedAt).toBe(FIXED_WALL_CLOCK_ISO);
+    expect(replay.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  it('preserves PlayerSettings verbatim (audioOffsetMs + autoPlayLanes)', () => {
+    const r = new Recorder();
+    const player: PlayerSettings = {
+      audioOffsetMs: -12,
+      autoPlayLanes: [Lane.BD, Lane.HH],
+    };
+    r.start(SAMPLE_META, player);
+    const replay = r.finish(SAMPLE_FINAL);
+    expect(replay.player).toEqual(player);
   });
 
   it('formatVersion is REPLAY_FORMAT_VERSION', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     const replay = r.finish(SAMPLE_FINAL);
     expect(replay.formatVersion).toBe(REPLAY_FORMAT_VERSION);
   });
@@ -222,7 +243,7 @@ describe('Recorder — Replay payload', () => {
 describe('Recorder — sparse / desktop scenarios', () => {
   it('records stray hits with lagMs=null and chipIndex=-1', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     r.recordHit(
       makeHit({ chipIndex: -1, lagMs: null, judgment: Judgment.MISS })
     );
@@ -233,7 +254,7 @@ describe('Recorder — sparse / desktop scenarios', () => {
 
   it('records pose samples with all-null tracking (desktop play)', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     r.recordPose({
       songTimeMs: 100,
       head: null,
@@ -248,7 +269,7 @@ describe('Recorder — sparse / desktop scenarios', () => {
 
   it('accepts asymmetric pose tracking (head + one controller)', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     r.recordPose({
       songTimeMs: 100,
       head: { pos: [0, 1.6, 0], quat: [0, 0, 0, 1] },
@@ -265,7 +286,7 @@ describe('Recorder — sparse / desktop scenarios', () => {
 describe('serializeReplay / deserializeReplay', () => {
   function makeReplay(): Replay {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     r.recordHit(makeHit({ songTimeMs: 100 }));
     r.recordHit(
       makeHit({
@@ -342,14 +363,14 @@ describe('serializeReplay / deserializeReplay', () => {
 describe('replayMatchesChart', () => {
   it('matches when chartHash is equal', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     const replay = r.finish(SAMPLE_FINAL);
     expect(replayMatchesChart(replay, SAMPLE_META.chartHash)).toBe(true);
   });
 
   it('rejects a different chartHash', () => {
     const r = new Recorder();
-    r.start(SAMPLE_META);
+    r.start(SAMPLE_META, SAMPLE_PLAYER);
     const replay = r.finish(SAMPLE_FINAL);
     expect(replayMatchesChart(replay, 'different-hash')).toBe(false);
   });
