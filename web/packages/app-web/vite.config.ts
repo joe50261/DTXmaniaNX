@@ -28,6 +28,11 @@ const SPLASH_ALLOWLIST = [
   '6_FadeOut.jpg',
   '9_background.jpg',
 ];
+// Common assets shared across stages — currently the FIFO fade tiles.
+const COMMON_ALLOWLIST = [
+  'Tile black 64x64.png',
+  'Tile white 64x64.png',
+];
 const STAGE7_ALLOWLIST = [
   '7_background.jpg',
   '7_pads.png',
@@ -106,6 +111,11 @@ export default defineConfig({
           rename: { stripBase: true as const },
         })),
         ...SPLASH_ALLOWLIST.map((name) => ({
+          src: `${RUNTIME_GRAPHICS}/${name}`,
+          dest: 'skin',
+          rename: { stripBase: true as const },
+        })),
+        ...COMMON_ALLOWLIST.map((name) => ({
           src: `${RUNTIME_GRAPHICS}/${name}`,
           dest: 'skin',
           rename: { stripBase: true as const },
