@@ -62,6 +62,9 @@ export async function installIwerRuntime(context: BrowserContext): Promise<void>
                   quaternion: { set(x: number, y: number, z: number, w: number): unknown };
                   updateButtonValue(id: string, v: number): void;
                   setButtonValueImmediate(id: string, v: number): void;
+                  /** iwer's per-frame axis update — value lands on
+                   * `inputSource.gamepad.axes` on the next pump. */
+                  updateAxes(id: string, x: number, y: number): void;
                 }
               | undefined
             >;
@@ -111,4 +114,130 @@ export async function pulseTrigger(page: Page, hand: 'left' | 'right'): Promise<
     },
     { hand, holdMs: TRIGGER_PRESS_MS, buttonId: TRIGGER_BUTTON_ID },
   );
+}
+
+/** IWER's stick id on the Meta Quest controller config. Like
+ * `'trigger'`, this is the IWER-internal short id (see
+ * `iwer/lib/device/configs/controller/meta.js` — both x-axis and
+ * y-axis axes share `id: 'thumbstick'`). The WebXR Gamepad standard
+ * exposes the stick on `gamepad.axes[2]`/`[3]`, which is what the
+ * app reads. */
+const THUMBSTICK_ID = 'thumbstick';
+
+/** Set the named controller's thumbstick to (x, y). x ∈ [-1, 1]
+ * left↔right, y ∈ [-1, 1] up↔down (DTXmania convention: +y = focus
+ * down, -y = focus up; matches Quest's stock orientation). The
+ * value lands on `inputSource.gamepad.axes` on the next iwer pump,
+ * which the app's tick reads via `axes[2]/[3]`. Schmitt-trigger
+ * latching in `song-select-input.ts:stepStickAxis` means a single
+ * call fires AT MOST one `moveFocus`/`cycleDifficulty` event per
+ * direction — to fire again, release first via `releaseStick`. */
+export async function setStickAxes(
+  page: Page,
+  hand: 'left' | 'right',
+  x: number,
+  y: number,
+): Promise<void> {
+  await page.evaluate(
+    ({ hand: h, x: xv, y: yv, id }) => {
+      const device = (
+        window as unknown as {
+          __iwerDevice?: {
+            controllers: Record<
+              'left' | 'right',
+              { updateAxes(id: string, x: number, y: number): void } | undefined
+            >;
+          };
+        }
+      ).__iwerDevice;
+      const c = device?.controllers[h];
+      if (!c) throw new Error(`setStickAxes: no ${h} controller`);
+      c.updateAxes(id, xv, yv);
+    },
+    { hand, x, y, id: THUMBSTICK_ID },
+  );
+}
+
+/** Convenience: zero the stick so the next push fires a fresh edge.
+ * Equivalent to `setStickAxes(page, hand, 0, 0)`. */
+export async function releaseStick(page: Page, hand: 'left' | 'right'): Promise<void> {
+  await setStickAxes(page, hand, 0, 0);
+}
+
+/** Set the named controller's pose directly. Useful for laser-aim
+ * specs that need the ray to start from a known origin pointing at
+ * a known panel coordinate. The default IWER Quest 3 pose puts the
+ * controllers near the player's chest aiming forward; for tests
+ * that need to hit a specific panel, call this with the desired
+ * `(x, y, z)` (world metres) and orientation quaternion. */
+export async function setControllerPose(
+  page: Page,
+  hand: 'left' | 'right',
+  pos: { x: number; y: number; z: number },
+  quat: { x: number; y: number; z: number; w: number },
+): Promise<void> {
+  await page.evaluate(
+    ({ hand: h, pos: p, quat: q }) => {
+      const device = (
+        window as unknown as {
+          __iwerDevice?: {
+            controllers: Record<
+              'left' | 'right',
+              | {
+                  position: { set(x: number, y: number, z: number): unknown };
+                  quaternion: { set(x: number, y: number, z: number, w: number): unknown };
+                }
+              | undefined
+            >;
+          };
+        }
+      ).__iwerDevice;
+      const c = device?.controllers[h];
+      if (!c) throw new Error(`setControllerPose: no ${h} controller`);
+      c.position.set(p.x, p.y, p.z);
+      c.quaternion.set(q.x, q.y, q.z, q.w);
+    },
+    { hand, pos, quat },
+  );
+}
+
+/** Identity quaternion — controller pointing along its local -Z
+ * axis, i.e. straight forward in world space if the controller
+ * sits at the origin. Convenient default for laser specs. */
+export const QUAT_IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
+
+/** Geometry of a flat panel mesh facing +Z (the layout used by
+ * song-select and vr-config). Pixels are panel-local with origin at
+ * top-left; world is metres with origin at panel CENTRE. The
+ * conversion mirrors the panel's tick code:
+ *   px = uv.x * pixelW
+ *   py = (1 - uv.y) * pixelH
+ * so a pixel near (0,0) sits near (worldPos.x - worldW/2,
+ * worldPos.y + worldH/2) and a pixel near (pixelW, pixelH) sits at
+ * (worldPos.x + worldW/2, worldPos.y - worldH/2). */
+export interface PanelGeometry {
+  worldPos: { x: number; y: number; z: number };
+  worldW: number;
+  worldH: number;
+  pixelW: number;
+  pixelH: number;
+}
+
+/** Convert a panel-pixel point to a world-space coordinate. The
+ * z-coordinate is the panel face (mesh sits flush against this z).
+ * Use the result with `setControllerPose(... QUAT_IDENTITY ...)` and
+ * an origin offset of +0.5 m on z to fire a forward-pointing ray
+ * that strikes the requested pixel. */
+export function panelPixelToWorld(
+  panel: PanelGeometry,
+  px: number,
+  py: number,
+): { x: number; y: number; z: number } {
+  const ux = px / panel.pixelW;
+  const uy = 1 - py / panel.pixelH;
+  return {
+    x: panel.worldPos.x + (ux - 0.5) * panel.worldW,
+    y: panel.worldPos.y + (uy - 0.5) * panel.worldH,
+    z: panel.worldPos.z,
+  };
 }

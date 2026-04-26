@@ -845,9 +845,54 @@ async function startChart(chart: ChartEntry): Promise<void> {
 async function playDemo(): Promise<void> {
   const res = await fetch(`${import.meta.env.BASE_URL}demo.dtx`);
   if (!res.ok) throw new Error(`failed to load demo.dtx: ${res.status}`);
-  // Demo ships without accompanying WAVs or a scanner chart — skip
-  // records entirely for the bundled chart.
-  await launchGame(await res.text());
+  const demoText = await res.text();
+
+  // Install a synthetic single-entry library so the demo-launch and
+  // demo-exit flows travel the same `library`-aware code path the
+  // real picker uses. Historically this routine called
+  // `launchGame(text)` directly with no library, which made
+  // `library === null` and silently no-op'd `showSongSelectForActive`
+  // (the onRestart target) — Esc then left the player on an empty
+  // overlay with the status text "Pick another chart…" and no
+  // navigable list. Routing through the library mechanism closes
+  // that loop and lets the demo be replayed without re-clicking
+  // start-demo, including re-pick on the in-VR panel.
+  const demoChartPath = 'demo.dtx';
+  const backend: FileSystemBackend = {
+    listDir: async () => [],
+    // Demo ships without WAVs; SampleBank logs a warn and falls back
+    // to synth voices for any missing sample id.
+    readFile: async () => new ArrayBuffer(0),
+    readText: async (path) => {
+      if (path === demoChartPath) return demoText;
+      throw new Error(`demo backend: unknown path ${path}`);
+    },
+    exists: async (path) => path === demoChartPath,
+  };
+  const demoChart: ChartEntry = {
+    slot: 1,
+    label: 'DEMO',
+    chartPath: demoChartPath,
+  };
+  const demoEntry: SongEntry = {
+    title: 'Bundled demo',
+    folderPath: '',
+    fromSetDef: false,
+    charts: [demoChart],
+  };
+  const demoRoot: BoxNode = {
+    type: 'box',
+    name: 'demo-root',
+    path: '',
+    parent: null,
+    children: [],
+  };
+  demoRoot.children.push({ type: 'song', entry: demoEntry, parent: demoRoot });
+  library = { backend, root: demoRoot, songs: flattenSongs(demoRoot) };
+  songSelect?.setRoot(demoRoot);
+  refreshXrButton();
+
+  await launchGame(demoText, { backend, folder: '' }, demoChart);
 }
 
 async function launchGame(

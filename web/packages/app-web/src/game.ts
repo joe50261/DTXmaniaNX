@@ -304,6 +304,32 @@ export class Game {
     return this.songSelect.isShown;
   }
 
+  /** Currently-focused row title on the song-select panel, or `null`
+   * when the panel has no entries. Used by e2e stick-navigation
+   * specs to assert focus moved across XR frames without re-
+   * implementing the wheel-row title format. */
+  get songSelectFocusedTitle(): string | null {
+    return this.songSelect.getFocusedRowTitle();
+  }
+
+  /** True while the in-VR Settings panel is shown. Surfaced for the
+   * laser-aim e2e spec that fires the trigger pointing at the
+   * song-select Settings button and asserts the panel actually
+   * opened — closing the loop on the real-raycast → button-rect
+   * pipeline that unit tests can only partially cover. */
+  get vrConfigShown(): boolean {
+    return this.vrConfig.isShown;
+  }
+
+  /** Snapshot of the current VR config panel button rects, in panel
+   * pixel coordinates. Length varies with which sections `paint()`
+   * rendered this frame. Used by laser-aim specs to compute the
+   * world position of a target button (e.g. Sit) without hardcoding
+   * a layout that drifts. */
+  get vrConfigHits(): ReadonlyArray<{ x: number; y: number; w: number; h: number }> {
+    return this.vrConfig.__testHits();
+  }
+
   /** True if loadAndStart has been called at least once. */
   get hasChart(): boolean {
     return this.song !== null;
