@@ -946,6 +946,16 @@ export class Game {
       this.playChipSample(p, songTime, 1);
       this.lastPadHitMs.set(ev.lane, performance.now());
       this.hitFlashes.push({ lane: ev.lane, spawnedMs: songTime });
+      // Auto-fired chip — surface to capture so replays of autoplay-on
+      // runs cover these chips. `judgment: PERFECT` is a placeholder; the
+      // viewer's score path branches on `source === 'auto'` and routes
+      // through `tracker.recordAuto()` rather than counting a PERFECT.
+      this.onHitProcessed?.({
+        lane: ev.lane,
+        songTimeMs: songTime,
+        hand: undefined,
+        matched: { idx: ev.idx, deltaMs: 0, judgment: Judgment.PERFECT },
+      });
     }
   }
 

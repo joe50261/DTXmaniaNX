@@ -73,6 +73,13 @@ export interface InterpolatedPose {
  *  (`chipIndex === -1`) are excluded — they don't go through the tracker
  *  in live play either.
  *
+ *  Auto-fired chips (`source === 'auto'` with judgment !== MISS) go
+ *  through `tracker.recordAuto()` so they're subtracted from the
+ *  denominator, mirroring `Game.autoFireLanes`. Auto-detected misses
+ *  (source === 'auto' AND judgment === MISS, emitted by tick's
+ *  miss-detection loop) still go through `record(MISS)` — they ARE
+ *  real misses for scoring, just not human-input misses.
+ *
  *  `totalNotes` is the chart's playable-chip count; the caller knows the
  *  chart, this module doesn't. */
 export function replayScoreSnapshotAt(
@@ -84,7 +91,11 @@ export function replayScoreSnapshotAt(
   for (const h of replay.hits) {
     if (h.chipIndex === -1) continue;
     if (h.songTimeMs > cutoffSongTimeMs) continue;
-    tracker.record(h.judgment);
+    if (h.source === 'auto' && h.judgment !== 'MISS') {
+      tracker.recordAuto();
+    } else {
+      tracker.record(h.judgment);
+    }
   }
   return tracker.snapshot();
 }

@@ -144,6 +144,38 @@ describe('replayScoreSnapshotAt', () => {
     expect(snap.counts.MISS).toBe(0);
     expect(snap.combo).toBe(1);
   });
+
+  it('source=auto matched hits (autofire) recordAuto, not record', () => {
+    // Auto-fired chip: source='auto', judgment=PERFECT placeholder.
+    // Must increment autoCount + be excluded from scoring denominator —
+    // a regular tracker.record(PERFECT) here would inflate the score
+    // and double-count the chip in the rank rate.
+    const replay = makeReplay([
+      hit({ songTimeMs: 100, source: 'auto', judgment: Judgment.PERFECT, chipIndex: 0 }),
+      hit({ songTimeMs: 200, source: 'xr-right', judgment: Judgment.PERFECT, chipIndex: 1 }),
+    ]);
+    const snap = replayScoreSnapshotAt(replay, 1000, 2);
+    expect(snap.autoCount).toBe(1);
+    expect(snap.counts.PERFECT).toBe(1);
+    // Effective denominator = 2 - 1 (autoCount) = 1. One PERFECT → score = 1.0 * 1_000_000.
+    expect(snap.score).toBe(1_000_000);
+  });
+
+  it('source=auto with judgment=MISS (auto-detected miss) records as MISS, not auto', () => {
+    // tick miss-detection emits source='auto' too, but with judgment=MISS.
+    // It should NOT recordAuto (which excludes from totals); it must
+    // count as a real MISS so combo breaks and score reflects the lapse.
+    const replay = makeReplay([
+      hit({ songTimeMs: 100, source: 'xr-right', judgment: Judgment.PERFECT }),
+      hit({ songTimeMs: 200, source: 'auto', judgment: Judgment.MISS, chipIndex: 1, lagMs: null }),
+      hit({ songTimeMs: 300, source: 'xr-right', judgment: Judgment.PERFECT }),
+    ]);
+    const snap = replayScoreSnapshotAt(replay, 1000, 3);
+    expect(snap.autoCount).toBe(0);
+    expect(snap.counts.MISS).toBe(1);
+    expect(snap.maxCombo).toBe(1);
+    expect(snap.combo).toBe(1);
+  });
 });
 
 describe('replayActiveHitFlashes', () => {
