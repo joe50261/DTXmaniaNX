@@ -43,6 +43,15 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install NDK + CMake
+        # AGP 8.x does not auto-install the NDK; without these the
+        # `externalNativeBuild { cmake { ... } }` block fails with
+        # "NDK not configured" before assembleDebug even starts.
+        # Pin a recent stable NDK; CMake 3.22.1 matches the version
+        # declared in app/build.gradle.kts.
+        run: |
+          sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1"
+
       - name: Unit tests
         run: gradle :app:testDebugUnitTest --no-daemon
 

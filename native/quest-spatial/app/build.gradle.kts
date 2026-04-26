@@ -6,6 +6,9 @@ plugins {
 android {
     namespace = "com.dtxmania.quest"
     compileSdk = libs.versions.compileSdk.get().toInt()
+    // Match the NDK version installed by .github/workflows/android.yml.
+    // Bumping this requires a matching bump in CI.
+    ndkVersion = "26.1.10909125"
 
     defaultConfig {
         applicationId = "com.dtxmania.quest"
@@ -16,6 +19,23 @@ android {
 
         ndk {
             abiFilters += listOf("arm64-v8a")
+        }
+
+        externalNativeBuild {
+            cmake {
+                // -Werror intentionally NOT set: NDK headers occasionally
+                // emit warnings (deprecation, unused-parameter on
+                // AAudio_convertResultToText shims) that would fail a
+                // CI build for reasons orthogonal to our own code.
+                cppFlags += listOf("-std=c++17", "-Wall", "-Wextra")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
         }
     }
 
