@@ -14,6 +14,9 @@ on:
 
 permissions:
   contents: read
+  # Needed by the "Post failure log as PR comment" step so CI can post
+  # the gradle stack trace back to the PR after a failed assembleDebug.
+  pull-requests: write
 
 jobs:
   build:
@@ -92,6 +95,41 @@ jobs:
             native/quest-spatial/assemble-debug.log
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Post failure log as PR comment
+        # The GitHub Actions log body itself requires auth to render,
+        # so WebFetch (anonymous) can't see compile errors. PR comments
+        # are publicly readable via the API. Posting a tail-200 of the
+        # failing gradle log here means a CI consumer can pull it via
+        # `pull_request_read get_comments` without log download access.
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -e
+          LOG=""
+          if [ -s unit-tests.log ]; then
+            LOG="unit-tests.log"
+            HDR=":app:testDebugUnitTest"
+          elif [ -s assemble-debug.log ]; then
+            LOG="assemble-debug.log"
+            HDR=":app:assembleDebug"
+          else
+            echo "No gradle log produced — failure was earlier in the workflow."
+            exit 0
+          fi
+          {
+            echo "### CI failure: \`$HDR\` (run ${{ github.run_id }}, sha ${GITHUB_SHA:0:7})"
+            echo
+            echo '<details><summary>Last 200 lines of '"$LOG"'</summary>'
+            echo
+            echo '```'
+            tail -200 "$LOG"
+            echo '```'
+            echo '</details>'
+          } > comment.md
+          gh pr comment "$PR_NUMBER" --body-file comment.md
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
