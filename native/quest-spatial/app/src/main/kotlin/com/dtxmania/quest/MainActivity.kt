@@ -1,24 +1,35 @@
 package com.dtxmania.quest
 
-import android.os.Bundle
-import androidx.activity.ComponentActivity
 import com.dtxmania.quest.app.Stage
+import com.meta.spatial.core.SpatialFeature
+import com.meta.spatial.toolkit.AppSystemActivity
+import com.meta.spatial.vr.VRFeature
 
 /**
- * Phase 0/2 stub. Currently extends [ComponentActivity] (rather than the
- * Spatial SDK's `AppSystemActivity`) so we can register
- * `ActivityResultContracts.OpenDocumentTree` for the Phase 2 SAF picker
- * without first wiring the real SDK base class. Once the Spatial SDK
- * coordinates are pinned, swap the base class to the SDK's
- * `AppSystemActivity` (which itself extends ComponentActivity, so the
- * SAF launcher continues to work).
+ * App entry point. Extends the Spatial SDK's [AppSystemActivity], which
+ * itself extends `androidx.activity.ComponentActivity` (so the
+ * Phase 2 SAF launcher in [com.dtxmania.quest.io.SafBrowser]
+ * `registerForActivityResult` continues to work once we wire it in).
+ *
+ * Lifecycle ordering, per the Spatial SDK contract:
+ *   1. [registerFeatures] is called before scene init; we plug VRFeature.
+ *   2. `onCreate` runs after super, so any Activity-Result-API
+ *      registration must happen there if we add it.
+ *   3. [onSceneReady] fires once the OpenXR session + scene graph are
+ *      live; that's where [Stage.bootstrap] does its scene setup.
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : AppSystemActivity() {
 
     private lateinit var stage: Stage
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        stage = Stage().also { it.bootstrap() }
+    override fun registerFeatures(): List<SpatialFeature> = listOf(
+        VRFeature(this),
+        // Phase 5+ will add ComposeFeature() once we render UI panels;
+        // Phase 7 will add ISDK / castinputforward for controllers.
+    )
+
+    override fun onSceneReady() {
+        super.onSceneReady()
+        stage = Stage(this).also { it.bootstrap() }
     }
 }

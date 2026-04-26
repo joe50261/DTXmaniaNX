@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Permissions matching the Meta Spatial SDK 0.12 starter sample.
+         INTERNET is required by NetworkedAssetLoader (used by the SDK
+         even when we don't fetch assets ourselves). MODIFY_AUDIO_SETTINGS
+         is needed by AAudio low-latency mode on some Quest builds. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
     <!-- Quest 3 hardware requirements -->
     <uses-feature
         android:name="android.hardware.vr.headtracking"
@@ -34,7 +41,7 @@
 
         <activity
             android:name=".MainActivity"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|uiMode|navigation|screenLayout|density"
+            android:configChanges="screenSize|screenLayout|orientation|keyboardHidden|keyboard|navigation|uiMode"
             android:exported="true"
             android:launchMode="singleTask"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">

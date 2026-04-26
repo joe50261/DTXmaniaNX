@@ -78,9 +78,17 @@ dependencies {
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.activity)
 
-    // Meta Spatial SDK is intentionally NOT yet wired in — coords and
-    // Maven repo need verification against the official sample project
-    // first. See gradle/libs.versions.toml for context.
+    // Meta Spatial SDK (verified against
+    // meta-quest/Meta-Spatial-SDK-Samples StarterSample at 0.12.0).
+    // Minimum module set for Phase 4 (passthrough scene + lighting).
+    // The com.meta.spatial.plugin Gradle plugin is intentionally NOT
+    // applied — its only job is wiring Meta Spatial Editor scene
+    // exports + hot reload, neither of which we use yet. If we later
+    // adopt .metaspatial scenes, add `alias(libs.plugins.meta.spatial.plugin)`
+    // and a corresponding `spatial { ... }` block here.
+    implementation(libs.meta.spatial.sdk)
+    implementation(libs.meta.spatial.sdk.vr)
+    implementation(libs.meta.spatial.sdk.toolkit)
 
     // JUnit 5 (Jupiter) drives the platform; junit-vintage-engine lets
     // the same `gradlew testDebugUnitTest` run also pick up the JUnit-4
