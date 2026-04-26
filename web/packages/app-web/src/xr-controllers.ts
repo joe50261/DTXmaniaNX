@@ -9,6 +9,16 @@ import {
   type PadSpec,
 } from './kit-preset.js';
 import { detectPadHit } from './hit-detect.js';
+import type { Pose } from './replay/recorder-model.js';
+
+/** Snapshot of the headset + controller poses at the moment getPoses()
+ * is called. Each side is `null` when the pose isn't available — see
+ * `XrControllers.getPoses` for the precise nullability rules. */
+export interface XrPoseSnapshot {
+  head: Pose | null;
+  left: Pose | null;
+  right: Pose | null;
+}
 
 /**
  * VR virtual drum kit.
@@ -338,6 +348,50 @@ export class XrControllers {
     return group;
   }
 
+  /**
+   * Read-only snapshot of headset + controller world poses for the
+   * replay subsystem (Recorder during capture, ReplayViewer during
+   * playback). Pure side-effect-free getter, safe to call every frame.
+   *
+   * Nullability rules:
+   *  - `left` / `right`: null when no grips have been added to the
+   *    scene yet (`addedToScene` empty — i.e. before `start()` or
+   *    after `stop()`). When grips ARE in the scene we read pose
+   *    straight off the grip Object3D regardless of whether the
+   *    runtime has actually populated it; cleanly detecting an
+   *    "untracked but added" grip would duplicate the pose-validity
+   *    heuristic in `captureSamples` and isn't worth the complexity
+   *    for the replay use case (a few frames of identity-pose at
+   *    session start is acceptable).
+   *  - `head`: null when there is no active XR session. We gate on
+   *    `webgl.xr.isPresenting` (Three.js 0.160 exposes this on
+   *    WebXRManager) so a desktop-mode caller doesn't get a stale
+   *    last-XR-frame camera pose. Documented choice: lean toward
+   *    "return null when there's no active XR session", as the spec
+   *    suggests.
+   *
+   * Allocations: one `XrPoseSnapshot` per call plus one `Pose` per
+   * non-null side. `position.toArray()` / `quaternion.toArray()`
+   * each allocate one small array — fine at frame cadence.
+   */
+  getPoses(): XrPoseSnapshot {
+    let left: Pose | null = null;
+    let right: Pose | null = null;
+    if (this.addedToScene.length > 0) {
+      left = readPose(this.webgl.xr.getControllerGrip(0));
+      right = readPose(this.webgl.xr.getControllerGrip(1));
+    }
+
+    let head: Pose | null = null;
+    const xr = this.webgl.xr as THREE.WebXRManager & { isPresenting?: boolean };
+    if (xr.isPresenting) {
+      const cam = xr.getCamera();
+      if (cam) head = readPose(cam);
+    }
+
+    return { head, left, right };
+  }
+
   tick(): void {
     this.animatePadBounce();
     if (!this.listener) return;
@@ -522,6 +576,15 @@ export class XrControllers {
     // XR session is active, so there's no stale-dispatch risk. Clearing
     // it here would break re-enter-VR — start() doesn't re-subscribe.
   }
+}
+
+/** Read world-space position + quaternion off a Three.js Object3D into
+ * the replay-model `Pose` shape. Allocates only the two small fixed-
+ * length arrays returned by `toArray()`; safe at frame cadence. */
+function readPose(obj: THREE.Object3D): Pose {
+  const p = obj.position.toArray() as [number, number, number];
+  const q = obj.quaternion.toArray() as [number, number, number, number];
+  return { pos: p, quat: q };
 }
 
 function laneLabel(lane: LaneValue): string {
