@@ -18,7 +18,7 @@ import org.robolectric.annotation.Config
  * in `app/build.gradle.kts`.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
+@Config(sdk = [34])
 class RootUriPersistenceTest {
 
     private lateinit var context: Context

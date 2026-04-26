@@ -33,7 +33,7 @@ import org.robolectric.annotation.Config
  * `dtxcore/`'s tests Robolectric-free.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
+@Config(sdk = [34])
 class ScanCacheJsonTest {
 
     @Test
