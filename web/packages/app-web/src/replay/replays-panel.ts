@@ -34,6 +34,7 @@ import {
   type ListState,
   type SortKey,
 } from './replays-list-model.js';
+import type { RenderProgress } from './render.js';
 
 const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
   { key: 'startedAt-desc', label: 'Newest first' },
@@ -52,6 +53,12 @@ export class ReplaysPanel {
   private readonly backdrop: HTMLDivElement;
   private readonly listEl: HTMLDivElement;
   private readonly sortSel: HTMLSelectElement;
+  private readonly toolbar: HTMLDivElement;
+  private readonly renderEl: HTMLDivElement;
+  private readonly renderTitleEl: HTMLDivElement;
+  private readonly renderBarEl: HTMLProgressElement;
+  private readonly renderStatusEl: HTMLDivElement;
+  private readonly renderLogEl: HTMLDivElement;
   private state: ListState = initialState();
   private readonly deps: ReplaysPanelDeps;
 
@@ -90,13 +97,13 @@ export class ReplaysPanel {
     modal.appendChild(header);
 
     // Toolbar: sort selector. Future: filter by chart, search.
-    const toolbar = document.createElement('div');
-    toolbar.className = 'replays-toolbar';
+    this.toolbar = document.createElement('div');
+    this.toolbar.className = 'replays-toolbar';
     const sortLabel = document.createElement('span');
     sortLabel.textContent = 'Sort:';
     sortLabel.style.fontSize = '12px';
     sortLabel.style.color = '#94a3b8';
-    toolbar.appendChild(sortLabel);
+    this.toolbar.appendChild(sortLabel);
     this.sortSel = document.createElement('select');
     for (const opt of SORT_OPTIONS) {
       const optEl = document.createElement('option');
@@ -108,12 +115,43 @@ export class ReplaysPanel {
       this.state = setSortKey(this.state, this.sortSel.value as SortKey);
       this.repaint();
     });
-    toolbar.appendChild(this.sortSel);
-    modal.appendChild(toolbar);
+    this.toolbar.appendChild(this.sortSel);
+    modal.appendChild(this.toolbar);
 
     this.listEl = document.createElement('div');
     this.listEl.className = 'replays-list';
     modal.appendChild(this.listEl);
+
+    // Render-progress overlay — hidden when idle, shown during a
+    // render so the user has visible feedback (a 3-minute song
+    // rendering with the page idle is otherwise indistinguishable
+    // from a hang). Replaces the list area in-place so the modal
+    // height stays stable.
+    this.renderEl = document.createElement('div');
+    this.renderEl.className = 'replays-render';
+    this.renderTitleEl = document.createElement('div');
+    this.renderTitleEl.className = 'replays-render-title';
+    this.renderBarEl = document.createElement('progress');
+    this.renderBarEl.className = 'replays-render-bar';
+    this.renderBarEl.max = 1;
+    this.renderBarEl.value = 0;
+    this.renderStatusEl = document.createElement('div');
+    this.renderStatusEl.className = 'replays-render-status';
+    this.renderLogEl = document.createElement('div');
+    this.renderLogEl.className = 'replays-render-log';
+    const renderFooter = document.createElement('div');
+    renderFooter.className = 'config-footer';
+    const renderClose = document.createElement('button');
+    renderClose.type = 'button';
+    renderClose.textContent = 'Back to replays';
+    renderClose.addEventListener('click', () => this.hideRender());
+    renderFooter.appendChild(renderClose);
+    this.renderEl.appendChild(this.renderTitleEl);
+    this.renderEl.appendChild(this.renderBarEl);
+    this.renderEl.appendChild(this.renderStatusEl);
+    this.renderEl.appendChild(this.renderLogEl);
+    this.renderEl.appendChild(renderFooter);
+    modal.appendChild(this.renderEl);
 
     document.body.appendChild(this.backdrop);
   }
@@ -127,6 +165,9 @@ export class ReplaysPanel {
 
   close(): void {
     this.backdrop.style.display = 'none';
+    // Reset render mode so the next open() starts fresh on the list
+    // rather than showing a stale render log.
+    this.hideRender();
   }
 
   private async refresh(): Promise<void> {
@@ -156,6 +197,73 @@ export class ReplaysPanel {
     for (const row of rows) {
       this.listEl.appendChild(this.buildRow(row, row.id === selectedId));
     }
+  }
+
+  /** Switch the modal into "rendering" mode: hide the list + sort
+   * toolbar, surface the progress bar / status / log. Title is the
+   * row being rendered so the user can confirm at a glance. */
+  showRender(rowTitle: string): void {
+    this.renderTitleEl.textContent = `Rendering: ${rowTitle}`;
+    this.renderBarEl.removeAttribute('value');
+    this.renderBarEl.max = 1;
+    this.renderStatusEl.textContent = 'Starting…';
+    this.renderLogEl.textContent = '';
+    this.toolbar.style.display = 'none';
+    this.listEl.style.display = 'none';
+    this.renderEl.classList.add('active');
+    // Auto-open if the user closed the panel between click and the
+    // first progress emit — they shouldn't lose the feedback.
+    this.backdrop.style.display = 'flex';
+  }
+
+  /** Update the progress bar + status line. `null` resets to
+   * indeterminate (used during the finalize phase where there's no
+   * meaningful percentage). */
+  updateRenderProgress(p: RenderProgress): void {
+    if (p.phase === 'preload') {
+      if (p.total === 0) {
+        this.renderBarEl.removeAttribute('value');
+        this.renderStatusEl.textContent = 'Preloading samples…';
+      } else {
+        this.renderBarEl.max = p.total;
+        this.renderBarEl.value = p.current;
+        this.renderStatusEl.textContent = `Preloading samples — ${p.current}/${p.total}`;
+      }
+    } else if (p.phase === 'recording') {
+      this.renderBarEl.max = Math.max(1, p.total);
+      this.renderBarEl.value = Math.min(p.current, p.total);
+      const cur = formatDuration(p.current);
+      const tot = formatDuration(p.total);
+      const pct = p.total > 0 ? Math.floor((p.current / p.total) * 100) : 0;
+      this.renderStatusEl.textContent = `Recording — ${cur} / ${tot} (${pct}%)`;
+    } else if (p.phase === 'finalize') {
+      this.renderBarEl.removeAttribute('value');
+      this.renderStatusEl.textContent = 'Finalising video…';
+    }
+  }
+
+  appendRenderLog(line: string): void {
+    const stamp = new Date().toLocaleTimeString();
+    const wasAtBottom =
+      this.renderLogEl.scrollTop + this.renderLogEl.clientHeight >=
+      this.renderLogEl.scrollHeight - 4;
+    this.renderLogEl.textContent =
+      (this.renderLogEl.textContent ?? '') + `[${stamp}] ${line}\n`;
+    if (wasAtBottom) {
+      this.renderLogEl.scrollTop = this.renderLogEl.scrollHeight;
+    }
+  }
+
+  /** Tear down render mode and re-paint the list. Called whether the
+   * render succeeded, failed, or was cancelled — caller decides. */
+  hideRender(): void {
+    this.renderEl.classList.remove('active');
+    this.toolbar.style.display = '';
+    this.listEl.style.display = '';
+    // Refresh in case the user just rendered a replay and we want
+    // the list to reflect any incidental changes (no-op on success
+    // path; cheap).
+    void this.refresh();
   }
 
   private buildRow(s: ReplaySummary, isSelected: boolean): HTMLDivElement {

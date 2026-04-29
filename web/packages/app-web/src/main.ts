@@ -469,10 +469,9 @@ const configPanel = new ConfigPanel({
 configBtn.addEventListener('click', () => configPanel.open());
 
 // Replays browser — desktop-only entry. The Render button drives the
-// real-time MediaRecorder pipeline in `replay/render.ts`; failures
-// surface as a status banner since the panel itself doesn't have a
-// progress UI yet (deferred — render takes ~the song's length, so the
-// user sees the page idle for a few minutes).
+// real-time MediaRecorder pipeline in `replay/render.ts`; the panel
+// surfaces phase-aware progress + a log scrollback so a 3-minute
+// silent render doesn't look like a hang.
 const replaysPanel = new ReplaysPanel({
   onRender: (id) => {
     run(async () => {
@@ -495,20 +494,30 @@ const replaysPanel = new ReplaysPanel({
         console.warn('[render] readText failed', e);
         return;
       }
-      setStatus('Rendering replay… this takes about as long as the song.');
+      const rowTitle = replay.meta.title ?? replay.meta.chartPath;
+      replaysPanel.showRender(rowTitle);
+      replaysPanel.appendRenderLog(`Source: ${replay.meta.chartPath}`);
+      setStatus('Rendering replay… see the panel for progress.');
       try {
         const skin = await skinPromise.catch(() => undefined);
         const result = await renderReplayToBlob(replay, chartText, {
           fs: { backend: library.backend, folder: dirname(replay.meta.chartPath) },
           ...(skin ? { skin } : {}),
+          onProgress: (p) => replaysPanel.updateRenderProgress(p),
+          onLog: (line) => replaysPanel.appendRenderLog(line),
         });
         triggerDownload(result.blob, suggestFilename(replay, result.ext));
+        replaysPanel.appendRenderLog('Download triggered.');
         setStatus(`Render done — saved as ${result.ext.toUpperCase()}.`);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        replaysPanel.appendRenderLog(`ERROR: ${msg}`);
         setStatus(`Render failed: ${msg}`);
         console.warn('[render] renderReplayToBlob failed', e);
       }
+      // Render overlay stays visible after completion (success or
+      // failure) so the user can read the final log line + size.
+      // They dismiss via "Back to replays" or the modal ✕.
     });
   },
 });

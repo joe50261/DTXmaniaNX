@@ -70,13 +70,28 @@ export interface RenderFs {
   folder: string;
 }
 
+export type RenderPhase = 'preload' | 'recording' | 'finalize';
+
+export interface RenderProgress {
+  phase: RenderPhase;
+  /** preload → samples loaded so far; recording → current songTimeMs;
+   * finalize → ignored (set to 0). */
+  current: number;
+  /** preload → total samples; recording → durationMs; finalize → 0. */
+  total: number;
+}
+
 export interface RenderOpts {
   fs: RenderFs;
   /** Preloaded skin textures from the live game's `loadSkin`. Optional
    * — render works without them, just less pretty. */
   skin?: SkinTextures;
-  /** Fed each tick so the caller can paint a progress bar. */
-  onProgress?: (songTimeMs: number, durationMs: number) => void;
+  /** Granular phase + numeric progress. Throttled to ~4 Hz during
+   * the recording phase so the host's repaint stays cheap. */
+  onProgress?: (p: RenderProgress) => void;
+  /** Free-form one-liner per milestone — phase change, sample loaded,
+   * blob size, etc. Host wires into a UI log stream. */
+  onLog?: (line: string) => void;
 }
 
 export interface RenderResult {
@@ -131,7 +146,13 @@ export async function renderReplayToBlob(
   try {
     // 4. Preload samples. Mirrors Game.preloadSamples; would extract
     //    if a third consumer needed it.
-    const sampleByWavId = await preloadSamples(song, engine, opts.fs);
+    opts.onLog?.('Loading samples…');
+    const sampleByWavId = await preloadSamples(song, engine, opts.fs, {
+      onProgress: (loaded, total) => {
+        opts.onProgress?.({ phase: 'preload', current: loaded, total });
+      },
+    });
+    opts.onLog?.(`Loaded ${sampleByWavId.size} samples.`);
 
     // 5. Audio routing for capture. Tap both gain nodes; ctx.destination
     //    keeps speakers live so the user can monitor.
@@ -164,6 +185,7 @@ export async function renderReplayToBlob(
 
     // 8. Start the song clock + recorder + animation loop. From here
     //    the browser drives time; we just paint each frame.
+    opts.onLog?.(`Recording (${codec.ext.toUpperCase()})…`);
     recorder.start(/* timeslice — let the browser pick */);
     engine.startSongClock(0);
 
@@ -174,6 +196,10 @@ export async function renderReplayToBlob(
     // through the loop so the snapshot we paint matches the cutoff.
     let nextHitIdx = 0;
     const lastPadHitMs = new Map<LaneValue, number>();
+    // Throttle the per-tick progress emit — animation loop runs at
+    // ~60 Hz and the host doesn't need that much UI repaint.
+    let lastProgressEmitMs = 0;
+    const PROGRESS_EMIT_INTERVAL_MS = 250;
 
     renderer.onFrame(() => {
       const songTime = engine.songTimeMs();
@@ -232,7 +258,15 @@ export async function renderReplayToBlob(
         toast: null,
       };
       renderer.render(state);
-      opts.onProgress?.(songTime, song.durationMs);
+      const now = performance.now();
+      if (now - lastProgressEmitMs >= PROGRESS_EMIT_INTERVAL_MS) {
+        lastProgressEmitMs = now;
+        opts.onProgress?.({
+          phase: 'recording',
+          current: Math.max(0, songTime),
+          total: song.durationMs,
+        });
+      }
     });
 
     // 9. Wait for the song + tail to elapse, then stop. Polling beats
@@ -240,11 +274,16 @@ export async function renderReplayToBlob(
     //    schedules to wall time; if the user's machine throttles, the
     //    poll naturally waits.
     await waitForSongTime(engine, song.durationMs + RENDER_TAIL_MS);
+    opts.onLog?.('Finalizing video…');
+    opts.onProgress?.({ phase: 'finalize', current: 0, total: 0 });
     recorder.stop();
     await stopped;
 
+    const blob = new Blob(chunks, { type: codec.mime });
+    const mb = (blob.size / 1024 / 1024).toFixed(1);
+    opts.onLog?.(`Done — ${mb} MB ${codec.ext.toUpperCase()}.`);
     return {
-      blob: new Blob(chunks, { type: codec.mime }),
+      blob,
       ext: codec.ext,
       mime: codec.mime,
     };
@@ -265,6 +304,7 @@ async function preloadSamples(
   song: Song,
   engine: AudioEngine,
   fs: RenderFs,
+  hooks: { onProgress?: (loaded: number, total: number) => void } = {},
 ): Promise<Map<number, AudioBuffer>> {
   const ids = new Set<number>();
   for (const chip of song.chips) {
@@ -273,22 +313,32 @@ async function preloadSamples(
       ids.add(chip.wavId);
     }
   }
-  if (ids.size === 0) return new Map();
+  const total = ids.size;
+  if (total === 0) {
+    hooks.onProgress?.(0, 0);
+    return new Map();
+  }
   const bank = new SampleBank(engine.ctx, (rel) =>
     fs.backend.readFile(joinPath(fs.folder, rel)),
   );
   const out = new Map<number, AudioBuffer>();
+  let loaded = 0;
+  hooks.onProgress?.(0, total);
   await Promise.all(
     Array.from(ids).map(async (id) => {
       const def = song.wavTable.get(id);
-      if (!def?.path) return;
       try {
-        const buf = await bank.load(def.path);
-        if (buf) out.set(id, buf);
+        if (def?.path) {
+          const buf = await bank.load(def.path);
+          if (buf) out.set(id, buf);
+        }
       } catch (e) {
         // Missing samples shouldn't kill the whole render — chart can
         // still play the chips that resolved.
-        console.warn('[render] sample load failed', def.path, e);
+        console.warn('[render] sample load failed', def?.path, e);
+      } finally {
+        loaded++;
+        hooks.onProgress?.(loaded, total);
       }
     }),
   );
