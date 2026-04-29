@@ -30,6 +30,7 @@
  * VR" mode).
  */
 
+import * as THREE from 'three';
 import {
   computeAchievementRate,
   computeRank,
@@ -45,12 +46,14 @@ import { AudioEngine, SampleBank } from '@dtxmania/audio-engine';
 import { type LaneValue } from '@dtxmania/input';
 import { Renderer, type RenderState, type SkinTextures } from '../renderer.js';
 import { laneSpec, channelToLane } from '../lane-layout.js';
+import { XrControllers } from '../xr-controllers.js';
 import {
+  lerpPoseSample,
   replayActiveHitFlashes,
   replayActiveJudgmentFlash,
 } from './viewer-model.js';
 import { pickCodec, type CodecPick } from './render-codec-model.js';
-import type { Replay } from './recorder-model.js';
+import type { Pose, Replay } from './recorder-model.js';
 
 const BGM_CHANNEL = 0x01;
 const LANE_CHANNELS = new Set<number>([
@@ -143,6 +146,35 @@ export async function renderReplayToBlob(
   const engine = new AudioEngine();
   await engine.resume();
 
+  // Build the same VR scene the live player saw — drum kit + grip
+  // sticks driven later by the recorded pose stream. XrControllers
+  // owns the kit + stick geometry; we construct one (no XR session)
+  // and call start() to populate the scene, then drive the grips
+  // manually each frame. Without an XR session three.js's
+  // `getControllerGrip(i)` returns a plain Object3D that ignores
+  // input-source pose updates, which is exactly what we want — we
+  // set the transforms ourselves from `replay.poses`.
+  const xr = new XrControllers(renderer.webgl, renderer.scene);
+  if (opts.skin?.pads) xr.setPadsTexture(opts.skin.pads);
+  xr.start();
+  const leftGrip = renderer.webgl.xr.getControllerGrip(0);
+  const rightGrip = renderer.webgl.xr.getControllerGrip(1);
+
+  // Scale + position the playfield panel exactly the way Renderer.enterXR
+  // does, so the chips read the same size relative to the kit as in live
+  // VR. The captured frame uses the perspective camera below, not the
+  // ortho camera Renderer's idle path uses.
+  const xrScale = 2.4 / 1280;
+  renderer.playfield.scale.setScalar(xrScale);
+  renderer.playfield.position.set(0, 1.6, -2.0);
+
+  // Perspective camera. FOV chosen close to Quest's stereo per-eye FOV
+  // so the framing reads as "what the player saw"; near/far covers a
+  // typical play space without z-fighting on the kit.
+  const camera = new THREE.PerspectiveCamera(85, canvas.width / canvas.height, 0.05, 20);
+  camera.position.set(0, 1.6, 0);
+  camera.lookAt(0, 1.0, -1.0);
+
   try {
     // 4. Preload samples. Mirrors Game.preloadSamples; would extract
     //    if a third consumer needed it.
@@ -160,14 +192,7 @@ export async function renderReplayToBlob(
     engine.bgmGain.connect(audioDest);
     engine.drumsGain.connect(audioDest);
 
-    // 6. Pre-schedule everything. AudioContext can hold thousands of
-    //    queued sources without breaking a sweat, and pre-scheduling
-    //    means the render's animation loop only has to paint, not also
-    //    fire audio per-frame.
-    scheduleBgm(song, engine, sampleByWavId);
-    scheduleHits(replay, song, engine, sampleByWavId);
-
-    // 7. Build the combined MediaStream. Browsers want video tracks and
+    // 6. Build the combined MediaStream. Browsers want video tracks and
     //    audio tracks in one stream for MediaRecorder.
     const videoStream = canvas.captureStream(60);
     const stream = new MediaStream([
@@ -183,11 +208,24 @@ export async function renderReplayToBlob(
       recorder.addEventListener('stop', () => resolve());
     });
 
-    // 8. Start the song clock + recorder + animation loop. From here
-    //    the browser drives time; we just paint each frame.
+    // 7. Anchor the song clock BEFORE pre-scheduling. AudioEngine's
+    //    `_songStartCtxTime` defaults to 0, so any scheduleBuffer call
+    //    made before `startSongClock` computes its target wall-time
+    //    against an epoch in the deep past — every source ends up
+    //    playing with `offset = ctx.currentTime` (~15 s into preload),
+    //    which both desyncs the audio AND, combined with a buggy
+    //    chipIndex lookup, can spawn a second BGM source (= the
+    //    "兩道時間錯開重疊" the user reported).
     opts.onLog?.(`Recording (${codec.ext.toUpperCase()})…`);
     recorder.start(/* timeslice — let the browser pick */);
     engine.startSongClock(0);
+
+    // 8. Pre-schedule everything. AudioContext can hold thousands of
+    //    queued sources without breaking a sweat, and pre-scheduling
+    //    means the render's animation loop only has to paint, not also
+    //    fire audio per-frame.
+    scheduleBgm(song, engine, sampleByWavId);
+    scheduleHits(replay, song, engine, sampleByWavId);
 
     const tracker = new ScoreTracker(
       song.chips.filter((c) => LANE_CHANNELS.has(c.channel)).length,
@@ -201,7 +239,12 @@ export async function renderReplayToBlob(
     let lastProgressEmitMs = 0;
     const PROGRESS_EMIT_INTERVAL_MS = 250;
 
-    renderer.onFrame(() => {
+    // Override Renderer's animation loop so the captured frame uses
+    // OUR perspective camera (with kit + sticks visible) instead of
+    // Renderer's ortho. Renderer.render(state) is still called for
+    // the HUD canvas paint; we just take over the GL render call so
+    // the perspective view is what the captureStream samples.
+    renderer.webgl.setAnimationLoop(() => {
       const songTime = engine.songTimeMs();
       // Catch up the tracker for any hit whose songTime <= now.
       while (nextHitIdx < replay.hits.length) {
@@ -257,7 +300,25 @@ export async function renderReplayToBlob(
         inXR: false,
         toast: null,
       };
+      // Paint the HUD canvas (chips, judgment text, score) — Renderer
+      // updates the texture but does NOT do a GL draw; the WebGL render
+      // happens below with our perspective camera so the kit + sticks
+      // are visible alongside the playfield panel.
       renderer.render(state);
+
+      // Pose-driven scene: head pose → camera, controller poses →
+      // grip transforms (sticks ride along as children). lerpPoseSample
+      // returns null outside the recorded window — fall back to the
+      // initial fixed cam / grip pose so the scene stays sane.
+      const interp = lerpPoseSample(replay.poses, songTime);
+      if (interp) {
+        if (interp.head) applyPose(camera, interp.head);
+        if (interp.left) applyPose(leftGrip, interp.left);
+        if (interp.right) applyPose(rightGrip, interp.right);
+      }
+
+      renderer.webgl.render(renderer.scene, camera);
+
       const now = performance.now();
       if (now - lastProgressEmitMs >= PROGRESS_EMIT_INTERVAL_MS) {
         lastProgressEmitMs = now;
@@ -288,6 +349,12 @@ export async function renderReplayToBlob(
       mime: codec.mime,
     };
   } finally {
+    // Stop the loop before tearing down anything it might still touch.
+    try {
+      renderer.webgl.setAnimationLoop(null);
+    } catch {
+      /* already disposed */
+    }
     // Tear down the engine first so any lingering BGM doesn't keep
     // the AudioContext alive beyond this scope.
     try {
@@ -295,9 +362,21 @@ export async function renderReplayToBlob(
     } catch {
       /* already closed */
     }
+    try {
+      xr.stop();
+    } catch {
+      /* not started or already stopped */
+    }
     renderer.dispose();
     canvas.remove();
   }
+}
+
+/** Copy a `Pose` into a Three.js Object3D (camera, grip, etc). pos
+ * + quat are world-space; the caller is responsible for parenting. */
+function applyPose(obj: THREE.Object3D, pose: Pose): void {
+  obj.position.set(pose.pos[0], pose.pos[1], pose.pos[2]);
+  obj.quaternion.set(pose.quat[0], pose.quat[1], pose.quat[2], pose.quat[3]);
 }
 
 async function preloadSamples(
@@ -366,17 +445,26 @@ function scheduleBgm(
 
 /** Walk replay.hits and pre-schedule each one's chip sample at the
  * recorded songTime. Misses (lagMs===null AND chipIndex !== -1) are
- * silent; strays are silent in v0 (no lastBufferByLane fallback yet). */
+ * silent; strays are silent in v0 (no lastBufferByLane fallback yet).
+ *
+ * IMPORTANT: `HitEvent.chipIndex` is an index into Game's `playables`
+ * (which is `song.chips.filter(LANE_CHANNELS)`), NOT into `song.chips`
+ * itself. Looking up by `song.chips[idx]` would pull the wrong chip —
+ * commonly a BGM chip (since BGM chips often sit between drum chips
+ * in the unfiltered list), causing BGM to be scheduled a second time
+ * at every hit's songTime. Build the same playables view here and
+ * resolve the index against it. */
 function scheduleHits(
   replay: Replay,
   song: Song,
   engine: AudioEngine,
   samples: Map<number, AudioBuffer>,
 ): void {
+  const playables = song.chips.filter((c) => LANE_CHANNELS.has(c.channel));
   for (const h of replay.hits) {
     if (h.chipIndex === -1) continue; // stray — v0: silent
     if (h.lagMs === null && h.judgment === 'MISS') continue; // auto-detected miss
-    const chip = song.chips[h.chipIndex];
+    const chip = playables[h.chipIndex];
     if (!chip) continue;
     if (chip.wavId === undefined) {
       // Synth fallback — match Game.playChipSample's fallback path.
