@@ -17,6 +17,7 @@
     "@dtxmania/audio-engine": "workspace:*",
     "@dtxmania/dtx-core": "workspace:*",
     "@dtxmania/input": "workspace:*",
+    "mp4-muxer": "^5.2.2",
     "three": "^0.160.0"
   },
   "devDependencies": {
