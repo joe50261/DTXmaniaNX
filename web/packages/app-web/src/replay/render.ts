@@ -168,11 +168,18 @@ export async function renderReplayToBlob(
   renderer.playfield.scale.setScalar(xrScale);
   renderer.playfield.position.set(0, 1.6, -2.0);
 
-  // Perspective camera. FOV chosen close to Quest's stereo per-eye FOV
-  // so the framing reads as "what the player saw"; near/far covers a
-  // typical play space without z-fighting on the kit.
-  const camera = new THREE.PerspectiveCamera(85, canvas.width / canvas.height, 0.05, 20);
-  camera.position.set(0, 1.6, 0);
+  // Perspective camera. The user's brief explicitly asks for a wider
+  // framing than first-person — pure HMD pose only shows what the
+  // player saw at any moment, missing the rest of the kit + the
+  // peripheral hands. Default to a fixed "broadcast" third-person
+  // angle: above + slightly behind origin, looking down at the kit
+  // centre. FOV 95° so the kit's outer pads + the floating playfield
+  // panel both fit in frame without fish-eye warp.
+  //
+  // (Auto-cinematography — cuts on bar lines, combo / miss zoom,
+  // first-person inserts driven by head pose — is a follow-up slice.)
+  const camera = new THREE.PerspectiveCamera(95, canvas.width / canvas.height, 0.05, 20);
+  camera.position.set(0, 2.2, 0.8);
   camera.lookAt(0, 1.0, -1.0);
 
   try {
@@ -306,13 +313,15 @@ export async function renderReplayToBlob(
       // are visible alongside the playfield panel.
       renderer.render(state);
 
-      // Pose-driven scene: head pose → camera, controller poses →
-      // grip transforms (sticks ride along as children). lerpPoseSample
-      // returns null outside the recorded window — fall back to the
-      // initial fixed cam / grip pose so the scene stays sane.
+      // Pose-driven scene: controller poses → grip transforms (sticks
+      // ride along as children). HEAD pose is intentionally NOT applied
+      // to the camera — pure HMD pose is too narrow to capture the
+      // whole kit + playfield in one frame, which the brief spelled out
+      // ("FOV 要全部錄到"). The camera stays at the broadcast angle set
+      // up above; auto-cinematography that mixes in head-pose first-
+      // person inserts is a follow-up.
       const interp = lerpPoseSample(replay.poses, songTime);
       if (interp) {
-        if (interp.head) applyPose(camera, interp.head);
         if (interp.left) applyPose(leftGrip, interp.left);
         if (interp.right) applyPose(rightGrip, interp.right);
       }
