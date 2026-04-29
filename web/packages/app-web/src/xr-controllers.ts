@@ -9,15 +9,24 @@ import {
   type PadSpec,
 } from './kit-preset.js';
 import { detectPadHit } from './hit-detect.js';
-import type { Pose } from './replay/recorder-model.js';
+
+/** Position + orientation of a tracked WebXR object (headset or
+ * controller grip). Coordinates: world-space metres + unit
+ * quaternion. Defined here (the producer) so the sidecar replay
+ * subsystem stays the only thing that knows it's also storing this
+ * shape — `git rm -r replay/` must leave this file compiling. */
+export interface XrPose {
+  pos: readonly [number, number, number];
+  quat: readonly [number, number, number, number];
+}
 
 /** Snapshot of the headset + controller poses at the moment getPoses()
  * is called. Each side is `null` when the pose isn't available — see
  * `XrControllers.getPoses` for the precise nullability rules. */
 export interface XrPoseSnapshot {
-  head: Pose | null;
-  left: Pose | null;
-  right: Pose | null;
+  head: XrPose | null;
+  left: XrPose | null;
+  right: XrPose | null;
 }
 
 /**
@@ -375,19 +384,19 @@ export class XrControllers {
    *    "return null when there's no active XR session", as the spec
    *    suggests.
    *
-   * Allocations: one `XrPoseSnapshot` per call plus one `Pose` per
+   * Allocations: one `XrPoseSnapshot` per call plus one `XrPose` per
    * non-null side. `position.toArray()` / `quaternion.toArray()`
    * each allocate one small array — fine at frame cadence.
    */
   getPoses(): XrPoseSnapshot {
-    let left: Pose | null = null;
-    let right: Pose | null = null;
+    let left: XrPose | null = null;
+    let right: XrPose | null = null;
     if (this.addedToScene.length > 0) {
       left = readPose(this.webgl.xr.getControllerGrip(0));
       right = readPose(this.webgl.xr.getControllerGrip(1));
     }
 
-    let head: Pose | null = null;
+    let head: XrPose | null = null;
     const xr = this.webgl.xr as THREE.WebXRManager & { isPresenting?: boolean };
     if (xr.isPresenting) {
       const cam = xr.getCamera();
@@ -588,9 +597,9 @@ export class XrControllers {
 }
 
 /** Read world-space position + quaternion off a Three.js Object3D into
- * the replay-model `Pose` shape. Allocates only the two small fixed-
- * length arrays returned by `toArray()`; safe at frame cadence. */
-function readPose(obj: THREE.Object3D): Pose {
+ * the `XrPose` shape. Allocates only the two small fixed-length
+ * arrays returned by `toArray()`; safe at frame cadence. */
+function readPose(obj: THREE.Object3D): XrPose {
   const p = obj.position.toArray() as [number, number, number];
   const q = obj.quaternion.toArray() as [number, number, number, number];
   return { pos: p, quat: q };
