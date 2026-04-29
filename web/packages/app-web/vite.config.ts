@@ -7,8 +7,8 @@ const base = process.env.GITHUB_ACTIONS ? '/DTXmaniaNX/' : '/';
 
 // Skin assets ship as plain files under packages/app-web/public/skin/
 // — Vite serves `public/` at the deploy base automatically, so a file
-// at `public/skin/5_background.jpg` is reachable at
-// `${BASE_URL}skin/5_background.jpg`. Source-of-truth for these assets
+// at `public/skin/5_background.png` is reachable at
+// `${BASE_URL}skin/5_background.png`. Source-of-truth for these assets
 // is `scripts/generate-skin.mjs`, which produces them procedurally
 // from original geometric primitives. The web build deliberately does
 // not pull from the C# `Runtime/System/Graphics/` tree; it ships its

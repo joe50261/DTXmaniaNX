@@ -31,7 +31,7 @@ export async function loadSkin(): Promise<SkinTextures> {
 
   const [background, pads, padsFlush, chipsDrums, judgeStrings, gaugeFrame, gaugeBar] =
     await Promise.all([
-      load('7_background.jpg'),
+      load('7_background.png'),
       load('7_pads.png'),
       load('ScreenPlayDrums pads flush.png'),
       load('7_chips_drums.png'),

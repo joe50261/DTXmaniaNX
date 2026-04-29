@@ -14,7 +14,7 @@
 import { createWriteStream, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { deflateSync, crc32 } from 'node:zlib';
+import { deflateSync } from 'node:zlib';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(HERE, '..', 'public', 'skin');
@@ -23,12 +23,33 @@ mkdirSync(OUT, { recursive: true });
 // ─── PNG encoder ────────────────────────────────────────────────────
 // 8-bit RGBA. Pure scanlines (filter byte 0 per row), single IDAT.
 
+// Inline CRC32 — `zlib.crc32` exists but requires Node 22.2+, and
+// web/package.json declares `>=22.0.0`. A 256-entry table keeps this
+// self-contained and portable across the whole supported range.
+const CRC32_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf) {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    c = (CRC32_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8)) >>> 0;
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
 function pngChunk(type, data) {
   const len = Buffer.alloc(4);
   len.writeUInt32BE(data.length, 0);
   const head = Buffer.concat([Buffer.from(type, 'ascii'), data]);
   const c = Buffer.alloc(4);
-  c.writeUInt32BE(crc32(head) >>> 0, 0);
+  c.writeUInt32BE(crc32(head), 0);
   return Buffer.concat([len, head, c]);
 }
 
@@ -225,7 +246,7 @@ async function makeBackground5() {
       if (px >= 0 && px < 1280) setPx(c, px, py, 255, 255, 255, 6);
     }
   }
-  await write('5_background.jpg', c); // PNG bytes; browsers sniff format.
+  await write('5_background.png', c);
 }
 
 function makeBar(focused, kind /* 'score' | 'box' | 'other' */) {
@@ -462,7 +483,7 @@ async function makeBackground7() {
   fillGradientV(c, 0, 0, 1280, 720, [4, 6, 14], [16, 22, 44]);
   // Faint horizontal scanlines.
   for (let y = 0; y < 720; y += 4) fillRect(c, 0, y, 1280, 1, [255, 255, 255, 4]);
-  await write('7_background.jpg', c);
+  await write('7_background.png', c);
 }
 
 // 7_pads.png — 4×3 atlas of 96×96 pads. Order from PAD_ATLAS:
