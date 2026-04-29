@@ -10,10 +10,9 @@ const base = process.env.GITHUB_ACTIONS ? '/DTXmaniaNX/' : '/';
 // at `public/skin/5_background.jpg` is reachable at
 // `${BASE_URL}skin/5_background.jpg`. Source-of-truth for these assets
 // is `scripts/generate-skin.mjs`, which produces them procedurally
-// from original geometric primitives. We deliberately do NOT pull from
-// the C# `Runtime/System/Graphics/` tree because those upstream files
-// are styled to mimic Konami GITADORA UI art; the web build keeps a
-// clean break and ships its own placeholder skin.
+// from original geometric primitives. The web build deliberately does
+// not pull from the C# `Runtime/System/Graphics/` tree; it ships its
+// own self-contained placeholder skin.
 
 export default defineConfig({
   base,

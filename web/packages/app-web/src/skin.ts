@@ -6,10 +6,10 @@ import { skinUrl } from './skin-url.js';
  * Loads the drum-play skin assets shipped under public/skin/. The
  * source-of-truth files live under packages/app-web/public/skin/ and
  * are produced procedurally by scripts/generate-skin.mjs from original
- * geometric primitives (no upstream Konami art). Each filename is a
- * stable contract — atlases (7_pads.png, 7_chips_drums.png, ScreenPlay
- * judge strings 1.png) match the per-lane / per-judgment offsets in
- * pad-atlas.ts / chip-atlas.ts / judge-atlas.ts.
+ * geometric primitives. Each filename is a stable contract — atlases
+ * (7_pads.png, 7_chips_drums.png, ScreenPlay judge strings 1.png)
+ * match the per-lane / per-judgment offsets in pad-atlas.ts /
+ * chip-atlas.ts / judge-atlas.ts.
  *
  * Missing files resolve to undefined rather than throwing — the renderer
  * tolerates absent skin pieces and falls back to its plain 2D drawing.

@@ -3,21 +3,21 @@ import { Lane, type LaneValue } from '@dtxmania/input';
 /**
  * Virtual drum-kit presets.
  *
- * The VR drum kit's geometry is tuned per-cabinet so muscle memory built
- * up on one preset transfers cleanly to its real-world counterpart. The
- * primary target is the **GITADORA Galaxy Wave / DELTA** arcade cabinet
- * (white frame, latest generation): pad sizes follow Yamaha DTXPRESS
- * spec (TP-65 ≈ 0.22 m for snare / hi-hat / toms; KCK cymbal pads
- * ≈ 0.28 m; ride ≈ 0.32 m), and tilts follow the cabinet's angled
- * mounting (snare ~18°, toms ~45°, ride ~65°, hi-hat ~35°).
+ * The VR drum kit's geometry is tuned per-layout so muscle memory built
+ * up on one preset transfers cleanly. The primary target is a standard
+ * arcade-style electronic kit (large cymbals on stands, tilted toms,
+ * pedal kick) with pad sizes and tilt angles drawn from common
+ * electronic-pad ergonomics — small rubber pads ≈ 0.22 m for snare /
+ * hi-hat / toms, larger cymbal pads ≈ 0.28 m, ride ≈ 0.32 m, tilts
+ * around snare ~18°, toms ~45°, ride ~65°, hi-hat ~35°.
  *
  * Pads are pure data — no Three.js dependency — so this module is
  * unit-testable without a renderer. The consumer (xr-controllers.ts)
  * converts the plain `{x,y,z}` positions into THREE.Vector3 when
  * building scene objects.
  *
- * Y values are world-space metres assuming a sitting drummer on an
- * arcade-height stool. Standing players add a positive `seatYOffset`
+ * Y values are world-space metres assuming a sitting drummer on a
+ * standard-height stool. Standing players add a positive `seatYOffset`
  * (config) to lift the whole kit so it sits at hand-comfortable height
  * relative to their hips — without changing any pad-to-pad relative
  * geometry, which is what muscle memory is anchored on.
@@ -53,11 +53,11 @@ export interface KitPreset {
   pads: readonly PadSpec[];
 }
 
-const GITADORA_GALAXY_WAVE: KitPreset = {
-  id: 'gitadora-galaxy-wave',
-  label: 'GITADORA Galaxy Wave',
+const ARCADE_STANDARD: KitPreset = {
+  id: 'arcade-standard',
+  label: 'Arcade Standard',
   description:
-    'Konami arcade — white-frame Galaxy Wave / DELTA. TP-65 / KCK sizes, arcade tilts.',
+    'Arcade-style electronic kit — large cymbals on stands, tilted toms, pedal kick.',
   pads: [
     { lane: Lane.LC, position: { x: -0.65, y: 1.35, z: -0.60 }, size: 0.28, tiltDeg: 20, shape: 'disc',  stand: true  },
     { lane: Lane.HH, position: { x: -0.50, y: 0.95, z: -0.40 }, size: 0.22, tiltDeg: 35, shape: 'disc',  stand: true  },
@@ -92,11 +92,11 @@ const COMPACT_FUSION: KitPreset = {
 };
 
 export const KIT_PRESETS: readonly KitPreset[] = Object.freeze([
-  GITADORA_GALAXY_WAVE,
+  ARCADE_STANDARD,
   COMPACT_FUSION,
 ]);
 
-export const DEFAULT_KIT_PRESET_ID = GITADORA_GALAXY_WAVE.id;
+export const DEFAULT_KIT_PRESET_ID = ARCADE_STANDARD.id;
 
 /** Look up a preset by id. Falls back to the default preset if `id` is
  *  unknown — protects against a stale localStorage entry pointing at a

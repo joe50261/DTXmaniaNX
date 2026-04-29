@@ -14,9 +14,10 @@ import { detectPadHit } from './hit-detect.js';
  * VR virtual drum kit.
  *
  * Layout, sizes, and tilts come from `kit-preset.ts`. The default preset
- * targets the GITADORA Galaxy Wave arcade cabinet (Konami's white-frame
- * latest gen) so muscle memory transfers between the sim and a real
- * machine; players can swap to other presets via the VR config panel.
+ * is an arcade-style standard layout (large cymbals on stands, tilted
+ * toms, pedal kick) so muscle memory transfers cleanly to a similar
+ * real-world electronic kit; players can swap to other presets via
+ * the VR config panel.
  *
  * Controllers are drumsticks (visible cylinder + tip sphere attached to
  * each grip). The stick is sampled at five points along its shaft; a

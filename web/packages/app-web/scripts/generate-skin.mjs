@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // Generates the in-tree replacement skin assets shipped under
 // public/skin/. We do NOT copy from the C# Runtime/System/Graphics/
-// tree (whose UI sprites mimic Konami GITADORA art). Everything below
-// is original geometric placeholder art produced procedurally with
-// zero third-party dependencies.
+// tree. Everything below is original geometric placeholder art
+// produced procedurally with zero third-party dependencies.
 //
 // Run: `node scripts/generate-skin.mjs` from packages/app-web/.
 //

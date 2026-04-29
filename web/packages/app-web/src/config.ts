@@ -128,9 +128,9 @@ export interface Config {
    * turn it on when actively diagnosing a VR-only issue. */
   vrLogEnabled: boolean;
   /** Identifier of the active drum-kit preset (see kit-preset.ts).
-   * Defaults to the GITADORA Galaxy Wave arcade kit so muscle memory
-   * transfers between the sim and a real cabinet. Unknown / removed ids
-   * fall back to the first preset at lookup time. */
+   * Defaults to the Arcade Standard layout so muscle memory transfers
+   * cleanly to a similar real-world electronic kit. Unknown / removed
+   * ids fall back to the first preset at lookup time. */
   kitPresetId: string;
   /** Uniform Y shift applied to the entire kit, in metres. Standing
    * players raise this (~+0.5 m) so the kit lifts to hand-comfortable
