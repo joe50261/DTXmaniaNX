@@ -44,6 +44,9 @@ importers:
       three:
         specifier: ^0.160.0
         version: 0.160.1
+      webm-muxer:
+        specifier: ^5.1.4
+        version: 5.1.4
     devDependencies:
       '@playwright/test':
         specifier: ^1.50.0
@@ -1225,6 +1228,10 @@ packages:
     engines: {node: ^20.12||^22.13||>=24.0}
     hasBin: true
 
+  webm-muxer@5.1.4:
+    resolution: {integrity: sha512-ditzgFVFbfqPaugkIr4mGhAdob5K9HY6Rzlh7TRsA368yA1sp/m5O7nQCcMLdgFDeNGtFPg8B+MeXLtpzKWX6Q==}
+    deprecated: This library is superseded by Mediabunny. Please migrate to it.
+
   whatwg-mimetype@3.0.0:
     resolution: {integrity: sha512-nt+N2dzIutVRxARx1nghPKGv1xHikU7HKdfafKkLNLindmPU/ch3U31NOCGGA/dmPcmb1VlofO0vnKAcsm0o/Q==}
     engines: {node: '>=12'}
@@ -2276,6 +2283,11 @@ snapshots:
       - yaml
 
   watskeburt@5.0.3: {}
+
+  webm-muxer@5.1.4:
+    dependencies:
+      '@types/dom-webcodecs': 0.1.18
+      '@types/wicg-file-system-access': 2020.9.8
 
   whatwg-mimetype@3.0.0: {}
 

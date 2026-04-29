@@ -34,7 +34,8 @@
  */
 
 import * as THREE from 'three';
-import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
+import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4Target } from 'mp4-muxer';
+import { Muxer as WebMMuxer, ArrayBufferTarget as WebMTarget } from 'webm-muxer';
 import {
   computeAchievementRate,
   computeRank,
@@ -63,8 +64,6 @@ const LANE_CHANNELS = new Set<number>([
  * judgment flash + score animation completes before encode finishes. */
 const RENDER_TAIL_MS = 1500;
 
-const VIDEO_CODEC = 'avc1.42E01E';
-const AUDIO_CODEC = 'mp4a.40.2';
 const VIDEO_WIDTH = 1280;
 const VIDEO_HEIGHT = 720;
 const VIDEO_FPS = 60;
@@ -74,6 +73,54 @@ const AUDIO_BITRATE = 128_000;
 /** AAC's natural frame size. Chunking input to match avoids the
  * encoder doing internal slicing on every encode() call. */
 const AUDIO_FRAMES_PER_CHUNK = 1024;
+
+/** Codec candidate. Probed in order; first one whose video + audio
+ * encoder both report `supported` wins. */
+interface CodecCandidate {
+  container: 'mp4' | 'webm';
+  videoCodec: string;
+  /** Codec string the chosen muxer expects (mp4-muxer uses short names
+   * like 'avc'; webm-muxer uses Matroska track ids like 'V_VP9'). */
+  muxerVideoCodec: string;
+  audioCodec: string;
+  muxerAudioCodec: string;
+  mime: string;
+  ext: 'mp4' | 'webm';
+}
+
+/** mp4 + h264 first (best share-target compatibility), then webm + vp9
+ * + opus (Quest browser doesn't ship h264 encode in WebCodecs because
+ * of licensing — vp9 is the standard fallback for Android-class
+ * Chromium builds), then vp8 as the last-ditch fallback. */
+const CODEC_CANDIDATES: readonly CodecCandidate[] = [
+  {
+    container: 'mp4',
+    videoCodec: 'avc1.42E01E', muxerVideoCodec: 'avc',
+    audioCodec: 'mp4a.40.2', muxerAudioCodec: 'aac',
+    mime: 'video/mp4', ext: 'mp4',
+  },
+  {
+    container: 'webm',
+    videoCodec: 'vp09.00.10.08', muxerVideoCodec: 'V_VP9',
+    audioCodec: 'opus', muxerAudioCodec: 'A_OPUS',
+    mime: 'video/webm', ext: 'webm',
+  },
+  {
+    container: 'webm',
+    videoCodec: 'vp8', muxerVideoCodec: 'V_VP8',
+    audioCodec: 'opus', muxerAudioCodec: 'A_OPUS',
+    mime: 'video/webm', ext: 'webm',
+  },
+];
+
+/** Minimal muxer surface both libraries satisfy structurally — the
+ * encoder output callbacks dispatch into one of these regardless of
+ * which container we picked. */
+interface MuxerLike {
+  addVideoChunk(chunk: EncodedVideoChunk, meta?: EncodedVideoChunkMetadata): void;
+  addAudioChunk(chunk: EncodedAudioChunk, meta?: EncodedAudioChunkMetadata): void;
+  finalize(): void;
+}
 
 export interface RenderFs {
   backend: {
@@ -121,29 +168,18 @@ export async function renderReplayToBlob(
   chartText: string,
   opts: RenderOpts,
 ): Promise<RenderResult> {
-  // 1. Codec probe. WebCodecs requires explicit `isConfigSupported` per
-  //    encoder; both must pass for the muxer to produce a playable file.
-  const videoSupport = await VideoEncoder.isConfigSupported({
-    codec: VIDEO_CODEC,
-    width: VIDEO_WIDTH,
-    height: VIDEO_HEIGHT,
-    framerate: VIDEO_FPS,
-    bitrate: VIDEO_BITRATE,
-  });
-  if (!videoSupport.supported) {
+  // 1. Codec probe. Try each candidate in order; first one whose
+  //    video + audio encoders both report `supported` wins. Quest
+  //    browser typically falls through h264 (no encode license) to
+  //    webm + vp9 + opus.
+  const codec = await pickSupportedCodec(opts.onLog);
+  if (!codec) {
     throw new Error(
-      `Video codec ${VIDEO_CODEC} unsupported — needs Chromium 94+ for H.264 encode.`,
+      'No supported video/audio codec — needs WebCodecs (Chromium 94+) ' +
+      'with at least vp8 + opus encode. Quest browser updates usually ship this.',
     );
   }
-  const audioSupport = await AudioEncoder.isConfigSupported({
-    codec: AUDIO_CODEC,
-    sampleRate: AUDIO_SAMPLE_RATE,
-    numberOfChannels: 2,
-    bitrate: AUDIO_BITRATE,
-  });
-  if (!audioSupport.supported) {
-    throw new Error(`Audio codec ${AUDIO_CODEC} unsupported.`);
-  }
+  opts.onLog?.(`Codec: ${codec.videoCodec} + ${codec.audioCodec} → ${codec.ext}`);
 
   // 2. Parse + time-tag the chart. Same pipeline Game.loadAndStart
   //    uses, so chip positions match what the live run produced.
@@ -202,15 +238,10 @@ export async function renderReplayToBlob(
   renderer.webgl.setAnimationLoop(null);
 
   try {
-    // 5. Muxer + encoders. mp4-muxer pulls chunks via callbacks, so
-    //    the encoders need to be wired before we feed any frames.
-    const target = new ArrayBufferTarget();
-    const muxer = new Muxer({
-      target,
-      video: { codec: 'avc', width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
-      audio: { codec: 'aac', numberOfChannels: 2, sampleRate: AUDIO_SAMPLE_RATE },
-      fastStart: 'in-memory',
-    });
+    // 5. Muxer + encoders. Build the right container for the chosen
+    //    codec; the two muxer libraries have the same chunk-adding
+    //    surface so the encoder output callbacks dispatch identically.
+    const { muxer, getBuffer } = buildMuxer(codec);
     let encoderError: Error | null = null;
     const trapError = (e: unknown): void => {
       encoderError = e instanceof Error ? e : new Error(String(e));
@@ -221,7 +252,7 @@ export async function renderReplayToBlob(
       error: trapError,
     });
     videoEncoder.configure({
-      codec: VIDEO_CODEC,
+      codec: codec.videoCodec,
       width: VIDEO_WIDTH,
       height: VIDEO_HEIGHT,
       framerate: VIDEO_FPS,
@@ -232,7 +263,7 @@ export async function renderReplayToBlob(
       error: trapError,
     });
     audioEncoder.configure({
-      codec: AUDIO_CODEC,
+      codec: codec.audioCodec,
       sampleRate: AUDIO_SAMPLE_RATE,
       numberOfChannels: 2,
       bitrate: AUDIO_BITRATE,
@@ -351,17 +382,17 @@ export async function renderReplayToBlob(
     }
 
     // 8. Flush both encoders, finalise the muxer, return the bytes.
-    opts.onLog?.('Finalising MP4…');
+    opts.onLog?.(`Finalising ${codec.ext.toUpperCase()}…`);
     opts.onProgress?.({ phase: 'finalize', current: 0, total: 0 });
     await videoEncoder.flush();
     await audioEncoder.flush();
     if (encoderError) throw encoderError;
     muxer.finalize();
 
-    const blob = new Blob([target.buffer], { type: 'video/mp4' });
+    const blob = new Blob([getBuffer()], { type: codec.mime });
     const mb = (blob.size / 1024 / 1024).toFixed(1);
-    opts.onLog?.(`Done — ${mb} MB MP4.`);
-    return { blob, ext: 'mp4', mime: 'video/mp4' };
+    opts.onLog?.(`Done — ${mb} MB ${codec.ext.toUpperCase()}.`);
+    return { blob, ext: codec.ext, mime: codec.mime };
   } finally {
     try {
       xr.stop();
@@ -373,9 +404,92 @@ export async function renderReplayToBlob(
   }
 }
 
-/** Slice a rendered AudioBuffer into AAC-friendly planar chunks and
- * push them through AudioEncoder. The encoder handles any internal
- * re-slicing if our chunk size doesn't align with its frame size. */
+/** Walk `CODEC_CANDIDATES` and return the first whose video + audio
+ * encoder both report `supported`. Returns null when nothing matches.
+ * Logs each rejection so the user can see the fallback chain. */
+async function pickSupportedCodec(
+  onLog?: (line: string) => void,
+): Promise<CodecCandidate | null> {
+  for (const c of CODEC_CANDIDATES) {
+    let v: VideoEncoderSupport;
+    let a: AudioEncoderSupport;
+    try {
+      v = await VideoEncoder.isConfigSupported({
+        codec: c.videoCodec,
+        width: VIDEO_WIDTH,
+        height: VIDEO_HEIGHT,
+        framerate: VIDEO_FPS,
+        bitrate: VIDEO_BITRATE,
+      });
+      a = await AudioEncoder.isConfigSupported({
+        codec: c.audioCodec,
+        sampleRate: AUDIO_SAMPLE_RATE,
+        numberOfChannels: 2,
+        bitrate: AUDIO_BITRATE,
+      });
+    } catch (e) {
+      // Some browsers throw on unknown codec strings instead of
+      // returning {supported:false}; treat as unsupported.
+      onLog?.(`Codec ${c.videoCodec} probe threw — skipping.`);
+      console.warn('[render] codec probe threw', c, e);
+      continue;
+    }
+    if (v.supported && a.supported) return c;
+    if (!v.supported) onLog?.(`Codec ${c.videoCodec} unsupported — falling back.`);
+    if (v.supported && !a.supported) {
+      onLog?.(`Codec ${c.audioCodec} unsupported — falling back.`);
+    }
+  }
+  return null;
+}
+
+/** Build the right muxer + a getter that exposes the final byte
+ * buffer once `finalize()` has been called. Both libraries return
+ * an `ArrayBufferTarget` whose `.buffer` field holds the bytes. */
+function buildMuxer(codec: CodecCandidate): {
+  muxer: MuxerLike;
+  getBuffer: () => ArrayBuffer;
+} {
+  if (codec.container === 'mp4') {
+    const target = new Mp4Target();
+    const muxer = new Mp4Muxer({
+      target,
+      video: {
+        codec: codec.muxerVideoCodec as 'avc',
+        width: VIDEO_WIDTH,
+        height: VIDEO_HEIGHT,
+      },
+      audio: {
+        codec: codec.muxerAudioCodec as 'aac',
+        numberOfChannels: 2,
+        sampleRate: AUDIO_SAMPLE_RATE,
+      },
+      // moov box at the head — file plays back without re-muxing.
+      fastStart: 'in-memory',
+    });
+    return { muxer, getBuffer: () => target.buffer };
+  }
+  const target = new WebMTarget();
+  const muxer = new WebMMuxer({
+    target,
+    video: {
+      codec: codec.muxerVideoCodec, // 'V_VP9' / 'V_VP8'
+      width: VIDEO_WIDTH,
+      height: VIDEO_HEIGHT,
+      frameRate: VIDEO_FPS,
+    },
+    audio: {
+      codec: codec.muxerAudioCodec, // 'A_OPUS'
+      numberOfChannels: 2,
+      sampleRate: AUDIO_SAMPLE_RATE,
+    },
+  });
+  return { muxer, getBuffer: () => target.buffer };
+}
+
+/** Slice a rendered AudioBuffer into planar chunks and push them
+ * through AudioEncoder. The encoder handles any internal re-slicing
+ * if our chunk size doesn't align with its frame size. */
 function encodeAudioBuffer(buffer: AudioBuffer, encoder: AudioEncoder): void {
   const numChannels = buffer.numberOfChannels;
   // Planar f32 = ch0[len] then ch1[len]. AudioEncoder reads
