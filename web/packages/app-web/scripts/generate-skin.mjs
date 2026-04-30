@@ -216,6 +216,13 @@ const GLYPHS = {
 function drawGlyph(c, ch, x, y, scale, color) {
   const g = GLYPHS[ch];
   if (!g) return;
+  // Snap to integer pixel grid — callers often centre glyphs with
+  // `(cellW - glyphW) / 2`, which is fractional when cellW and glyphW
+  // have opposite parity. fillRect's floor/ceil edge handling would
+  // otherwise widen each "1×1" glyph pixel to 2×2 at fractional x/y,
+  // producing fuzzy oversized text.
+  x = Math.floor(x);
+  y = Math.floor(y);
   for (let row = 0; row < 7; row++) {
     for (let col = 0; col < 5; col++) {
       if (g[row][col] === '#') {
@@ -226,7 +233,11 @@ function drawGlyph(c, ch, x, y, scale, color) {
 }
 
 function drawText(c, text, x, y, scale, color, spacing = 1) {
-  let cx = x;
+  // Snap baseline to integer pixels for the same reason drawGlyph does
+  // (see comment there). cx then advances by integer increments
+  // (`(5 + spacing) * scale`) so every glyph stays grid-aligned.
+  let cx = Math.floor(x);
+  y = Math.floor(y);
   for (const ch of text) {
     drawGlyph(c, ch, cx, y, scale, color);
     cx += (5 + spacing) * scale;
