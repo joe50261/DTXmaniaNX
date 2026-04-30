@@ -89,6 +89,25 @@ module.exports = {
       },
       to: { path: '^node_modules/three($|/)' },
     },
+    {
+      name: 'replay-is-sidecar',
+      severity: 'error',
+      comment:
+        'Replay subsystem must stay sidecar — only `main.ts` may import from `replay/`. ' +
+        'Anything else (Game, XrControllers, Renderer, …) importing replay/ would mean ' +
+        'live play depends on replay code, breaking the "git rm -r replay/ still builds" ' +
+        'invariant the design was scoped around. If you need replay-shaped data in a ' +
+        'production module, move the type definition out of replay/ (e.g. XrPose lives ' +
+        'in xr-controllers.ts, not in replay/recorder-model.ts).',
+      from: {
+        path: 'packages/app-web/src/',
+        pathNot: [
+          'packages/app-web/src/replay/',
+          'packages/app-web/src/main\\.ts$',
+        ],
+      },
+      to: { path: 'packages/app-web/src/replay/' },
+    },
   ],
   options: {
     doNotFollow: { path: 'node_modules' },

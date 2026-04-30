@@ -17,7 +17,9 @@
     "@dtxmania/audio-engine": "workspace:*",
     "@dtxmania/dtx-core": "workspace:*",
     "@dtxmania/input": "workspace:*",
-    "three": "^0.160.0"
+    "mp4-muxer": "^5.2.2",
+    "three": "^0.160.0",
+    "webm-muxer": "^5.1.4"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0",

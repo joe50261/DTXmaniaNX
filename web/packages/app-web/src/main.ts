@@ -45,6 +45,14 @@ import { loadSkin } from './skin.js';
 import type { SkinTextures } from './renderer.js';
 import { runCalibration } from './calibrate.js';
 import { loadAudioOffsetMs, saveAudioOffsetMs } from './calibrate-model.js';
+import { createReplayCapture } from './replay/capture-glue.js';
+import { ReplaysPanel } from './replay/replays-panel.js';
+import {
+  renderReplayToBlob,
+  suggestFilename,
+  triggerDownload,
+} from './replay/render.js';
+import { loadReplay } from './replay/storage.js';
 import { activeToast, showToast } from './hud-toast.js';
 
 // Test hook for the Playwright e2e suite. Toast is painted onto the
@@ -87,6 +95,7 @@ const forgetBtn = requireEl<HTMLButtonElement>('forget-folder');
 const rescanBtn = requireEl<HTMLButtonElement>('rescan-folder');
 const calibrateBtn = requireEl<HTMLButtonElement>('calibrate');
 const configBtn = requireEl<HTMLButtonElement>('config-btn');
+const replaysBtn = requireEl<HTMLButtonElement>('replays-btn');
 const xrBtn = requireEl<HTMLButtonElement>('enter-xr');
 const songSelectMount = requireEl<HTMLDivElement>('song-select-mount');
 const scanErrorsEl = requireEl<HTMLDivElement>('scan-errors');
@@ -459,6 +468,63 @@ const configPanel = new ConfigPanel({
 });
 configBtn.addEventListener('click', () => configPanel.open());
 
+// Replays browser — desktop-only entry. The Render button drives the
+// real-time MediaRecorder pipeline in `replay/render.ts`; the panel
+// surfaces phase-aware progress + a log scrollback so a 3-minute
+// silent render doesn't look like a hang.
+const replaysPanel = new ReplaysPanel({
+  onRender: (id) => {
+    run(async () => {
+      if (!library) {
+        setStatus('Pick your songs folder first — render needs WAV access.');
+        return;
+      }
+      const replay = await loadReplay(id);
+      if (!replay) {
+        setStatus('Replay not found (it may have been deleted).');
+        return;
+      }
+      let chartText: string;
+      try {
+        chartText = await library.backend.readText(replay.meta.chartPath);
+      } catch (e) {
+        setStatus(
+          `Render failed: chart not in current folder (${replay.meta.chartPath}).`,
+        );
+        console.warn('[render] readText failed', e);
+        return;
+      }
+      const rowTitle = replay.meta.title ?? replay.meta.chartPath;
+      replaysPanel.showRender(rowTitle);
+      replaysPanel.appendRenderLog(`Source: ${replay.meta.chartPath}`);
+      setStatus('Rendering replay… see the panel for progress.');
+      try {
+        const skin = await skinPromise.catch(() => undefined);
+        const result = await renderReplayToBlob(replay, chartText, {
+          fs: { backend: library.backend, folder: dirname(replay.meta.chartPath) },
+          ...(skin ? { skin } : {}),
+          onProgress: (p) => replaysPanel.updateRenderProgress(p),
+          onLog: (line) => replaysPanel.appendRenderLog(line),
+        });
+        triggerDownload(result.blob, suggestFilename(replay, result.ext));
+        replaysPanel.appendRenderLog('Download triggered.');
+        setStatus(`Render done — saved as ${result.ext.toUpperCase()}.`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        replaysPanel.appendRenderLog(`ERROR: ${msg}`);
+        setStatus(`Render failed: ${msg}`);
+        console.warn('[render] renderReplayToBlob failed', e);
+      }
+      // Render overlay stays visible after completion (success or
+      // failure) so the user can read the final log line + size.
+      // They dismiss via "Back to replays" or the modal ✕.
+    });
+  },
+});
+replaysBtn.addEventListener('click', () => {
+  replaysPanel.open().catch((e) => console.warn('[replays] open failed', e));
+});
+
 // Live config → Game / Renderer. The renderer reads scrollSpeed /
 // judgeLineY / reverseScroll fields per frame, so a slider drag
 // updates the falling chips and judgment line in real time. Auto-kick
@@ -758,6 +824,13 @@ async function launchGame(
     setStatus('Game not initialised — reload the page.');
     return;
   }
+  // Replay capture is sidecar — only attached for scanner-backed charts
+  // (the bundled demo has no stable chartPath, so a saved replay
+  // wouldn't bind back to anything). The lanes set is captured by
+  // value here so a config change mid-run doesn't retroactively
+  // mutate the capture's autoplay set.
+  const autoLanes = new Set<LaneValue>(autoPlayToLanes(getConfig().autoPlay));
+  const capture = chart ? createReplayCapture(autoLanes) : null;
   const startOpts: Parameters<Game['loadAndStart']>[1] = {
     onRestart: () => {
       // Same call on desktop and VR — Game.showSongSelect both (a)
@@ -784,11 +857,25 @@ async function launchGame(
             snap: ScoreSnapshot,
             didLoop: boolean,
           ) => {
-            if (isPracticeRun(getConfig(), didLoop)) {
+            const practice = isPracticeRun(getConfig(), didLoop);
+            if (practice) {
               console.info('[result] practice run — skipping best-score write');
-              return;
+            } else {
+              persistChartResult(chart, chartPath, snap);
             }
-            persistChartResult(chart, chartPath, snap);
+            // Replay capture mirrors the practice gate: practice runs
+            // (loop or non-1 rate) are dropped; real runs persist via
+            // saveReplay. Errors are swallowed with a console log —
+            // a failed replay save shouldn't block the result-screen
+            // transition the player is waiting on.
+            if (capture) {
+              if (practice) capture.discard();
+              else {
+                capture.finish(snap).catch((e) =>
+                  console.warn('[replay] saveReplay failed', e),
+                );
+              }
+            }
           },
         }
       : {}),
@@ -800,7 +887,13 @@ async function launchGame(
       // / VR).
       commitLoopCapture(which, measure);
     },
-    autoPlayLanes: autoPlayToLanes(getConfig().autoPlay),
+    autoPlayLanes: autoLanes,
+    ...(capture
+      ? {
+          onHitProcessed: capture.onHit,
+          onTickPose: capture.onPose,
+        }
+      : {}),
   };
   if (fs) {
     setStatus('Loading samples…');
@@ -823,6 +916,27 @@ async function launchGame(
     await game.loadAndStart(dtxText, startOpts);
     overlay.style.display = 'none';
     refreshXrButton();
+    // Replay capture must start AFTER loadAndStart resolves so the
+    // chart's parsed title / artist / durationMs are available via
+    // `game.chartMeta()`. Pre-start emissions (auto-fire on the very
+    // first tick, etc.) are silently dropped by the Recorder.
+    if (capture && chart) {
+      const meta = game.chartMeta();
+      if (meta) {
+        capture.start(
+          {
+            chartPath: chart.chartPath,
+            title: meta.title,
+            artist: meta.artist,
+            durationMs: meta.durationMs,
+          },
+          {
+            audioOffsetMs: loadAudioOffsetMs(),
+            autoPlayLanes: [...autoLanes],
+          },
+        );
+      }
+    }
   } catch (e) {
     setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
     throw e;

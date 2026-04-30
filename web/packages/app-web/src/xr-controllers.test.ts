@@ -17,23 +17,31 @@ interface FakeWebGL {
     getController: (i: number) => THREE.Object3D;
     getControllerGrip: (i: number) => THREE.Object3D;
     getSession: () => null;
+    getCamera: () => THREE.Camera;
+    isPresenting: boolean;
   };
   controllers: THREE.Object3D[];
   grips: THREE.Object3D[];
+  camera: THREE.Camera;
 }
 
 function makeFakeWebGL(): FakeWebGL {
   const controllers = [new THREE.Object3D(), new THREE.Object3D()];
   const grips = [new THREE.Object3D(), new THREE.Object3D()];
-  return {
+  const camera = new THREE.PerspectiveCamera();
+  const fake: FakeWebGL = {
     xr: {
       getController: (i) => controllers[i]!,
       getControllerGrip: (i) => grips[i]!,
       getSession: () => null,
+      getCamera: () => camera,
+      isPresenting: false,
     },
     controllers,
     grips,
+    camera,
   };
+  return fake;
 }
 
 function fakeInputSource(handedness: 'left' | 'right'): XRInputSource {
@@ -404,5 +412,75 @@ describe('XrControllers — input source tracking', () => {
     new XrControllers(gl as unknown as THREE.WebGLRenderer, scene);
     expect(scene.children).toContain(gl.controllers[0]);
     expect(scene.children).toContain(gl.controllers[1]);
+  });
+});
+
+describe('XrControllers — getPoses() snapshot for replay', () => {
+  it('returns all-null before start() — no grips added to scene yet', () => {
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const xr = new XrControllers(gl as unknown as THREE.WebGLRenderer, scene);
+    // No xr.start() called — grips aren't in addedToScene, head not
+    // presenting. Snapshot must be entirely null so the recorder can
+    // safely emit a "no pose this frame" PoseSample.
+    expect(xr.getPoses()).toEqual({ head: null, left: null, right: null });
+  });
+
+  it('returns left/right poses from the grip Object3Ds after start()', () => {
+    const { xr, gl } = makeStarted();
+    // Position the fake grips and assign quaternions; getPoses() should
+    // mirror them back as Pose tuples (pos array + quat array).
+    gl.grips[0]!.position.set(0.1, 1.2, -0.3);
+    gl.grips[0]!.quaternion.set(0, 0, 0, 1);
+    gl.grips[1]!.position.set(-0.1, 1.1, -0.25);
+    // Non-identity quaternion to verify roundtrip.
+    const q = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0),
+      Math.PI / 4,
+    );
+    gl.grips[1]!.quaternion.copy(q);
+
+    const snap = xr.getPoses();
+    expect(snap.left).not.toBeNull();
+    expect(snap.right).not.toBeNull();
+    expect(snap.left!.pos).toEqual([0.1, 1.2, -0.3]);
+    expect(snap.left!.quat).toEqual([0, 0, 0, 1]);
+    expect(snap.right!.pos).toEqual([-0.1, 1.1, -0.25]);
+    // Quaternion roundtrip — exact value comparison; toArray returns
+    // [x, y, z, w] which is the contract Pose.quat documents.
+    expect(snap.right!.quat).toEqual([q.x, q.y, q.z, q.w]);
+  });
+
+  it('returns all-null after stop() — grips removed from scene', () => {
+    const { xr, gl } = makeStarted();
+    gl.grips[0]!.position.set(1, 2, 3);
+    // Sanity: pose is readable while running.
+    expect(xr.getPoses().left).not.toBeNull();
+    xr.stop();
+    // After stop(), addedToScene is cleared so left/right go back to
+    // null even though the underlying grip Object3D still exists with
+    // its old position.
+    expect(xr.getPoses()).toEqual({ head: null, left: null, right: null });
+  });
+
+  it('head is null when not presenting, mirrors camera pose when presenting', () => {
+    const { xr, gl } = makeStarted();
+    // Default fake renderer reports !isPresenting → head must be null
+    // even with grips populated.
+    expect(xr.getPoses().head).toBeNull();
+
+    // Flip into a "presenting" XR session and move the stub camera.
+    gl.xr.isPresenting = true;
+    gl.camera.position.set(0, 1.6, 0);
+    const q = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(1, 0, 0),
+      -Math.PI / 8,
+    );
+    gl.camera.quaternion.copy(q);
+
+    const head = xr.getPoses().head;
+    expect(head).not.toBeNull();
+    expect(head!.pos).toEqual([0, 1.6, 0]);
+    expect(head!.quat).toEqual([q.x, q.y, q.z, q.w]);
   });
 });
