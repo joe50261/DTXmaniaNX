@@ -118,4 +118,35 @@ describe('skin pixel content — text labels actually render', () => {
     assertInk('skill icon', 'SS', p, 6, 10, 22, 14);
     assertInk('skill icon', 'EX', p, 286, 10, 22, 14);
   });
+
+  // Separators (period, colon) used to be drawn at scale 1 inside cells
+  // whose digits were drawn at scale 2 / 3 — period rendered as a tiny
+  // speck next to large digits. Lock the digit-matching scale in via
+  // ink-count: at scale 2, the '.' glyph paints a 4×4 block (16 px);
+  // at scale 3 → 6×6 (36 px). The ':' glyph has two dots so doubles
+  // to 32 px at scale 2.
+  it('5_level number.png period is at scale 3 (matches digits)', () => {
+    const p = decodePng('5_level number.png');
+    // Period cell x=200..210. At scale 3, expect a single 6×6 block (36 px).
+    const ink = inkCount(p, 200, 0, 210, p.height);
+    expect(ink, `period in 5_level number.png cell`).toBeGreaterThanOrEqual(30);
+    // Sanity ceiling: shouldn't fill the entire 10×28 cell either.
+    expect(ink).toBeLessThan(80);
+  });
+
+  it('5_bpm font.png colon is at scale 2 (matches digits)', () => {
+    const p = decodePng('5_bpm font.png');
+    // Colon cell x=123..129. At scale 2, two 4×4 dots = 32 px.
+    const ink = inkCount(p, 123, 0, 129, p.height);
+    expect(ink, `colon in 5_bpm font.png cell`).toBeGreaterThanOrEqual(24);
+    expect(ink).toBeLessThan(60);
+  });
+
+  it('5_skill number.png period is at scale 2 (matches digits)', () => {
+    const p = decodePng('5_skill number.png');
+    // Period cell x=120..126. At scale 2, one 4×4 block = 16 px.
+    const ink = inkCount(p, 120, 0, 126, p.height);
+    expect(ink, `period in 5_skill number.png cell`).toBeGreaterThanOrEqual(12);
+    expect(ink).toBeLessThan(40);
+  });
 });

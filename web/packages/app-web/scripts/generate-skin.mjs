@@ -129,11 +129,19 @@ function strokeRect(c, x, y, w, h, color, lineW = 1) {
 }
 
 function fillRoundedRect(c, x, y, w, h, radius, color) {
-  fillRect(c, x + radius, y, w - 2 * radius, h, color);
-  fillRect(c, x, y + radius, w, h - 2 * radius, color);
-  fillCircle(c, x + radius, y + radius, radius, color);
-  fillCircle(c, x + w - radius - 1, y + radius, radius, color);
-  fillCircle(c, x + radius, y + h - radius - 1, radius, color);
+  // Paint each interior pixel exactly once. Earlier impl used a full-
+  // height horizontal strip plus a full-width vertical strip, which
+  // overlapped in a (w − 2r) × (h − 2r) middle rect — fine for opaque
+  // fills, but src-over composited semi-transparent colours twice in
+  // that overlap, making translucent panel centres visibly darker than
+  // the corner-bordered edges. Splitting the second strip into two
+  // narrow side strips keeps every interior pixel single-hit.
+  fillRect(c, x + radius, y, w - 2 * radius, h, color);                  // top + middle + bottom (centre column band)
+  fillRect(c, x,              y + radius, radius, h - 2 * radius, color); // left side strip
+  fillRect(c, x + w - radius, y + radius, radius, h - 2 * radius, color); // right side strip
+  fillCircle(c, x + radius,         y + radius,         radius, color);
+  fillCircle(c, x + w - radius - 1, y + radius,         radius, color);
+  fillCircle(c, x + radius,         y + h - radius - 1, radius, color);
   fillCircle(c, x + w - radius - 1, y + h - radius - 1, radius, color);
 }
 
@@ -384,8 +392,15 @@ async function makeLevelNumber() {
     const cy = (28 - 7 * scale) / 2;
     drawGlyph(c, ch, cx, cy, scale, COL.accentAmber);
   }
-  // '.' cell at x=200, width 10. Cell is 10×28 — center the 5×7 glyph.
-  drawGlyph(c, '.', 200 + (10 - 5) / 2, (28 - 7) / 2, 1, COL.accentAmber);
+  // '.' cell at x=200, width 10. Render at the SAME scale as the digits
+  // (3) so the period reads as a proportionally-sized dot rather than a
+  // tiny scale-1 speck next to scale-3 digits. The glyph footprint is
+  // 15×21 at scale 3 — wider than the 10-px cell — but the period's ink
+  // is only at cols 1-2 / rows 5-6, so the actual painted pixels (a
+  // 6×6 block) land cleanly inside the cell when we use the same
+  // centring formula as the digits. drawGlyph silently skips empty
+  // glyph cells, so the wider footprint never paints outside the cell.
+  drawGlyph(c, '.', 200 + (10 - 5 * scale) / 2, (28 - 7 * scale) / 2, scale, COL.accentAmber);
   await write('5_level number.png', c);
 }
 
@@ -404,11 +419,16 @@ async function makeBPMLabel() {
 //   'p'    at (132, 0, 12, 20)
 async function makeBPMFont() {
   const c = createCanvas(144, 20);
+  const scale = 2;
   for (let i = 0; i < 10; i++) {
-    drawGlyph(c, String(i), i * 12 + (12 - 5 * 2) / 2, (20 - 7 * 2) / 2, 2, COL.accentTeal);
+    drawGlyph(c, String(i), i * 12 + (12 - 5 * scale) / 2, (20 - 7 * scale) / 2, scale, COL.accentTeal);
   }
-  drawGlyph(c, ':', 123 + 0, (20 - 7) / 2, 1, COL.accentTeal);
-  drawGlyph(c, 'p', 132 + (12 - 5 * 2) / 2, (20 - 7 * 2) / 2, 2, COL.accentTeal);
+  // ':' cell at x=123, width 6. Render at the same scale as digits so
+  // it reads proportionally — see makeLevelNumber's '.' rationale.
+  // The colon's ink (cols 1-2 only) lands inside the 6-px cell; the
+  // wider scale-2 footprint of the empty cols never paints anything.
+  drawGlyph(c, ':', 123 + (6 - 5 * scale) / 2, (20 - 7 * scale) / 2, scale, COL.accentTeal);
+  drawGlyph(c, 'p', 132 + (12 - 5 * scale) / 2, (20 - 7 * scale) / 2, scale, COL.accentTeal);
   await write('5_bpm font.png', c);
 }
 
@@ -484,13 +504,14 @@ async function makeSkillIcon() {
 //   '%'    at (126, 0, 12, 20)
 async function makeSkillNumber() {
   const c = createCanvas(138, 20);
+  const scale = 2;
   for (let i = 0; i < 10; i++) {
-    drawGlyph(c, String(i), i * 12 + (12 - 5 * 2) / 2, (20 - 7 * 2) / 2, 2, COL.accentAmber);
+    drawGlyph(c, String(i), i * 12 + (12 - 5 * scale) / 2, (20 - 7 * scale) / 2, scale, COL.accentAmber);
   }
-  // '.' cell at x=120, width 6 (drawAchievementGlyphs slices 6 px). Center
-  // the 5×7 glyph; matches makeLevelNumber's pattern.
-  drawGlyph(c, '.', 120 + (6 - 5) / 2, (20 - 7) / 2, 1, COL.accentAmber);
-  drawGlyph(c, '%', 126 + (12 - 5 * 2) / 2, (20 - 7 * 2) / 2, 2, COL.accentAmber);
+  // '.' cell at x=120, width 6. Render at the same scale as digits so
+  // it reads proportionally — see makeLevelNumber's '.' rationale.
+  drawGlyph(c, '.', 120 + (6 - 5 * scale) / 2, (20 - 7 * scale) / 2, scale, COL.accentAmber);
+  drawGlyph(c, '%', 126 + (12 - 5 * scale) / 2, (20 - 7 * scale) / 2, scale, COL.accentAmber);
   await write('5_skill number.png', c);
 }
 

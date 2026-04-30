@@ -87,22 +87,60 @@ const STRICT_DIMS: Record<string, [number, number]> = {
   '7_pads.png': [384, 288],
   'ScreenPlayDrums pads flush.png': [384, 288],
   'ScreenPlay judge strings 1.png': [128, 129],
+  // chip-atlas.ts: LP at sx=660 sw=48 (right edge x=708) at sy=640 h=64
+  // (bottom edge y=704). Generator outputs 720×704 — gives a 12 px
+  // right-margin past LP without wasting transparent rows above the
+  // chip strip. Pinned strictly so a future generator tweak that
+  // changes either dimension fails the test deliberately.
+  '7_chips_drums.png': [720, 704],
 };
 
 /** Files that need to be at least this big — runtime slicers reach into
  *  fixed offsets that demand a minimum atlas size. Bigger is fine
  *  (transparent margin) but smaller silently produces wrong slices. */
-const MIN_DIMS: Record<string, [number, number]> = {
-  // chip-atlas.ts: LP at sx=660 sw=48 (right edge x=708) at sy=640 h=64
-  // (bottom edge y=704). Generator currently produces 720×720.
-  '7_chips_drums.png': [708, 704],
-};
+const MIN_DIMS: Record<string, [number, number]> = {};
+
+/** Files we don't pin to a strict size (chrome panels measured at
+ *  load time via `tex.width`/`height`). Listed here purely so
+ *  `EXPECTED_FILES` can derive the canonical 31-file count without a
+ *  magic number. Update this list — or `STRICT_DIMS` — when adding /
+ *  removing a skin asset; the file-count assertion will catch any
+ *  drift. */
+const FLEX_DIM_FILES: readonly string[] = [
+  '5_BPM.png',
+  '5_bar score.png',
+  '5_bar score selected.png',
+  '5_bar box.png',
+  '5_bar box selected.png',
+  '5_bar other.png',
+  '5_bar other selected.png',
+  '5_preimage panel.png',
+  '5_preimage default.png',
+  '5_status panel.png',
+  '5_header panel.png',
+  '5_footer panel.png',
+  '5_skill max.png',
+  '5_comment bar.png',
+  '5_scrollbar.png',
+  '7_Gauge.png',
+  '7_gauge_bar.png',
+];
+
+const EXPECTED_FILES = new Set<string>([
+  ...Object.keys(STRICT_DIMS),
+  ...Object.keys(MIN_DIMS),
+  ...FLEX_DIM_FILES,
+]);
 
 describe('skin assets', () => {
   const files = readdirSync(SKIN_DIR).filter((f) => f.endsWith('.png'));
 
-  it('directory has the canonical 31 skin PNGs (no orphan / no missing)', () => {
-    expect(files.length).toBe(31);
+  it(`directory has exactly the ${EXPECTED_FILES.size} canonical skin PNGs (no orphan, no missing)`, () => {
+    const onDisk = new Set(files);
+    const missing = [...EXPECTED_FILES].filter((f) => !onDisk.has(f));
+    const orphan = [...onDisk].filter((f) => !EXPECTED_FILES.has(f));
+    expect(missing, `missing from public/skin/`).toEqual([]);
+    expect(orphan, `orphan in public/skin/ (not in any test manifest)`).toEqual([]);
   });
 
   it.each(files)('%s is a valid PNG with non-trivial content', (file) => {
