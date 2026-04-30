@@ -67,12 +67,18 @@ const RENDER_TAIL_MS = 1500;
 const VIDEO_WIDTH = 1280;
 const VIDEO_HEIGHT = 720;
 const VIDEO_FPS = 60;
-const VIDEO_BITRATE = 5_000_000;
+const VIDEO_BITRATE = 2_500_000;
 const AUDIO_SAMPLE_RATE = 48_000;
 const AUDIO_BITRATE = 128_000;
-/** AAC's natural frame size. Chunking input to match avoids the
- * encoder doing internal slicing on every encode() call. */
-const AUDIO_FRAMES_PER_CHUNK = 1024;
+/** Larger chunks → fewer Float32Array allocs across the audio loop;
+ * 100 ms @ 48 kHz fits comfortably in any encoder's frame size. */
+const AUDIO_FRAMES_PER_CHUNK = 4800;
+/** Max video frames the encoder may have queued before we yield.
+ * Quest's RAM ceiling is much tighter than a desktop's; without
+ * this the loop pumps frames faster than the encoder consumes them
+ * and the queue grows unbounded → OOM → browser / system stall. */
+const VIDEO_QUEUE_HIGH_WATER = 10;
+const AUDIO_QUEUE_HIGH_WATER = 50;
 
 /** Codec candidate. Probed in order; first one whose video + audio
  * encoder both report `supported` wins. */
@@ -272,7 +278,7 @@ export async function renderReplayToBlob(
     // 6. Encode audio. The whole mix is already in `audioBuffer`;
     //    feed it as planar chunks to AudioEncoder.
     opts.onLog?.('Encoding audio…');
-    encodeAudioBuffer(audioBuffer, audioEncoder);
+    await encodeAudioBuffer(audioBuffer, audioEncoder);
 
     // 7. Frame-by-frame video. No wall-clock dependence — encode runs
     //    as fast as the GPU + encoder can keep up. Per-frame yield
@@ -361,10 +367,20 @@ export async function renderReplayToBlob(
       // the same JS task, so the buffer is fresh. timestamp in µs.
       const ts = Math.round((f / VIDEO_FPS) * 1_000_000);
       const frame = new VideoFrame(canvas, { timestamp: ts });
-      // Keyframe every second to keep seek-tolerant; bitrate at 5 Mbps
-      // covers ~360 KB per keyframe, fine for a 3-minute render.
+      // Keyframe every second so seeks are tolerant.
       videoEncoder.encode(frame, { keyFrame: f % VIDEO_FPS === 0 });
       frame.close();
+
+      // Backpressure: pause feeding when the encoder is more than
+      // VIDEO_QUEUE_HIGH_WATER frames behind. Without this the loop
+      // generates VideoFrames + queued chunks faster than the encoder
+      // drains, peak memory blows past Quest's RAM ceiling, and the
+      // browser tab freezes (taking 6dof tracking with it for the
+      // duration). Queue sizes ≤ 10 frames is roughly 50 MB peak.
+      if (videoEncoder.encodeQueueSize >= VIDEO_QUEUE_HIGH_WATER) {
+        // eslint-disable-next-line no-await-in-loop
+        await waitForQueueDrain(videoEncoder, VIDEO_QUEUE_HIGH_WATER / 2);
+      }
 
       if (f - lastEmitFrame >= 30) {
         lastEmitFrame = f;
@@ -373,11 +389,10 @@ export async function renderReplayToBlob(
           current: Math.max(0, songTime),
           total: song.durationMs,
         });
-        // Yield: lets the encoder thread pick up queued frames and
-        // keeps the host UI from going unresponsive during a long
-        // render. setTimeout(0) macrotask boundary is enough.
+        // Always yield at the progress emit point so DOM repaints
+        // (progress bar / log) happen even when the queue isn't full.
         // eslint-disable-next-line no-await-in-loop
-        await new Promise((r) => setTimeout(r, 0));
+        await new Promise<void>((r) => setTimeout(r, 0));
       }
     }
 
@@ -488,9 +503,15 @@ function buildMuxer(codec: CodecCandidate): {
 }
 
 /** Slice a rendered AudioBuffer into planar chunks and push them
- * through AudioEncoder. The encoder handles any internal re-slicing
- * if our chunk size doesn't align with its frame size. */
-function encodeAudioBuffer(buffer: AudioBuffer, encoder: AudioEncoder): void {
+ * through AudioEncoder. Yields whenever the encoder queue rises
+ * above the high-water mark — without backpressure the loop fires
+ * thousands of `encode()` calls synchronously and the queue grows
+ * faster than the encoder drains, which on Quest browser hits OOM
+ * → browser tab freezes → system 6dof temporarily lost. */
+async function encodeAudioBuffer(
+  buffer: AudioBuffer,
+  encoder: AudioEncoder,
+): Promise<void> {
   const numChannels = buffer.numberOfChannels;
   // Planar f32 = ch0[len] then ch1[len]. AudioEncoder reads
   // contiguous channel runs.
@@ -511,6 +532,21 @@ function encodeAudioBuffer(buffer: AudioBuffer, encoder: AudioEncoder): void {
     });
     encoder.encode(audioData);
     audioData.close();
+    if (encoder.encodeQueueSize >= AUDIO_QUEUE_HIGH_WATER) {
+      // eslint-disable-next-line no-await-in-loop
+      await waitForQueueDrain(encoder, AUDIO_QUEUE_HIGH_WATER / 2);
+    }
+  }
+}
+
+/** Block until the encoder has drained below `target` queued items.
+ * WebCodecs encoders don't expose a drain promise; poll instead. */
+async function waitForQueueDrain(
+  encoder: VideoEncoder | AudioEncoder,
+  target: number,
+): Promise<void> {
+  while (encoder.encodeQueueSize > target) {
+    await new Promise<void>((r) => setTimeout(r, 5));
   }
 }
 
