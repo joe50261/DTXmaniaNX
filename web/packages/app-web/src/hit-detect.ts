@@ -4,12 +4,12 @@ import type { PadSpec, Vec3 } from './kit-preset.js';
  * Tilted-pad strike detection.
  *
  * The previous implementation tested for a horizontal plane crossing
- * at `pad.y` — fine for flat pads, but for an arcade-tilted ride
- * (~65°) the player's stick travels along a steep arc that intersects
+ * at `pad.y` — fine for flat pads, but for a steeply tilted ride
+ * (~65°) the player's stick travels along an arc that intersects
  * the visual disc face well before its centre Y, so flat-plane checks
- * misfire. Arcade GITADORA's snare is tilted ~18°, toms ~45°, ride
- * ~65°; without normal-aware detection the rest of this PR (preset
- * sizes & angles) wouldn't actually feel right.
+ * misfire. The Arcade Standard preset uses ~18° on the snare, ~45° on
+ * toms, and ~65° on the ride; without normal-aware detection the rest
+ * of this PR (preset sizes & angles) wouldn't actually feel right.
  *
  * Pure functions only — no Three.js, no state. The caller (xr-
  * controllers.ts) supplies plain `{x,y,z}` sample positions captured

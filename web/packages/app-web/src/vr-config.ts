@@ -536,11 +536,11 @@ export class VrConfig {
    *
    * The preset row is a horizontal radio bar with one button per
    * registered kit preset, rendered at full readable width because
-   * preset labels (e.g. "GITADORA Galaxy Wave") need room. The seat
+   * preset labels (e.g. "Arcade Standard") need room. The seat
    * height slider sits below; "Sit" / "Stand" quick-set buttons map
    * to the SIT (= 0) and STAND (~+0.5 m) constants in kit-preset.ts
-   * so a player flipping between seated practice on an arcade stool
-   * and standing-room play at home gets one-tap re-calibration. */
+   * so a player flipping between seated practice on a stool and
+   * standing-room play at home gets one-tap re-calibration. */
   private paintKitSection(y: number, cfg: Config): number {
     const ctx = this.ctx;
 

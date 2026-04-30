@@ -139,9 +139,9 @@ describe('loadConfig — migrations', () => {
     expect(cfg.scrollSpeed).toBe(0.5);
   });
 
-  it('kit-preset defaults: GITADORA Galaxy Wave + zero seat offset on clean storage', () => {
+  it('kit-preset defaults: Arcade Standard + zero seat offset on clean storage', () => {
     const cfg = loadConfig();
-    expect(cfg.kitPresetId).toBe('gitadora-galaxy-wave');
+    expect(cfg.kitPresetId).toBe('arcade-standard');
     expect(cfg.seatYOffset).toBe(0);
   });
 
@@ -151,7 +151,7 @@ describe('loadConfig — migrations', () => {
       JSON.stringify({ volumeBgm: 0.6, scrollSpeed: 0.55 }),
     );
     const cfg = loadConfig();
-    expect(cfg.kitPresetId).toBe('gitadora-galaxy-wave');
+    expect(cfg.kitPresetId).toBe('arcade-standard');
     expect(cfg.seatYOffset).toBe(0);
     expect(cfg.volumeBgm).toBe(0.6);
     expect(cfg.scrollSpeed).toBe(0.55);

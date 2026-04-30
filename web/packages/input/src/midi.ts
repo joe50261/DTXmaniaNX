@@ -12,9 +12,9 @@
  * DAW passthrough) and the note number alone disambiguates the pad.
  *
  * The default note map follows General MIDI Level 1 percussion
- * (https://midi.org/general-midi-level-1). Roland TD / Yamaha DTX kits
- * use slightly different layouts but overlap heavily on 35/36 (kick)
- * and 38 (snare); per-note remap UI is a phase-2 addition.
+ * (https://midi.org/general-midi-level-1). Various electronic-kit
+ * vendors use slightly different layouts but overlap heavily on 35/36
+ * (kick) and 38 (snare); per-note remap UI is a phase-2 addition.
  */
 
 import {

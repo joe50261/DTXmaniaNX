@@ -17,9 +17,9 @@ import {
 import { Lane } from '@dtxmania/input';
 
 describe('kit-preset — registry', () => {
-  it('exposes at least one preset and the GITADORA Galaxy Wave is the default', () => {
+  it('exposes at least one preset and Arcade Standard is the default', () => {
     expect(KIT_PRESETS.length).toBeGreaterThan(0);
-    expect(DEFAULT_KIT_PRESET_ID).toBe('gitadora-galaxy-wave');
+    expect(DEFAULT_KIT_PRESET_ID).toBe('arcade-standard');
     expect(getKitPreset(DEFAULT_KIT_PRESET_ID).id).toBe(DEFAULT_KIT_PRESET_ID);
   });
 
@@ -48,39 +48,39 @@ describe('kit-preset — registry', () => {
   });
 });
 
-describe('kit-preset — Galaxy Wave arcade calibration', () => {
+describe('kit-preset — Arcade Standard calibration', () => {
   // These pin the arcade-matching invariants. If a future tweak loosens
   // them (bigger pad, flatter tilt) it must come with a deliberate
-  // justification in the PR; arcade-muscle-memory transfer is the whole
-  // point of this preset.
-  const galaxy = getKitPreset('gitadora-galaxy-wave');
+  // justification in the PR; muscle-memory transfer to a real
+  // electronic kit is the whole point of this preset.
+  const arcade = getKitPreset('arcade-standard');
   // Surface a missing-lane regression as a clear `expect` diff
   // ("expected pad for lane <n> to be defined") instead of a `TypeError`
   // on the non-null assertion path.
   const find = (l: number): PadSpec => {
-    const p = galaxy.pads.find((pad) => pad.lane === l);
-    expect(p, `Galaxy Wave preset is missing lane ${l}`).toBeDefined();
+    const p = arcade.pads.find((pad) => pad.lane === l);
+    expect(p, `Arcade Standard preset is missing lane ${l}`).toBeDefined();
     return p!;
   };
 
-  it('TP-65-class pads (HH/SD/Toms) are ~22 cm — the arcade rubber pad spec', () => {
+  it('rubber pads (HH/SD/Toms) are ~22 cm — typical electronic-pad size', () => {
     for (const lane of [Lane.HH, Lane.SD, Lane.HT, Lane.LT, Lane.FT]) {
       expect(find(lane).size).toBeCloseTo(0.22, 2);
     }
   });
 
-  it('cymbal pads (LC/CY) are 28 cm and ride is 32 cm — arcade KCK spec', () => {
+  it('cymbal pads (LC/CY) are 28 cm and ride is 32 cm — large-cymbal arcade sizes', () => {
     expect(find(Lane.LC).size).toBeCloseTo(0.28, 2);
     expect(find(Lane.CY).size).toBeCloseTo(0.28, 2);
     expect(find(Lane.RD).size).toBeCloseTo(0.32, 2);
   });
 
-  it('ride sits at the steep arcade tilt (~65°) — flat ride is what the previous build got wrong', () => {
+  it('ride sits at a steep tilt (~65°) — flat ride is what the previous build got wrong', () => {
     expect(find(Lane.RD).tiltDeg).toBeGreaterThanOrEqual(60);
     expect(find(Lane.RD).tiltDeg).toBeLessThanOrEqual(70);
   });
 
-  it('toms tilt at ~45° and snare at ~18° — matches reported arcade ergonomics', () => {
+  it('toms tilt at ~45° and snare at ~18° — matches typical arcade-style ergonomics', () => {
     expect(find(Lane.HT).tiltDeg).toBeCloseTo(45, 0);
     expect(find(Lane.LT).tiltDeg).toBeCloseTo(45, 0);
     expect(find(Lane.SD).tiltDeg).toBeCloseTo(18, 0);
@@ -98,8 +98,8 @@ describe('kit-preset — Galaxy Wave arcade calibration', () => {
   });
 
   it('whole kit fits inside a 2 m wide play space — Quest 3 default guardian', () => {
-    const xs = galaxy.pads.map((p) => p.position.x);
-    const widths = galaxy.pads.map((p) => Math.abs(p.position.x) + p.size / 2);
+    const xs = arcade.pads.map((p) => p.position.x);
+    const widths = arcade.pads.map((p) => Math.abs(p.position.x) + p.size / 2);
     const span = Math.max(...xs) - Math.min(...xs);
     expect(span).toBeLessThan(2.0);
     // No pad's outer edge crosses ±1 m from origin (centred kit).
