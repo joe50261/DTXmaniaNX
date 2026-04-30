@@ -60,9 +60,12 @@ const LANE_CHANNELS = new Set<number>([
   0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
 ]);
 
-/** Tail beyond `song.durationMs` we keep rendering for, so the last
- * judgment flash + score animation completes before encode finishes. */
-const RENDER_TAIL_MS = 1500;
+/** Tail beyond `song.durationMs` we keep rendering for. The result
+ * screen needs ≥ a few seconds for the rank / counts / FC banner to
+ * actually be readable; 1.5 s lets the song flip to 'finished' but
+ * cuts off before the player can see the score. 6 s is the
+ * "natural" dwell we'd give a real-time playback. */
+const RENDER_TAIL_MS = 6000;
 
 const VIDEO_WIDTH = 1280;
 const VIDEO_HEIGHT = 720;
@@ -224,6 +227,24 @@ export async function renderReplayToBlob(
   xr.start();
   const leftGrip = renderer.webgl.xr.getControllerGrip(0);
   const rightGrip = renderer.webgl.xr.getControllerGrip(1);
+  // Three.js's WebXRManager creates grip Object3Ds with
+  // `matrixAutoUpdate = false` and `visible = false`; both flip back
+  // on only when an XR session emits the `connected` input-source
+  // event. Without an active session those defaults stay set —
+  // applying position / quaternion does nothing because the matrix
+  // is never recomputed, and the grip is invisible anyway. Force
+  // both back on so manual pose driving + visibility work.
+  for (const g of [leftGrip, rightGrip]) {
+    g.matrixAutoUpdate = true;
+    g.visible = true;
+  }
+
+  // Head proxy. The replay records HMD pose but the live game has
+  // no head mesh (the player IS the camera in VR). For the broadcast
+  // render we want to see WHERE the player was looking, so a simple
+  // sphere + forward-pointing cone marks the head + facing.
+  const headMesh = buildHeadProxy();
+  renderer.scene.add(headMesh);
 
   // Match Renderer.enterXR's playfield framing so chips read the
   // correct size relative to the kit.
@@ -358,7 +379,24 @@ export async function renderReplayToBlob(
       if (interp) {
         if (interp.left) applyPose(leftGrip, interp.left);
         if (interp.right) applyPose(rightGrip, interp.right);
+        if (interp.head) {
+          applyPose(headMesh, interp.head);
+          headMesh.visible = true;
+        } else {
+          headMesh.visible = false;
+        }
+      } else {
+        headMesh.visible = false;
       }
+
+      // Drum-pad bounce animation: xr.tick() runs animatePadBounce
+      // (reads xr.lastPadHitMs to hop the just-struck pad's mesh
+      // briefly), then early-returns since we never set the hit
+      // listener so no hit-detection is attempted. Without this loop
+      // the pads sit perfectly still even on hits — the user reported
+      // "缺少鼓組震動".
+      xr.submitPadHits(lastPadHitMs);
+      xr.tick();
 
       renderer.webgl.render(renderer.scene, camera);
 
@@ -555,6 +593,31 @@ async function waitForQueueDrain(
 function applyPose(obj: THREE.Object3D, pose: XrPose): void {
   obj.position.set(pose.pos[0], pose.pos[1], pose.pos[2]);
   obj.quaternion.set(pose.quat[0], pose.quat[1], pose.quat[2], pose.quat[3]);
+}
+
+/** Tiny "where the player was looking" marker. Sphere for the head
+ * volume + a forward-pointing cone (along the head's local -Z, which
+ * is WebXR's looking direction) so the broadcast camera can show
+ * facing at a glance. MeshBasicMaterial avoids needing scene lights. */
+function buildHeadProxy(): THREE.Group {
+  const group = new THREE.Group();
+  group.matrixAutoUpdate = true;
+  group.visible = false;
+  const skull = new THREE.Mesh(
+    new THREE.SphereGeometry(0.10, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0xe2c79a }),
+  );
+  group.add(skull);
+  const nose = new THREE.Mesh(
+    new THREE.ConeGeometry(0.04, 0.10, 12),
+    new THREE.MeshBasicMaterial({ color: 0xc94c4c }),
+  );
+  // ConeGeometry points along +Y by default; rotate so the tip
+  // sticks out of -Z (WebXR's look direction) of the head's frame.
+  nose.rotation.x = -Math.PI / 2;
+  nose.position.set(0, 0, -0.10);
+  group.add(nose);
+  return group;
 }
 
 /** Trigger a browser download of the rendered blob. Caller composes
