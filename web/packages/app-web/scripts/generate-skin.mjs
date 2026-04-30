@@ -178,8 +178,39 @@ const GLYPHS = {
   '.': ['.....', '.....', '.....', '.....', '.....', '.##..', '.##..'],
   ':': ['.....', '.##..', '.##..', '.....', '.##..', '.##..', '.....'],
   '%': ['##..#', '##.#.', '..#..', '.#.##', '#..##', '.....', '.....'],
-  'p': ['.....', '.....', '####.', '#...#', '####.', '#....', '#....'],
   ' ': ['.....', '.....', '.....', '.....', '.....', '.....', '.....'],
+  // Uppercase A–Z. Without these, every drawText call passing an
+  // uppercase string is a silent no-op (`drawGlyph` returns early when
+  // the key is missing) — so panel chrome paints but its labels don't.
+  'A': ['.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+  'B': ['####.', '#...#', '#...#', '####.', '#...#', '#...#', '####.'],
+  'C': ['.####', '#....', '#....', '#....', '#....', '#....', '.####'],
+  'D': ['####.', '#...#', '#...#', '#...#', '#...#', '#...#', '####.'],
+  'E': ['#####', '#....', '#....', '###..', '#....', '#....', '#####'],
+  'F': ['#####', '#....', '#....', '###..', '#....', '#....', '#....'],
+  'G': ['.####', '#....', '#....', '#..##', '#...#', '#...#', '.###.'],
+  'H': ['#...#', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+  'I': ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '#####'],
+  'J': ['#####', '...#.', '...#.', '...#.', '...#.', '#..#.', '.##..'],
+  'K': ['#...#', '#..#.', '#.#..', '##...', '#.#..', '#..#.', '#...#'],
+  'L': ['#....', '#....', '#....', '#....', '#....', '#....', '#####'],
+  'M': ['#...#', '##.##', '#.#.#', '#...#', '#...#', '#...#', '#...#'],
+  'N': ['#...#', '##..#', '##..#', '#.#.#', '#..##', '#..##', '#...#'],
+  'O': ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+  'P': ['####.', '#...#', '#...#', '####.', '#....', '#....', '#....'],
+  'Q': ['.###.', '#...#', '#...#', '#...#', '#.#.#', '#..#.', '.##.#'],
+  'R': ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'],
+  'S': ['.####', '#....', '#....', '.###.', '....#', '....#', '####.'],
+  'T': ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
+  'U': ['#...#', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+  'V': ['#...#', '#...#', '#...#', '#...#', '#...#', '.#.#.', '..#..'],
+  'W': ['#...#', '#...#', '#...#', '#...#', '#.#.#', '##.##', '#...#'],
+  'X': ['#...#', '.#.#.', '..#..', '..#..', '..#..', '.#.#.', '#...#'],
+  'Y': ['#...#', '.#.#.', '.#.#.', '..#..', '..#..', '..#..', '..#..'],
+  'Z': ['#####', '....#', '...#.', '..#..', '.#...', '#....', '#####'],
+  // Lowercase 'p' kept lowercase to match the BPM-font glyph offset
+  // (`drawBpmGlyphs` slices x=132 for 'p').
+  'p': ['.....', '.....', '####.', '#...#', '####.', '#....', '#....'],
 };
 
 function drawGlyph(c, ch, x, y, scale, color) {
@@ -342,9 +373,8 @@ async function makeLevelNumber() {
     const cy = (28 - 7 * scale) / 2;
     drawGlyph(c, ch, cx, cy, scale, COL.accentAmber);
   }
-  // '.' cell at x=200, width 10
+  // '.' cell at x=200, width 10. Cell is 10×28 — center the 5×7 glyph.
   drawGlyph(c, '.', 200 + (10 - 5) / 2, (28 - 7) / 2, 1, COL.accentAmber);
-  fillRect(c, 202, 22, 4, 4, COL.accentAmber);
   await write('5_level number.png', c);
 }
 
@@ -446,7 +476,9 @@ async function makeSkillNumber() {
   for (let i = 0; i < 10; i++) {
     drawGlyph(c, String(i), i * 12 + (12 - 5 * 2) / 2, (20 - 7 * 2) / 2, 2, COL.accentAmber);
   }
-  fillRect(c, 122, 14, 3, 3, COL.accentAmber); // '.'
+  // '.' cell at x=120, width 6 (drawAchievementGlyphs slices 6 px). Center
+  // the 5×7 glyph; matches makeLevelNumber's pattern.
+  drawGlyph(c, '.', 120 + (6 - 5) / 2, (20 - 7) / 2, 1, COL.accentAmber);
   drawGlyph(c, '%', 126 + (12 - 5 * 2) / 2, (20 - 7 * 2) / 2, 2, COL.accentAmber);
   await write('5_skill number.png', c);
 }
@@ -541,7 +573,12 @@ async function makePadsAtlas(filename, glow) {
 //   HT sx=190 w=46, LT sx=246 w=46, FT sx=302 w=46, CY sx=358 w=60,
 //   LP sx=660 w=48, RD sx=432 w=48
 async function makeChipsDrums() {
-  const c = createCanvas(720, 720);
+  // Canvas only needs to reach the bottom of the chip strip
+  // (sy=640 + h=64 = 704). The widest entry is LP at sx=660+sw=48=708;
+  // 720 wide gives 12 px right-margin. No chips above y=640 so the
+  // top region stays empty by design — height 704 instead of 720
+  // saves ~80 KB of compressed-zero rows in the IDAT.
+  const c = createCanvas(720, 704);
   const CHIPS = [
     { lane: 'LC', sx: 538, sw: 64 },
     { lane: 'HH', sx: 70, sw: 46 },
@@ -630,5 +667,6 @@ const tasks = [
   makeGaugeBar,
 ];
 
-for (const t of tasks) await t();
+// Each task writes an independent file, so they fan out cleanly.
+await Promise.all(tasks.map((t) => t()));
 console.log(`Wrote ${tasks.length} skin assets to ${OUT}`);
