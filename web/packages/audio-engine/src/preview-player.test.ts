@@ -150,12 +150,19 @@ function makeMockCtx() {
 
 describe('PreviewPlayer', () => {
   let mock: ReturnType<typeof makeMockCtx>;
-  let loader: ReturnType<typeof vi.fn>;
+  type LoaderFn = (path: string) => Promise<ArrayBuffer>;
+  // vitest 4 narrowed `Mock<T>`'s generic so a bare
+  // `ReturnType<typeof vi.fn>` no longer satisfies the callable's
+  // signature when passed as a constructor arg. Annotate the
+  // function type explicitly + use `vi.fn<LoaderFn>()` so the mock
+  // stays callable in both directions: as the loader the
+  // PreviewPlayer expects, AND as the spy the assertions read.
+  let loader: ReturnType<typeof vi.fn<LoaderFn>>;
   let player: PreviewPlayer;
 
   beforeEach(() => {
     mock = makeMockCtx();
-    loader = vi.fn(async (path: string) => {
+    loader = vi.fn<LoaderFn>(async (path) => {
       // Each path gets a unique byte-length so tests can tell buffers apart.
       return new ArrayBuffer(path.length);
     });

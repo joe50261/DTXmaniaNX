@@ -437,7 +437,6 @@ export async function renderReplayToBlob(
       // browser tab freezes (taking 6dof tracking with it for the
       // duration). Queue sizes ≤ 10 frames is roughly 50 MB peak.
       if (videoEncoder.encodeQueueSize >= VIDEO_QUEUE_HIGH_WATER) {
-        // eslint-disable-next-line no-await-in-loop
         await waitForQueueDrain(videoEncoder, VIDEO_QUEUE_HIGH_WATER / 2);
       }
 
@@ -450,7 +449,6 @@ export async function renderReplayToBlob(
         });
         // Always yield at the progress emit point so DOM repaints
         // (progress bar / log) happen even when the queue isn't full.
-        // eslint-disable-next-line no-await-in-loop
         await new Promise<void>((r) => setTimeout(r, 0));
       }
     }
@@ -592,7 +590,6 @@ async function encodeAudioBuffer(
     encoder.encode(audioData);
     audioData.close();
     if (encoder.encodeQueueSize >= AUDIO_QUEUE_HIGH_WATER) {
-      // eslint-disable-next-line no-await-in-loop
       await waitForQueueDrain(encoder, AUDIO_QUEUE_HIGH_WATER / 2);
     }
   }
