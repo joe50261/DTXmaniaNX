@@ -54,6 +54,7 @@ import {
   replayActiveJudgmentFlash,
 } from './viewer-model.js';
 import { renderReplayAudioOffline } from './render-audio-offline.js';
+import { clampToPoseRange, stampFinishedAtSongMs } from './render-timeline-model.js';
 import type { Replay } from './recorder-model.js';
 
 const LANE_CHANNELS = new Set<number>([
@@ -313,6 +314,11 @@ export async function renderReplayToBlob(
     let nextHitIdx = 0;
     const lastPadHitMs = new Map<LaneValue, number>();
     let lastEmitFrame = -1000;
+    // Song-time of the playing→finished transition, stamped once (see
+    // stampFinishedAtSongMs). The result overlay fades in off this; the
+    // axis is songTime, not performance.now() — the render is faster than
+    // real time so the wall clock can't drive the fade.
+    let finishedAtSongMs: number | null = null;
 
     for (let f = 0; f < totalFrames; f++) {
       if (encoderError) throw encoderError;
@@ -328,12 +334,16 @@ export async function renderReplayToBlob(
           else tracker.record(h.judgment);
         }
         if (h.chipIndex === -1 || h.lagMs !== null || h.judgment !== 'MISS') {
-          lastPadHitMs.set(h.lane, performance.now());
+          // Song-time strike instant, NOT performance.now(): the pad
+          // bounce / flush age is computed against songTime so it fades at
+          // the right rate in the faster-than-realtime render.
+          lastPadHitMs.set(h.lane, h.songTimeMs);
         }
         nextHitIdx++;
       }
 
       const finished = songTime >= song.durationMs;
+      finishedAtSongMs = stampFinishedAtSongMs(finishedAtSongMs, songTime, finished);
       const snap = tracker.snapshot();
       const rate = finished ? computeAchievementRate(snap) : 0;
       const rank = finished ? computeRank(rate, snap.totalNotes) : 'E';
@@ -369,13 +379,18 @@ export async function renderReplayToBlob(
         rank,
         fullCombo: isFullCombo(snap),
         excellent: isExcellent(snap),
-        finishedAtMs: finished ? performance.now() : null,
+        finishedAtMs: finishedAtSongMs,
+        animClockMs: songTime,
         inXR: false,
         toast: null,
       };
       renderer.render(state);
 
-      const interp = lerpPoseSample(replay.poses, songTime);
+      // Clamp the pose query to the recorded range so the ghost hands /
+      // head proxy hold their last sample through the result-screen tail
+      // instead of vanishing (pose capture stops ~500ms after the chart
+      // ends; the render tail runs 6s).
+      const interp = lerpPoseSample(replay.poses, clampToPoseRange(songTime, replay.poses));
       if (interp) {
         if (interp.left) applyPose(leftGrip, interp.left);
         if (interp.right) applyPose(rightGrip, interp.right);
@@ -389,14 +404,20 @@ export async function renderReplayToBlob(
         headMesh.visible = false;
       }
 
-      // Drum-pad bounce animation: xr.tick() runs animatePadBounce
-      // (reads xr.lastPadHitMs to hop the just-struck pad's mesh
-      // briefly), then early-returns since we never set the hit
-      // listener so no hit-detection is attempted. Without this loop
-      // the pads sit perfectly still even on hits — the user reported
+      // Drum-pad reactions. Two independent kits animate:
+      //  - the 2D HUD pads + flush overlay on the playfield panel
+      //    (renderer.animatePads — NOT reached via renderFrame here since
+      //    we drive webgl.render manually below), and
+      //  - the 3D VR kit pads (xr.tick → animatePadBounce).
+      // Both read their lastPadHitMs map; we feed songTime as the clock so
+      // bounce/flush fade at the right rate (xr.tick early-returns after
+      // the bounce since no hit listener is set). Without these the pads
+      // sit still and the flush never flashes — the user reported
       // "缺少鼓組震動".
+      renderer.submitPadHits(lastPadHitMs);
+      renderer.animatePads(songTime);
       xr.submitPadHits(lastPadHitMs);
-      xr.tick();
+      xr.tick(songTime);
 
       renderer.webgl.render(renderer.scene, camera);
 

@@ -406,8 +406,8 @@ export class XrControllers {
     return { head, left, right };
   }
 
-  tick(): void {
-    this.animatePadBounce();
+  tick(clockMs: number = performance.now()): void {
+    this.animatePadBounce(clockMs);
     if (!this.listener) return;
     const session = this.webgl.xr.getSession();
     if (!session) return;
@@ -550,9 +550,8 @@ export class XrControllers {
   }
 
   /** Dip each struck pad downward 1.5 cm then spring back over ~150 ms. */
-  private animatePadBounce(): void {
+  private animatePadBounce(now: number = performance.now()): void {
     if (this.padMeshByLane.size === 0) return;
-    const now = performance.now();
     const durMs = 150;
     const dip = 0.015; // metres
     for (const [lane, { mesh, baseY }] of this.padMeshByLane) {

@@ -25,6 +25,7 @@
  */
 
 import { joinPath, type Song } from '@dtxmania/dtx-core';
+import { hitPlaybackVolumeMult } from './render-timeline-model.js';
 import type { Replay } from './recorder-model.js';
 
 const BGM_CHANNEL = 0x01;
@@ -84,8 +85,12 @@ export async function renderReplayAudioOffline(
     const buffer = samples.get(chip.wavId);
     if (!buffer) continue;
     const def = song.wavTable.get(chip.wavId);
+    // Mirror the live game's gain split: auto-fired chips at full volume,
+    // manual strikes attenuated to 0.7. A flat 0.7 here rendered demo /
+    // auto-play replays 30% quieter than they sounded live.
+    const mult = hitPlaybackVolumeMult(h);
     scheduleSource(ctx, buffer, h.songTimeMs / 1000, {
-      volume: def ? (def.volume / 100) * 0.7 : 0.7,
+      volume: def ? (def.volume / 100) * mult : mult,
       pan: def ? def.pan / 100 : 0,
     });
   }
