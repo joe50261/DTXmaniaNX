@@ -23,9 +23,9 @@
     "@playwright/test": "^1.50.0",
     "@types/three": "^0.160.0",
     "fake-indexeddb": "^6.0.0",
-    "happy-dom": "^20.8.9",
+    "happy-dom": "^20.10.6",
     "typescript": "^5.4.0",
-    "vite": "^6.4.2",
+    "vite": "^6.4.3",
     "vite-plugin-static-copy": "^4.1.0",
     "vitest": "^3.2.6"
   }
