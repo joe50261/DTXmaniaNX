@@ -18,7 +18,11 @@ packages/
 
 ### Toolchain
 
-Node 22 + pnpm 9 are pinned via the `volta` field in `package.json`.
+Node 22 + pnpm 9 are pinned via the `volta` field in `package.json` — this is
+the single source of truth for the Node version: Volta (local dev), Cloudflare
+Pages, and CI (`node-version-file: web/package.json` in `deploy.yml`) all
+resolve the same pin. Don't hardcode a Node version anywhere else; bump this
+one field instead.
 
 **If you already have pnpm** (Corepack, Homebrew, etc.): just `pnpm install`.
 
@@ -113,7 +117,13 @@ Dev-dep advisories are caught by two independent layers:
 There are no runtime third-party deps today (all workspace packages are
 `workspace:*`), so the attack surface is limited to the build toolchain
 (`vite`, `vitest`, `typescript`). Upgrades that resolve advisories should
-preserve the Volta pin in root `package.json` — bump both together.
+preserve the Volta pin in root `package.json` — bump both together. Check the
+new toolchain version's own `engines.node` floor (e.g. `vite`'s bundler,
+`rolldown`, requires Node `^20.19.0 || >=22.12.0`) and bump the Volta pin to
+at least that floor — pnpm silently skips installing a platform's optional
+native binding when the pinned Node doesn't satisfy the dependency's
+`engines` field, which fails the build with a confusing "cannot find native
+binding" error instead of an engine mismatch error.
 
 ## Scope
 
