@@ -1,5 +1,5 @@
 /**
- * Replay → MP4 file render path (WebCodecs).
+ * Replay → video file render path (WebCodecs).
  *
  * Faster-than-realtime: the realtime path used `MediaRecorder` +
  * `AudioEngine` and was 1× wall-clock bound (3-min song = 3-min
@@ -16,15 +16,17 @@
  *      a frame-by-frame loop. Each frame becomes a `VideoFrame` via
  *      `new VideoFrame(canvas, { timestamp })`, encoded by
  *      `VideoEncoder`.
- *   3. Mux: `mp4-muxer` interleaves video + audio chunks into an
- *      MP4 container, `ArrayBufferTarget` collects the bytes.
+ *   3. Mux: `mp4-muxer` or `webm-muxer` (per the probed codec)
+ *      interleaves video + audio chunks; `ArrayBufferTarget`
+ *      collects the bytes.
  *
- * Codec choice: `avc1.42E01E` (H.264 baseline) + `mp4a.40.2` (AAC LC).
- * One container (MP4) covers virtually every share target the user
- * cares about (YouTube / Twitter / Discord / phone gallery). WebM
- * fallback is plumbed in `render-codec-model.ts` but unused by this
- * path — H.264 encode is supported in Chromium 94+, which both Quest
- * browser and any modern desktop satisfy.
+ * Codec choice: probed at runtime from `CODEC_CANDIDATES` below.
+ * `avc1.42E01E` (H.264 baseline) + `mp4a.40.2` (AAC LC) in MP4 when
+ * the browser can encode H.264 (desktop Chromium) — best share-target
+ * compatibility; otherwise VP9/VP8 + Opus in WebM. Quest browser
+ * ships WebCodecs but not H.264 encode (licensing), so the primary
+ * target device produces `.webm`. (`render-codec-model.ts` is the old
+ * MediaRecorder-era picker and is not used by this path.)
  *
  * Out of scope here:
  *  - Stray-hit audio (sample fallback via `lastBufferByLane`); strays
@@ -55,6 +57,7 @@ import {
 } from './viewer-model.js';
 import { renderReplayAudioOffline } from './render-audio-offline.js';
 import { clampToPoseRange, stampFinishedAtSongMs } from './render-timeline-model.js';
+import { throwIfRenderAborted } from './render-job-model.js';
 import type { Replay } from './recorder-model.js';
 
 const LANE_CHANNELS = new Set<number>([
@@ -161,6 +164,11 @@ export interface RenderOpts {
   onProgress?: (p: RenderProgress) => void;
   /** Free-form one-liner per milestone. Host wires into a UI log. */
   onLog?: (line: string) => void;
+  /** Cancels the render at the next resumption point (per frame /
+   * per audio chunk / per preloaded sample). The promise rejects with
+   * an `AbortError` DOMException; all GPU + encoder resources are
+   * released on the way out. */
+  signal?: AbortSignal;
 }
 
 export interface RenderResult {
@@ -178,6 +186,8 @@ export async function renderReplayToBlob(
   chartText: string,
   opts: RenderOpts,
 ): Promise<RenderResult> {
+  throwIfRenderAborted(opts.signal);
+
   // 1. Codec probe. Try each candidate in order; first one whose
   //    video + audio encoders both report `supported` wins. Quest
   //    browser typically falls through h264 (no encode license) to
@@ -207,6 +217,7 @@ export async function renderReplayToBlob(
     onPreloadProgress: (loaded, total) => {
       opts.onProgress?.({ phase: 'preload', current: loaded, total });
     },
+    ...(opts.signal ? { signal: opts.signal } : {}),
   });
   opts.onLog?.(`Audio rendered: ${audioBuffer.duration.toFixed(1)} s.`);
 
@@ -223,6 +234,46 @@ export async function renderReplayToBlob(
   document.body.appendChild(canvas);
 
   const renderer = new Renderer(canvas, opts.skin ?? {});
+
+  // GL context-loss recovery. The render survives the page being
+  // frozen (headset off → Quest sleeps → page thaws on wake), but the
+  // freeze often takes the WebGL context with it. Without handling,
+  // every frame after the loss encodes as garbage while the progress
+  // bar keeps advancing — the render "finishes" broken. Instead:
+  // pause the frame loop on `webglcontextlost`, resume from the SAME
+  // frame on `webglcontextrestored` (three.js re-uploads its GPU
+  // resources; every piece of timeline state is plain JS; frames
+  // encoded before the pause are already safe inside the muxer).
+  //
+  // Listener order matters: these MUST be registered after the
+  // Renderer above so THREE.WebGLRenderer's own contextrestored
+  // handler (which clears its internal _isContextLost and re-inits GL
+  // state) runs before ours resolves the pause — otherwise the loop
+  // resumes while three still refuses to draw and encodes a run of
+  // black frames. The frame loop additionally yields a macrotask
+  // after the pause resolves, so this holds even if a refactor
+  // reorders the registrations.
+  let contextLost = false;
+  let contextRestoredWaiters: Array<() => void> = [];
+  const onContextLost = (e: Event): void => {
+    e.preventDefault(); // required, or webglcontextrestored never fires
+    contextLost = true;
+    opts.onLog?.('GPU context lost (device slept mid-render?) — render paused…');
+  };
+  const onContextRestored = (): void => {
+    contextLost = false;
+    opts.onLog?.('GPU context restored — resuming from the same frame.');
+    for (const w of contextRestoredWaiters.splice(0)) w();
+  };
+  canvas.addEventListener('webglcontextlost', onContextLost);
+  canvas.addEventListener('webglcontextrestored', onContextRestored);
+  /** Resolves on restore OR abort; the caller re-checks both flags. */
+  const contextPause = (): Promise<void> =>
+    new Promise<void>((resolve) => {
+      contextRestoredWaiters.push(resolve);
+      opts.signal?.addEventListener('abort', () => resolve(), { once: true });
+    });
+
   const xr = new XrControllers(renderer.webgl, renderer.scene);
   if (opts.skin?.pads) xr.setPadsTexture(opts.skin.pads);
   xr.start();
@@ -265,6 +316,13 @@ export async function renderReplayToBlob(
   // browser's rAF doesn't double-render between our explicit calls.
   renderer.webgl.setAnimationLoop(null);
 
+  // Hoisted so the finally block can close them on every exit path —
+  // an abort or error mid-encode must not leak codec resources (Quest
+  // has little RAM to spare, and a leaked hardware encoder can block
+  // the next render from configuring).
+  let videoEncoder: VideoEncoder | null = null;
+  let audioEncoder: AudioEncoder | null = null;
+
   try {
     // 5. Muxer + encoders. Build the right container for the chosen
     //    codec; the two muxer libraries have the same chunk-adding
@@ -275,7 +333,7 @@ export async function renderReplayToBlob(
       encoderError = e instanceof Error ? e : new Error(String(e));
       console.error('[render] encoder error', e);
     };
-    const videoEncoder = new VideoEncoder({
+    videoEncoder = new VideoEncoder({
       output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
       error: trapError,
     });
@@ -286,7 +344,7 @@ export async function renderReplayToBlob(
       framerate: VIDEO_FPS,
       bitrate: VIDEO_BITRATE,
     });
-    const audioEncoder = new AudioEncoder({
+    audioEncoder = new AudioEncoder({
       output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
       error: trapError,
     });
@@ -300,7 +358,7 @@ export async function renderReplayToBlob(
     // 6. Encode audio. The whole mix is already in `audioBuffer`;
     //    feed it as planar chunks to AudioEncoder.
     opts.onLog?.('Encoding audio…');
-    await encodeAudioBuffer(audioBuffer, audioEncoder);
+    await encodeAudioBuffer(audioBuffer, audioEncoder, opts.signal);
 
     // 7. Frame-by-frame video. No wall-clock dependence — encode runs
     //    as fast as the GPU + encoder can keep up. Per-frame yield
@@ -320,8 +378,30 @@ export async function renderReplayToBlob(
     // real time so the wall clock can't drive the fade.
     let finishedAtSongMs: number | null = null;
 
+    const gl = renderer.webgl.getContext();
     for (let f = 0; f < totalFrames; f++) {
       if (encoderError) throw encoderError;
+      throwIfRenderAborted(opts.signal);
+      // Hold here while the GL context is gone; continue from this
+      // exact frame once it's back. Also wakes on abort. The
+      // synchronous isContextLost() check matters: the loss EVENT is
+      // delivered as a separate task, so right after a thaw the GPU
+      // can already be gone while `contextLost` is still false — and
+      // a VideoFrame built from a dead canvas would either throw or
+      // encode garbage.
+      while (contextLost || gl.isContextLost()) {
+        if (contextLost) {
+          await contextPause();
+          // One full macrotask so every remaining contextrestored
+          // listener (three.js's GL re-init among them) has run
+          // before we start encoding again.
+          await new Promise<void>((r) => setTimeout(r, 0));
+        } else {
+          // Loss event not delivered yet — yield so its task can run.
+          await new Promise<void>((r) => setTimeout(r, 50));
+        }
+        throwIfRenderAborted(opts.signal);
+      }
       const songTime = (f / VIDEO_FPS) * 1000;
 
       // Catch up the tracker for any hit at or before the current
@@ -426,9 +506,15 @@ export async function renderReplayToBlob(
       // the same JS task, so the buffer is fresh. timestamp in µs.
       const ts = Math.round((f / VIDEO_FPS) * 1_000_000);
       const frame = new VideoFrame(canvas, { timestamp: ts });
-      // Keyframe every second so seeks are tolerant.
-      videoEncoder.encode(frame, { keyFrame: f % VIDEO_FPS === 0 });
-      frame.close();
+      try {
+        // Keyframe every second so seeks are tolerant.
+        videoEncoder.encode(frame, { keyFrame: f % VIDEO_FPS === 0 });
+      } finally {
+        // encode() clones the frame; close ours even when encode
+        // throws (e.g. the encoder errored and closed itself) so the
+        // GPU-backed frame doesn't linger until GC.
+        frame.close();
+      }
 
       // Backpressure: pause feeding when the encoder is more than
       // VIDEO_QUEUE_HIGH_WATER frames behind. Without this the loop
@@ -437,7 +523,7 @@ export async function renderReplayToBlob(
       // browser tab freezes (taking 6dof tracking with it for the
       // duration). Queue sizes ≤ 10 frames is roughly 50 MB peak.
       if (videoEncoder.encodeQueueSize >= VIDEO_QUEUE_HIGH_WATER) {
-        await waitForQueueDrain(videoEncoder, VIDEO_QUEUE_HIGH_WATER / 2);
+        await waitForQueueDrain(videoEncoder, VIDEO_QUEUE_HIGH_WATER / 2, opts.signal);
       }
 
       if (f - lastEmitFrame >= 30) {
@@ -454,6 +540,7 @@ export async function renderReplayToBlob(
     }
 
     // 8. Flush both encoders, finalise the muxer, return the bytes.
+    throwIfRenderAborted(opts.signal);
     opts.onLog?.(`Finalising ${codec.ext.toUpperCase()}…`);
     opts.onProgress?.({ phase: 'finalize', current: 0, total: 0 });
     await videoEncoder.flush();
@@ -466,6 +553,16 @@ export async function renderReplayToBlob(
     opts.onLog?.(`Done — ${mb} MB ${codec.ext.toUpperCase()}.`);
     return { blob, ext: codec.ext, mime: codec.mime };
   } finally {
+    for (const enc of [videoEncoder, audioEncoder]) {
+      try {
+        if (enc && enc.state !== 'closed') enc.close();
+      } catch {
+        /* already closed */
+      }
+    }
+    canvas.removeEventListener('webglcontextlost', onContextLost);
+    canvas.removeEventListener('webglcontextrestored', onContextRestored);
+    contextRestoredWaiters = [];
     try {
       xr.stop();
     } catch {
@@ -568,6 +665,7 @@ function buildMuxer(codec: CodecCandidate): {
 async function encodeAudioBuffer(
   buffer: AudioBuffer,
   encoder: AudioEncoder,
+  signal?: AbortSignal,
 ): Promise<void> {
   const numChannels = buffer.numberOfChannels;
   // Planar f32 = ch0[len] then ch1[len]. AudioEncoder reads
@@ -575,6 +673,7 @@ async function encodeAudioBuffer(
   const ch0 = buffer.getChannelData(0);
   const ch1 = numChannels > 1 ? buffer.getChannelData(1) : ch0;
   for (let off = 0; off < buffer.length; off += AUDIO_FRAMES_PER_CHUNK) {
+    throwIfRenderAborted(signal);
     const len = Math.min(AUDIO_FRAMES_PER_CHUNK, buffer.length - off);
     const data = new Float32Array(len * 2);
     data.set(ch0.subarray(off, off + len), 0);
@@ -590,18 +689,21 @@ async function encodeAudioBuffer(
     encoder.encode(audioData);
     audioData.close();
     if (encoder.encodeQueueSize >= AUDIO_QUEUE_HIGH_WATER) {
-      await waitForQueueDrain(encoder, AUDIO_QUEUE_HIGH_WATER / 2);
+      await waitForQueueDrain(encoder, AUDIO_QUEUE_HIGH_WATER / 2, signal);
     }
   }
 }
 
 /** Block until the encoder has drained below `target` queued items.
- * WebCodecs encoders don't expose a drain promise; poll instead. */
+ * WebCodecs encoders don't expose a drain promise; poll instead.
+ * Bails on abort so Cancel isn't held hostage by a stalled encoder. */
 async function waitForQueueDrain(
   encoder: VideoEncoder | AudioEncoder,
   target: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   while (encoder.encodeQueueSize > target) {
+    throwIfRenderAborted(signal);
     await new Promise<void>((r) => setTimeout(r, 5));
   }
 }

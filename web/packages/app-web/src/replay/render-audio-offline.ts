@@ -26,6 +26,7 @@
 
 import { joinPath, type Song } from '@dtxmania/dtx-core';
 import { hitPlaybackVolumeMult } from './render-timeline-model.js';
+import { throwIfRenderAborted } from './render-job-model.js';
 import type { Replay } from './recorder-model.js';
 
 const BGM_CHANNEL = 0x01;
@@ -44,6 +45,10 @@ export interface OfflineRenderOpts {
   sampleRate?: number;
   /** Optional progress callback fired per sample loaded. */
   onPreloadProgress?: (loaded: number, total: number) => void;
+  /** Cancels between sample loads and before the offline mix starts.
+   * (`OfflineAudioContext.startRendering` itself is not interruptible,
+   * but it runs faster than realtime so the residual latency is small.) */
+  signal?: AbortSignal;
 }
 
 export async function renderReplayAudioOffline(
@@ -59,7 +64,14 @@ export async function renderReplayAudioOffline(
     sampleRate,
   });
 
-  const samples = await preloadSamplesOffline(song, ctx, fs, opts.onPreloadProgress);
+  const samples = await preloadSamplesOffline(
+    song,
+    ctx,
+    fs,
+    opts.onPreloadProgress,
+    opts.signal,
+  );
+  throwIfRenderAborted(opts.signal);
 
   // BGM tracks the chart's BGM_CHANNEL chips at their playbackTimeMs.
   for (const chip of song.chips) {
@@ -103,6 +115,7 @@ async function preloadSamplesOffline(
   ctx: OfflineAudioContext,
   fs: OfflineRenderFs,
   onProgress?: (loaded: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<Map<number, AudioBuffer>> {
   const ids = new Set<number>();
   for (const chip of song.chips) {
@@ -123,12 +136,18 @@ async function preloadSamplesOffline(
     Array.from(ids).map(async (id) => {
       const def = song.wavTable.get(id);
       try {
-        if (def?.path) {
+        // Skip (not throw) on abort — the catch below exists to soak
+        // up per-file load failures and would swallow an AbortError
+        // too. The caller re-checks the signal after Promise.all and
+        // rejects the render from there.
+        if (def?.path && !signal?.aborted) {
           const bytes = await fs.backend.readFile(joinPath(fs.folder, def.path));
-          // decodeAudioData mutates the input on some browsers; slice to
-          // a fresh ArrayBuffer first to keep the cache shape stable.
-          const decoded = await ctx.decodeAudioData(bytes.slice(0));
-          out.set(id, decoded);
+          if (!signal?.aborted) {
+            // decodeAudioData mutates the input on some browsers; slice to
+            // a fresh ArrayBuffer first to keep the cache shape stable.
+            const decoded = await ctx.decodeAudioData(bytes.slice(0));
+            out.set(id, decoded);
+          }
         }
       } catch (e) {
         console.warn('[render-audio] sample load failed', def?.path, e);

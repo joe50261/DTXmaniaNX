@@ -13,10 +13,12 @@
  *  - State + transition logic lives in `replays-list-model.ts`; this
  *    file is the thin subscriber that paints + dispatches clicks.
  *
- * Render integration is intentionally a placeholder for now — the
- * "Render" button shows a "coming soon" message. The list, sort, and
- * delete paths are fully wired so the user can already manage their
- * stored replays.
+ * Render integration: the host (main.ts) owns the render job — this
+ * panel only paints its progress. The panel therefore exposes two
+ * distinct entries into render mode: `showRender()` (a NEW job —
+ * resets bar/status/log) and `resumeRenderView()` (an EXISTING job —
+ * flips visibility only, so a re-click on Render while a job is
+ * running surfaces the live progress instead of wiping it).
  */
 
 import {
@@ -43,10 +45,14 @@ const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
 ];
 
 export interface ReplaysPanelDeps {
-  /** Hook for the future render integration. Receives the chosen
-   * replay's id; the host orchestrates load → render → download.
-   * Optional so this panel can ship before the render slice lands. */
+  /** Receives the chosen replay's id; the host orchestrates
+   * load → render → download (and enforces single-flight — see
+   * `render-job-model.ts`). Optional so this panel can ship before
+   * the render slice lands. */
   onRender?: (id: string) => void;
+  /** Cancel the in-flight render. The host aborts its controller; the
+   * panel just relays the click. */
+  onCancelRender?: () => void;
 }
 
 export class ReplaysPanel {
@@ -59,6 +65,14 @@ export class ReplaysPanel {
   private readonly renderBarEl: HTMLProgressElement;
   private readonly renderStatusEl: HTMLDivElement;
   private readonly renderLogEl: HTMLDivElement;
+  private readonly renderCancelBtn: HTMLButtonElement;
+  private readonly renderSaveBtn: HTMLButtonElement;
+  /** Re-triggers the download of the finished render's blob. Held so
+   * a render that finishes while the tab is hidden (headset off — the
+   * browser drops programmatic download clicks there) still has a
+   * user-gesture path to the file. Cleared on hideRender so the blob
+   * can be GC'd. */
+  private saveCb: (() => void) | null = null;
   private state: ListState = initialState();
   private readonly deps: ReplaysPanelDeps;
 
@@ -141,6 +155,24 @@ export class ReplaysPanel {
     this.renderLogEl.className = 'replays-render-log';
     const renderFooter = document.createElement('div');
     renderFooter.className = 'config-footer';
+    this.renderSaveBtn = document.createElement('button');
+    this.renderSaveBtn.type = 'button';
+    this.renderSaveBtn.textContent = 'Save video';
+    this.renderSaveBtn.style.display = 'none';
+    this.renderSaveBtn.addEventListener('click', () => this.saveCb?.());
+    renderFooter.appendChild(this.renderSaveBtn);
+    this.renderCancelBtn = document.createElement('button');
+    this.renderCancelBtn.type = 'button';
+    this.renderCancelBtn.className = 'danger';
+    this.renderCancelBtn.textContent = 'Cancel render';
+    // Hidden until showRender — resumeRenderView can surface this
+    // view before the first job ever reaches showRender, and a
+    // visible Cancel with no job behind it would be a dead button.
+    this.renderCancelBtn.style.display = 'none';
+    this.renderCancelBtn.addEventListener('click', () => {
+      this.deps.onCancelRender?.();
+    });
+    renderFooter.appendChild(this.renderCancelBtn);
     const renderClose = document.createElement('button');
     renderClose.type = 'button';
     renderClose.textContent = 'Back to replays';
@@ -199,8 +231,8 @@ export class ReplaysPanel {
     }
   }
 
-  /** Switch the modal into "rendering" mode: hide the list + sort
-   * toolbar, surface the progress bar / status / log. Title is the
+  /** Switch the modal into "rendering" mode for a NEW job: reset the
+   * bar / status / log, then surface the progress view. Title is the
    * row being rendered so the user can confirm at a glance. */
   showRender(rowTitle: string): void {
     this.renderTitleEl.textContent = `Rendering: ${rowTitle}`;
@@ -208,6 +240,43 @@ export class ReplaysPanel {
     this.renderBarEl.max = 1;
     this.renderStatusEl.textContent = 'Starting…';
     this.renderLogEl.textContent = '';
+    this.renderCancelBtn.style.display = '';
+    this.renderSaveBtn.style.display = 'none';
+    this.saveCb = null;
+    this.enterRenderView();
+  }
+
+  /** Re-surface the progress view of the job that's ALREADY running,
+   * without touching its bar / status / log. This is what a Render
+   * click lands on while a job is in flight — after a headset
+   * sleep/wake the first job resumes where it froze, and the re-click
+   * must show that progress, not start a competing render. */
+  resumeRenderView(): void {
+    this.enterRenderView();
+  }
+
+  /** The render job ended. Hide Cancel; when the host hands us a
+   * `save` callback (success path) surface the "Save video" button so
+   * a download the browser suppressed (hidden tab at completion) can
+   * be re-triggered by a real user gesture.
+   *
+   * If the user already left the render view AND the tab is visible,
+   * the automatic download has delivered the file — drop the callback
+   * so the Blob can be GC'd. But when the tab is hidden (headset set
+   * down — the exact workflow this feature serves) the automatic
+   * download was suppressed and this callback is the ONLY remaining
+   * path to the finished file: keep it and re-surface the render view
+   * so the button is actually reachable when the user returns. */
+  finishRender(save: (() => void) | null): void {
+    this.renderCancelBtn.style.display = 'none';
+    const inRenderView = this.renderEl.classList.contains('active');
+    const keep = save !== null && (inRenderView || document.hidden);
+    this.saveCb = keep ? save : null;
+    this.renderSaveBtn.style.display = this.saveCb ? '' : 'none';
+    if (keep && !inRenderView) this.enterRenderView();
+  }
+
+  private enterRenderView(): void {
     this.toolbar.style.display = 'none';
     this.listEl.style.display = 'none';
     this.renderEl.classList.add('active');
@@ -260,6 +329,10 @@ export class ReplaysPanel {
     this.renderEl.classList.remove('active');
     this.toolbar.style.display = '';
     this.listEl.style.display = '';
+    // Drop the save closure — it pins the rendered Blob (potentially
+    // ~100 MB) and the user has left the render view.
+    this.saveCb = null;
+    this.renderSaveBtn.style.display = 'none';
     // Refresh in case the user just rendered a replay and we want
     // the list to reflect any incidental changes (no-op on success
     // path; cheap).

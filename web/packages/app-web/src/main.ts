@@ -52,6 +52,14 @@ import {
   suggestFilename,
   triggerDownload,
 } from './replay/render.js';
+import {
+  endJob,
+  idleJobState,
+  isCurrentJob,
+  isJobRunning,
+  startJob,
+} from './replay/render-job-model.js';
+import { RenderWakeLock } from './replay/wake-lock.js';
 import { loadReplay } from './replay/storage.js';
 import { activeToast, showToast } from './hud-toast.js';
 
@@ -469,56 +477,125 @@ const configPanel = new ConfigPanel({
 configBtn.addEventListener('click', () => configPanel.open());
 
 // Replays browser — desktop-only entry. The Render button drives the
-// real-time MediaRecorder pipeline in `replay/render.ts`; the panel
-// surfaces phase-aware progress + a log scrollback so a 3-minute
-// silent render doesn't look like a hang.
+// WebCodecs pipeline in `replay/render.ts`; the panel surfaces
+// phase-aware progress + a log scrollback so a long silent render
+// doesn't look like a hang.
+//
+// Job management (see replay/render-job-model.ts for the rationale):
+// exactly one render at a time. The typical workflow is click Render →
+// take the headset off → device sleeps → page freezes mid-render →
+// thaws on wake with the job still running. A second Render click in
+// that state must surface the live job's progress, NOT start a
+// competing render that interleaves writes into the same progress bar.
+let renderJobState = idleJobState();
+let renderAbort: AbortController | null = null;
+const renderWakeLock = new RenderWakeLock();
+
 const replaysPanel = new ReplaysPanel({
   onRender: (id) => {
+    // Single-flight guard, synchronously BEFORE the first await — two
+    // clicks in the same frame must not both pass an async check.
+    if (isJobRunning(renderJobState)) {
+      replaysPanel.resumeRenderView();
+      setStatus('A render is already in progress — showing it.');
+      return;
+    }
+    if (!library) {
+      setStatus('Pick your songs folder first — render needs WAV access.');
+      return;
+    }
+    const lib = library;
+    const started = startJob(renderJobState, id)!;
+    renderJobState = started.state;
+    const token = started.token;
+    const controller = new AbortController();
+    renderAbort = controller;
+    // Reset the render pane to THIS job synchronously — a re-click
+    // landing during the loads below resumes into the new job's
+    // (empty) pane, never the previous job's finished one.
+    replaysPanel.showRender('…');
     run(async () => {
-      if (!library) {
-        setStatus('Pick your songs folder first — render needs WAV access.');
-        return;
-      }
-      const replay = await loadReplay(id);
-      if (!replay) {
-        setStatus('Replay not found (it may have been deleted).');
-        return;
-      }
-      let chartText: string;
       try {
-        chartText = await library.backend.readText(replay.meta.chartPath);
-      } catch (e) {
-        setStatus(
-          `Render failed: chart not in current folder (${replay.meta.chartPath}).`,
-        );
-        console.warn('[render] readText failed', e);
-        return;
+        const replay = await loadReplay(id);
+        if (!replay) {
+          replaysPanel.hideRender();
+          setStatus('Replay not found (it may have been deleted).');
+          return;
+        }
+        let chartText: string;
+        try {
+          chartText = await lib.backend.readText(replay.meta.chartPath);
+        } catch (e) {
+          replaysPanel.hideRender();
+          setStatus(
+            `Render failed: chart not in current folder (${replay.meta.chartPath}).`,
+          );
+          console.warn('[render] readText failed', e);
+          return;
+        }
+        const rowTitle = replay.meta.title ?? replay.meta.chartPath;
+        replaysPanel.showRender(rowTitle);
+        replaysPanel.appendRenderLog(`Source: ${replay.meta.chartPath}`);
+        setStatus('Rendering replay… see the panel for progress.');
+        // Keep the device awake for the duration where the platform
+        // allows it — the render otherwise freezes with the page when
+        // the screen sleeps and only resumes on the next wake.
+        await renderWakeLock.acquire((line) => replaysPanel.appendRenderLog(line));
+        // Stale-callback fence: once this job is no longer current
+        // (cancelled and a new one started), its late progress/log
+        // emits must not repaint the newer job's panel.
+        const ifCurrent = (fn: () => void): void => {
+          if (isCurrentJob(renderJobState, token)) fn();
+        };
+        try {
+          const skin = await skinPromise.catch(() => undefined);
+          const result = await renderReplayToBlob(replay, chartText, {
+            fs: { backend: lib.backend, folder: dirname(replay.meta.chartPath) },
+            ...(skin ? { skin } : {}),
+            signal: controller.signal,
+            onProgress: (p) => ifCurrent(() => replaysPanel.updateRenderProgress(p)),
+            onLog: (line) => ifCurrent(() => replaysPanel.appendRenderLog(line)),
+          });
+          const filename = suggestFilename(replay, result.ext);
+          // Surface "Save video" BEFORE the automatic download attempt:
+          // if the tab is hidden right now (headset set down), browsers
+          // drop the programmatic click and the button is the only way
+          // the user can still reach the finished file.
+          replaysPanel.finishRender(() => triggerDownload(result.blob, filename));
+          triggerDownload(result.blob, filename);
+          if (document.hidden) {
+            replaysPanel.appendRenderLog(
+              'Finished while the tab was hidden — use "Save video" if no download started.',
+            );
+          }
+          replaysPanel.appendRenderLog('Download triggered.');
+          setStatus(`Render done — saved as ${result.ext.toUpperCase()}.`);
+        } catch (e) {
+          replaysPanel.finishRender(null);
+          if (controller.signal.aborted) {
+            replaysPanel.appendRenderLog('Render cancelled.');
+            setStatus('Render cancelled.');
+            return;
+          }
+          const msg = e instanceof Error ? e.message : String(e);
+          replaysPanel.appendRenderLog(`ERROR: ${msg}`);
+          setStatus(`Render failed: ${msg}`);
+          console.warn('[render] renderReplayToBlob failed', e);
+        }
+        // Render overlay stays visible after completion (success or
+        // failure) so the user can read the final log line + size.
+        // They dismiss via "Back to replays" or the modal ✕.
+      } finally {
+        void renderWakeLock.release();
+        renderAbort = null;
+        renderJobState = endJob(renderJobState, token);
       }
-      const rowTitle = replay.meta.title ?? replay.meta.chartPath;
-      replaysPanel.showRender(rowTitle);
-      replaysPanel.appendRenderLog(`Source: ${replay.meta.chartPath}`);
-      setStatus('Rendering replay… see the panel for progress.');
-      try {
-        const skin = await skinPromise.catch(() => undefined);
-        const result = await renderReplayToBlob(replay, chartText, {
-          fs: { backend: library.backend, folder: dirname(replay.meta.chartPath) },
-          ...(skin ? { skin } : {}),
-          onProgress: (p) => replaysPanel.updateRenderProgress(p),
-          onLog: (line) => replaysPanel.appendRenderLog(line),
-        });
-        triggerDownload(result.blob, suggestFilename(replay, result.ext));
-        replaysPanel.appendRenderLog('Download triggered.');
-        setStatus(`Render done — saved as ${result.ext.toUpperCase()}.`);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        replaysPanel.appendRenderLog(`ERROR: ${msg}`);
-        setStatus(`Render failed: ${msg}`);
-        console.warn('[render] renderReplayToBlob failed', e);
-      }
-      // Render overlay stays visible after completion (success or
-      // failure) so the user can read the final log line + size.
-      // They dismiss via "Back to replays" or the modal ✕.
     });
+  },
+  onCancelRender: () => {
+    if (!renderAbort) return;
+    replaysPanel.appendRenderLog('Cancel requested…');
+    renderAbort.abort();
   },
 });
 replaysBtn.addEventListener('click', () => {
