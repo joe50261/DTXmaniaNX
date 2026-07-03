@@ -263,10 +263,7 @@ class ConfigForm {
       window.addEventListener('gamepaddisconnected', () => this.refreshGamepadStatus());
     }
 
-    // Controller rumble kill switch — mitigation for the Quest Browser
-    // WebXR haptic L/R routing bug (issue #16): the upstream bug buzzes
-    // the wrong hand, which feels like hitting the wrong pad. Off = no
-    // vibration at all, which beats wrong-hand vibration.
+    // Master switch for controller vibration on hits.
     const rm = checkboxRow('Controller rumble (VR haptics)');
     this.rumbleInput = rm.input;
     rm.input.addEventListener('change', () => {
@@ -277,8 +274,7 @@ class ConfigForm {
     const rumbleHint = document.createElement('div');
     rumbleHint.className = 'config-note';
     rumbleHint.textContent =
-      'Quest Browser currently routes rumble to the wrong hand (upstream bug). ' +
-      'Turn this off if the buzz feels mis-sided.';
+      'Vibrate the controllers on drum hits. Turn off if the rumble feels wrong or mis-sided.';
     inputs.body.appendChild(rumbleHint);
 
     const mi = checkboxRow('Enable MIDI drum input');

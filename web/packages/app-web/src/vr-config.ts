@@ -43,11 +43,11 @@ const PANEL_W_PX = 1024;
 // Auto-play (11-lane grid) + Practice + Diagnostics + Footer without
 // overflow. Drum kit picker adds ~140 px (preset bar + description +
 // seat slider + Sit/Stand quick buttons); the Controller rumble
-// toggle (issue #16 mitigation) adds another 44 px row to Gameplay.
-// The previous 1120 px clipped the auto-play grid's last row once
-// the Drum kit section landed above it, and 1260 px would push the
-// Diagnostics row into the footer strip with the rumble row added;
-// the unit-test sweep over `__testHits()` catches further drift.
+// toggle adds another 44 px row to Gameplay. The previous 1120 px
+// clipped the auto-play grid's last row once the Drum kit section
+// landed above it, and 1260 px would push the Diagnostics row into
+// the footer strip with the rumble row added; the unit-test sweep
+// over `__testHits()` catches further drift.
 const PANEL_H_PX = 1320;
 const PANEL_WORLD_W = 1.6;
 const PANEL_WORLD_H = (PANEL_WORLD_W * PANEL_H_PX) / PANEL_W_PX;
@@ -397,9 +397,6 @@ export class VrConfig {
     y = this.paintToggle(y, 'FAST / SLOW indicator', cfg.showFastSlow, (v) =>
       updateConfig({ showFastSlow: v })
     );
-    // Haptic kill switch — mitigation for the Quest Browser WebXR L/R
-    // rumble routing bug (#16). Players hit by the wrong-hand buzz can
-    // silence it here without leaving the headset.
     y = this.paintToggle(y, 'Controller rumble', cfg.rumbleEnabled, (v) =>
       updateConfig({ rumbleEnabled: v })
     );

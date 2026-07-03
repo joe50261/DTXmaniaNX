@@ -140,8 +140,7 @@ describe('loadConfig — migrations', () => {
   });
 
   it('rumbleEnabled defaults on; existing storage without the key backfills to true', () => {
-    // Fresh storage → rumble on (the pre-#16 behaviour, unchanged for
-    // anyone not hit by the Quest Browser wrong-hand-buzz bug).
+    // Fresh storage → rumble on.
     expect(loadConfig().rumbleEnabled).toBe(true);
     // Old stored config predating the setting picks up the default
     // without disturbing surrounding fields.
@@ -155,7 +154,7 @@ describe('loadConfig — migrations', () => {
     expect(cfg.scrollSpeed).toBe(0.5);
   });
 
-  it('a stored rumbleEnabled: false survives the merge (player opted out of the wrong-hand buzz)', () => {
+  it('a stored rumbleEnabled: false survives the merge', () => {
     localStorage.setItem(
       'dtxmania.config',
       JSON.stringify({ rumbleEnabled: false }),

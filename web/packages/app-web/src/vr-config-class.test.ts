@@ -363,7 +363,7 @@ describe('VrConfig — canvas-2D panel wiring', () => {
     expect(getConfig().seatYOffset).toBe(SEAT_Y_OFFSET_STAND);
   });
 
-  it('clicking the Controller rumble toggle flips config.rumbleEnabled (issue #16 mitigation)', () => {
+  it('clicking the Controller rumble toggle flips config.rumbleEnabled', () => {
     const { panel } = makeConfigPanel();
     panel.show(() => {});
     expect(getConfig().rumbleEnabled).toBe(true);

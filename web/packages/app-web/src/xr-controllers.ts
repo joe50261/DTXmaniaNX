@@ -437,12 +437,8 @@ export class XrControllers {
    * directly.
    */
   pulseHaptic(controllerIdx: number): void {
-    // Player-facing kill switch (Settings → Controller rumble), added as
-    // a mitigation for the Quest Browser WebXR haptic L/R routing bug —
-    // wrong-hand buzz makes players feel they struck the wrong pad, so
-    // "off" restores trust in their own hits until upstream fixes it.
-    // Tracking: #16
-    // Upstream: developers.meta.com/horizon/feedback/vr/investigations/1691711595330760
+    // Master switch (Settings → Controller rumble). Read per-call so
+    // toggling it takes effect live, with no reconnect.
     if (!getConfig().rumbleEnabled) return;
     const src = this.inputSources[controllerIdx];
     const gp = src?.gamepad as

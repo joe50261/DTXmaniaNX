@@ -338,11 +338,9 @@ describe('XrControllers — input source tracking', () => {
   });
 
   // Settings → Controller rumble = OFF must silence BOTH actuator paths
-  // (standard vibrationActuator and legacy hapticActuators fallback).
-  // The toggle is the player-facing mitigation for the Quest Browser
-  // WebXR L/R haptic routing bug (#16): while upstream buzzes the wrong
-  // hand, players need a way to kill the misleading feedback entirely —
-  // and get it back with no reconnect once the browser is fixed.
+  // (standard vibrationActuator and legacy hapticActuators fallback),
+  // and flipping it back on must resume with no reconnect (the gate
+  // reads getConfig() per call).
   it('pulseHaptic is fully silenced while rumbleEnabled is off, and resumes when re-enabled', async () => {
     const { xr, gl } = makeStarted();
     const playEffectCalls: Array<['dual-rumble', PlayEffectParams]> = [];
