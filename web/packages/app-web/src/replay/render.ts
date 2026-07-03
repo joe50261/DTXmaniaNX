@@ -58,6 +58,7 @@ import {
 import { renderReplayAudioOffline } from './render-audio-offline.js';
 import { clampToPoseRange, stampFinishedAtSongMs } from './render-timeline-model.js';
 import { throwIfRenderAborted } from './render-job-model.js';
+import { BROADCAST_CAMERA, PLAYFIELD_PANEL } from './broadcast-camera-model.js';
 import type { Replay } from './recorder-model.js';
 
 const LANE_CHANNELS = new Set<number>([
@@ -299,17 +300,26 @@ export async function renderReplayToBlob(
   renderer.scene.add(headMesh);
 
   // Match Renderer.enterXR's playfield framing so chips read the
-  // correct size relative to the kit.
-  const xrScale = 2.4 / 1280;
+  // correct size relative to the kit. Panel centre comes from the camera
+  // model so its framing target and the placement here can't drift.
+  const xrScale = PLAYFIELD_PANEL.width / 1280;
   renderer.playfield.scale.setScalar(xrScale);
-  renderer.playfield.position.set(0, 1.6, -2.0);
+  renderer.playfield.position.set(...PLAYFIELD_PANEL.center);
 
-  // Broadcast camera. FOV 95° + position above-and-behind so the
-  // outer kit pads + the playfield panel both fit. Auto-cinematography
-  // with cuts is a follow-up slice.
-  const camera = new THREE.PerspectiveCamera(95, VIDEO_WIDTH / VIDEO_HEIGHT, 0.05, 20);
-  camera.position.set(0, 2.2, 0.8);
-  camera.lookAt(0, 1.0, -1.0);
+  // Broadcast camera — a fixed above-and-behind angle. `fov` is the VERTICAL
+  // field of view; 70° (down from an earlier 95°) fills the frame with the
+  // kit + highway instead of leaving fat black bars top and bottom. See
+  // broadcast-camera-model.ts for the framing rationale; the test there pins
+  // that the whole kit stays in-frame across every preset / seat offset.
+  // Auto-cinematography with cuts is a follow-up slice.
+  const camera = new THREE.PerspectiveCamera(
+    BROADCAST_CAMERA.fovDeg,
+    VIDEO_WIDTH / VIDEO_HEIGHT,
+    BROADCAST_CAMERA.near,
+    BROADCAST_CAMERA.far,
+  );
+  camera.position.set(...BROADCAST_CAMERA.position);
+  camera.lookAt(...BROADCAST_CAMERA.lookAt);
 
   // Renderer.constructor calls webgl.setAnimationLoop with its own
   // tick. We're driving manually frame-by-frame; null it out so the
