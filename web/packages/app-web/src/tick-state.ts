@@ -1,4 +1,5 @@
 import { Judgment } from '@dtxmania/dtx-core';
+import { Lane, type LaneValue } from '@dtxmania/input';
 
 /**
  * Pure decision helpers extracted from `Game.tick()` and
@@ -238,4 +239,100 @@ export function updateCancelEdgeState(i: CancelEdgeInput): CancelEdgeOutput {
     // else: still pressed, still latched — no change.
   }
   return { next, firedBy };
+}
+
+// ---- VR trigger → kick-pedal edge detection -------------------------
+
+/** Which judgment lane each hand's trigger drives. Quest has no foot
+ * tracking, so the index-finger triggers stand in for the pedals:
+ * left trigger = left pedal lane (LP, DTX channel 0x1B), right
+ * trigger = bass drum lane (BD, 0x13). LBD 0x1C — the LEFT-foot
+ * double-bass channel — is projected onto BD by channelToLane, so
+ * after projection BD carries both feet's bass notes and the right
+ * trigger plays them all. */
+export const TRIGGER_KICK_LANE_BY_HAND = {
+  left: Lane.LP,
+  right: Lane.BD,
+} as const;
+
+export interface TriggerKickInput {
+  /** Previous-frame trigger latch per controller slot [0, 1]. */
+  prev: readonly [boolean, boolean];
+  /** Whether each slot had a connected input source LAST frame. On a
+   * slot's first observed frame (null → source transition: controller
+   * reconnect, re-enter VR mid-song) the raw pressed state seeds the
+   * latch WITHOUT firing — a pull that predates observation isn't a
+   * kick. Without this, a trigger already squeezed while the slot was
+   * unobserved (masked to pressed=false) would edge-fire a phantom
+   * hit the moment the source appears. */
+  prevConnected: readonly [boolean, boolean];
+  /** This frame's raw trigger-pressed state per controller slot. */
+  pressed: readonly [boolean, boolean];
+  /** `XRInputSource.handedness` per slot, or null when that slot has
+   * no connected source. Slot order is NOT handedness (WebXR assigns
+   * slots independently of which hand connects first), which is why
+   * the lane is resolved from handedness here rather than from the
+   * slot index. */
+  handedness: readonly ['left' | 'right' | 'none' | null, 'left' | 'right' | 'none' | null];
+  /** Whether trigger-kick input is live this frame (in VR and
+   * status === 'playing'). While false the latches TRACK the raw
+   * pressed state (without firing) instead of resetting — the VR menu
+   * confirms song picks with the same trigger, so a pull still held
+   * when the song starts must not edge-fire a kick on the first
+   * playing frame. The player has to release and re-pull. */
+  active: boolean;
+}
+
+export interface TriggerKickFire {
+  /** Controller slot that fired — the caller pulses haptics on this
+   * slot (haptic routing is slot-indexed, see XrControllers.pulseHaptic). */
+  slot: 0 | 1;
+  lane: LaneValue;
+  /** Debug tag for LaneHitEvent.key. */
+  key: string;
+}
+
+export interface TriggerKickOutput {
+  next: [boolean, boolean];
+  /** Lane hits to dispatch this frame. Unlike the cancel edge (first
+   * press wins), both triggers may fire in the same frame — a
+   * simultaneous double-kick is two independent hits. */
+  fires: TriggerKickFire[];
+}
+
+export function stepTriggerKick(i: TriggerKickInput): TriggerKickOutput {
+  if (!i.active) {
+    return { next: [i.pressed[0], i.pressed[1]], fires: [] };
+  }
+  const next: [boolean, boolean] = [i.prev[0], i.prev[1]];
+  const fires: TriggerKickFire[] = [];
+  for (let s = 0 as 0 | 1; s < 2; s = (s + 1) as 0 | 1) {
+    const pressed = i.pressed[s];
+    if (!i.prevConnected[s]) {
+      // First observed frame for this slot — adopt the raw state
+      // without edge detection so a pull that predates observation
+      // can't fire.
+      next[s] = pressed;
+      continue;
+    }
+    if (pressed && !i.prev[s]) {
+      // Rising edge: latch. Fire only when the hand is known —
+      // 'none' (trackers) still latches so the press can't
+      // retro-fire if handedness resolves while held.
+      next[s] = true;
+      const hand = i.handedness[s];
+      if (hand === 'left' || hand === 'right') {
+        fires.push({
+          slot: s,
+          lane: TRIGGER_KICK_LANE_BY_HAND[hand],
+          key: `xr-trigger-${hand}`,
+        });
+      }
+    } else if (!pressed) {
+      // Release re-arms the trigger.
+      next[s] = false;
+    }
+    // else: still held, still latched — no change.
+  }
+  return { next, fires };
 }

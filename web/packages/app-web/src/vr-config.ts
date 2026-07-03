@@ -112,7 +112,7 @@ export const VR_CONFIG_FOOTER_HINTS = Object.freeze({
   line1:
     'Hit the − / + buttons to step a slider. Toggles flip on click. Changes persist instantly.',
   line2:
-    'Loop A / B capture lives on the right controller face buttons during play.',
+    'In-song: triggers play the pedals (left = LP, right = BD); right face buttons capture Loop A / B.',
 });
 
 interface ButtonHit {
@@ -220,6 +220,14 @@ export class VrConfig {
     this.shown = true;
     this.mesh.visible = true;
     for (const l of this.lasers) l.visible = true;
+    // Seed the trigger latches from the live button state: the panel is
+    // opened BY a trigger pull (menu footer button), and while hidden
+    // tick() early-returns so the latches are stale. Without seeding,
+    // that same still-held pull would edge-fire on the first visible
+    // tick and click whatever the laser lands on.
+    for (let i = 0; i < 2; i++) {
+      this.wasPressed[i] = this.inputSources[i]?.gamepad?.buttons[0]?.pressed ?? false;
+    }
     // Repaint on any config change (hotkey-driven loop capture, desktop
     // DOM panel touching the same settings, etc.). Flag dirty; the next
     // tick coalesces into a single paint even if multiple state changes
@@ -252,6 +260,12 @@ export class VrConfig {
    * (e.g. `paintLoopRange` adds no hits on a valid range). */
   __testHits(): ReadonlyArray<{ x: number; y: number; w: number; h: number }> {
     return this.hits.map(({ x, y, w, h }) => ({ x, y, w, h }));
+  }
+
+  /** Test-only: snapshot of the trigger edge latches, so tests can pin
+   * the show()-time seeding without faking an XR session. */
+  __testWasPressed(): boolean[] {
+    return [...this.wasPressed];
   }
 
   hide(): void {

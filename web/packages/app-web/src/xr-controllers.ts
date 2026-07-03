@@ -430,8 +430,13 @@ export class XrControllers {
    * addresses the correct per-controller vibrator on every Quest
    * firmware we've tested, and falls back gracefully on older / non-
    * Quest runtimes that only expose the legacy actuator array.
+   *
+   * Public because Game's trigger-kick poller (stepTriggerKick in
+   * tick-state.ts) also fires hits that deserve the same buzz; it
+   * already works in controller-slot indices so it routes here
+   * directly.
    */
-  private pulseHaptic(controllerIdx: number): void {
+  pulseHaptic(controllerIdx: number): void {
     const src = this.inputSources[controllerIdx];
     const gp = src?.gamepad as
       | (Gamepad & {

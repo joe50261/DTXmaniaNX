@@ -390,6 +390,16 @@ export class SongSelectCanvas {
     this.mesh.visible = true;
     for (const l of this.lasers) l.visible = true;
 
+    // Seed the trigger / squeeze latches from the live button state.
+    // While hidden, tick() early-returns and the latches freeze, so a
+    // button already held when the menu appears would read as a rising
+    // edge on the first tick. That's routine now that the trigger is a
+    // kick pedal during play: quitting a song mid-pull would instantly
+    // free-aim-activate the focused entry and throw the player straight
+    // back into the chart they just left. Held buttons must be released
+    // and re-pressed before they act on the menu.
+    this.seedButtonLatches();
+
     // Reset all animation state — show() can land on any song (resumed
     // breadcrumb position) and we want the fade/scroll to play from
     // their start points the first time the player sees the panel.
@@ -419,6 +429,17 @@ export class SongSelectCanvas {
     for (const t of this.tipMarks) t.visible = false;
     this.deps?.onFocusedSong(null);
     this.deps = null;
+  }
+
+  /** Adopt the current trigger / squeeze state as "already handled" so
+   * tickXr's edge detection only reacts to presses that started while
+   * the menu is visible. */
+  private seedButtonLatches(): void {
+    for (let i = 0; i < 2; i++) {
+      const gp = this.inputSources[i]?.gamepad;
+      this.wasPressed[i] = gp?.buttons[0]?.pressed ?? false;
+      this.wasSqueezed[i] = gp?.buttons[1]?.pressed ?? false;
+    }
   }
 
   /** Update the library tree without going through show()/hide(). Used
@@ -635,6 +656,13 @@ export class SongSelectCanvas {
       h,
       kind: action.kind,
     }));
+  }
+
+  /** Test-only: snapshot of the trigger / squeeze edge latches, so
+   * tests can pin the show()-time seeding without faking an XR
+   * session for tickXr. */
+  __testButtonLatches(): { pressed: boolean[]; squeezed: boolean[] } {
+    return { pressed: [...this.wasPressed], squeezed: [...this.wasSqueezed] };
   }
 
   dispose(): void {
