@@ -14,7 +14,7 @@ export interface ChartVisibleStateEmpty {
   status: 'idle';
   finishedAtMs: null;
   finishedReturnHandled: false;
-  judgmentFlash: null;
+  judgmentFlashes: readonly never[];
   hitFlashes: readonly never[];
   playables: readonly never[];
   measureStartMs: readonly never[];
@@ -40,7 +40,7 @@ export function emptyChartState(): ChartVisibleStateEmpty {
     status: 'idle',
     finishedAtMs: null,
     finishedReturnHandled: false,
-    judgmentFlash: null,
+    judgmentFlashes: [],
     hitFlashes: [],
     playables: [],
     measureStartMs: [],
