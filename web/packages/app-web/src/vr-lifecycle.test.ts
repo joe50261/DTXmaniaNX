@@ -107,9 +107,9 @@ describe('emptyChartState — loadAndStart entry-point reset', () => {
     expect(emptyChartState().finishedReturnHandled).toBe(false);
   });
 
-  it('visual flash fields (judgmentFlash, hitFlashes) are cleared — 400ms afterglow would paint on top of idle panel', () => {
+  it('visual flash fields (judgmentFlashes, hitFlashes) are cleared — 400ms afterglow would paint on top of idle panel', () => {
     const s = emptyChartState();
-    expect(s.judgmentFlash).toBeNull();
+    expect(s.judgmentFlashes).toEqual([]);
     expect(s.hitFlashes).toEqual([]);
   });
 
@@ -136,6 +136,7 @@ describe('emptyChartState — loadAndStart entry-point reset', () => {
     const a = emptyChartState();
     const b = emptyChartState();
     expect(a).not.toBe(b);
+    expect(a.judgmentFlashes).not.toBe(b.judgmentFlashes);
     expect(a.hitFlashes).not.toBe(b.hitFlashes);
     expect(a.playables).not.toBe(b.playables);
     expect(a.loopMarkerPressed).not.toBe(b.loopMarkerPressed);
