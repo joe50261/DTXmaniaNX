@@ -79,8 +79,13 @@ namespace DTXMania
                 this.thDTXFileEnumerate.Priority = tp;
             }
         }
-        private readonly string strPathSongsDB = CDTXMania.strEXEのあるフォルダ + "songs.db";
-        private readonly string strPathSongList = CDTXMania.strEXEのあるフォルダ + "songlist.db";
+        // Cache is written to a guaranteed-writable folder (the executable folder when
+        // possible, otherwise a per-user folder). Reads fall back to the legacy
+        // executable-folder location so pre-existing caches keep working. See CScoreCache.
+        private readonly string strPathSongsDB = CScoreCache.SongsDBWritePath;
+        private readonly string strPathSongList = CScoreCache.SongListDBWritePath;
+        private readonly string strReadPathSongsDB = CScoreCache.SongsDBReadPath;
+        private readonly string strReadPathSongList = CScoreCache.SongListDBReadPath;
 
         public Thread thDTXFileEnumerate
         {
@@ -308,10 +313,10 @@ namespace DTXMania
 
                 try
                 {
-                    if (!CDTXMania.ConfigIni.bConfigIniがないかDTXManiaのバージョンが異なる)
+                    if (CScoreCache.IsCacheValid())
                     {
                         CSongManager s = new CSongManager();
-                        s = await Deserialize(strPathSongList);		// 直接this.Songs管理にdeserialize()結果を代入するのは避ける。nullにされてしまうことがあるため。
+                        s = await Deserialize(strReadPathSongList);		// 直接this.Songs管理にdeserialize()結果を代入するのは避ける。nullにされてしまうことがあるため。
                         if (s != null)
                         {
                             this.Songs管理 = s;
@@ -351,11 +356,11 @@ namespace DTXMania
 
                 try
                 {
-                    if (!CDTXMania.ConfigIni.bConfigIniがないかDTXManiaのバージョンが異なる)
+                    if (CScoreCache.IsCacheValid())
                     {
                         try
                         {
-                            this.Songs管理.tReadSongsDB(strPathSongsDB);
+                            this.Songs管理.tReadSongsDB(strReadPathSongsDB);
                         }
                         catch
                         {
@@ -434,10 +439,10 @@ namespace DTXMania
 
                         try
                         {
-                            if (!CDTXMania.ConfigIni.bConfigIniがないかDTXManiaのバージョンが異なる)
+                            if (CScoreCache.IsCacheValid())
                             {
                                 CSongManager s = new CSongManager();
-                                s = await Deserialize(strPathSongList);       // 直接this.Songs管理にdeserialize()結果を代入するのは避ける。nullにされてしまうことがあるため。
+                                s = await Deserialize(strReadPathSongList);       // 直接this.Songs管理にdeserialize()結果を代入するのは避ける。nullにされてしまうことがあるため。
                                 if (s != null)
                                 {
                                     this.Songs管理 = s;
@@ -471,11 +476,11 @@ namespace DTXMania
 
                         try
                         {
-                            if (!CDTXMania.ConfigIni.bConfigIniがないかDTXManiaのバージョンが異なる)
+                            if (CScoreCache.IsCacheValid())
                             {
                                 try
                                 {
-                                    this.Songs管理.tReadSongsDB(strPathSongsDB);
+                                    this.Songs管理.tReadSongsDB(strReadPathSongsDB);
                                 }
                                 catch
                                 {
@@ -718,6 +723,11 @@ namespace DTXMania
                 Trace.TraceInformation("Duration of enum7) Saving additional song data into songlist.db: {0}", span.ToString());
                 //-----------------------------
                 #endregion
+
+                // Stamp the cache folder with the current build version so the next launch
+                // can reuse this scan instead of rescanning. This is independent of Config.ini,
+                // so it keeps working even when the install folder is read-only.
+                CScoreCache.UpdateStamp();
                 //				}
 
             }

@@ -184,6 +184,7 @@
     <Compile Include="Code\Score,Song\CSetDef.cs" />
     <Compile Include="Code\Stage\02.Title\CEnumSongs.cs" />
     <Compile Include="Code\Score,Song\CSongManager.cs" />
+    <Compile Include="Code\Score,Song\CScoreCache.cs" />
     <Compile Include="Code\Score,Song\CScore.cs" />
     <Compile Include="Code\Score,Song\CSongListNode.cs" />
     <Compile Include="Code\Stage\01.Startup\CStageStartup.cs" />

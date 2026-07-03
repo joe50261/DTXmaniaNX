@@ -648,9 +648,63 @@ namespace DTXMania
 		public void tReflectScoreCacheInSongList()
 		{
 			this.nNbScoresFromScoreCache = 0;
-			this.tReflectScoreCacheInSongList( this.listSongRoot );
+
+			// Index the songs.db cache by absolute file path once, so reflecting the cache
+			// into the freshly enumerated song list is O(N) instead of O(N^2). The previous
+			// implementation ran a linear List.FindIndex for every score, which dominated
+			// startup time on large song libraries.
+			Dictionary<string, List<CScore>> songsDBByPath =
+				new Dictionary<string, List<CScore>>( ( this.listSongsDB != null ) ? this.listSongsDB.Count : 0 );
+			if ( this.listSongsDB != null )
+			{
+				foreach ( CScore sc in this.listSongsDB )
+				{
+					string key = sc.FileInformation.AbsoluteFilePath;
+					if ( string.IsNullOrEmpty( key ) )
+						continue;
+
+					List<CScore> bucket;
+					if ( !songsDBByPath.TryGetValue( key, out bucket ) )
+					{
+						bucket = new List<CScore>( 1 );
+						songsDBByPath.Add( key, bucket );
+					}
+					bucket.Add( sc );
+				}
+			}
+
+			this.tReflectScoreCacheInSongList( this.listSongRoot, songsDBByPath );
 		}
-		private void tReflectScoreCacheInSongList( List<CSongListNode> ノードリスト )
+
+		/// <summary>
+		/// Finds the cached score (from songs.db) that matches the given freshly enumerated
+		/// score by absolute path, file size and last-modified timestamp (of both the score
+		/// file and its .score.ini). Returns null when the file is new or has changed.
+		/// This preserves the exact match criteria of the previous FindIndex predicate.
+		/// </summary>
+		private static CScore tFindCachedScore( Dictionary<string, List<CScore>> songsDBByPath, CScore target )
+		{
+			if ( string.IsNullOrEmpty( target.FileInformation.AbsoluteFilePath ) )
+				return null;
+
+			List<CScore> bucket;
+			if ( !songsDBByPath.TryGetValue( target.FileInformation.AbsoluteFilePath, out bucket ) )
+				return null;
+
+			foreach ( CScore sc in bucket )
+			{
+				if ( sc.FileInformation.FileSize.Equals( target.FileInformation.FileSize )
+					&& sc.FileInformation.LastModified.Equals( target.FileInformation.LastModified )
+					&& sc.ScoreIniInformation.FileSize.Equals( target.ScoreIniInformation.FileSize )
+					&& sc.ScoreIniInformation.LastModified.Equals( target.ScoreIniInformation.LastModified ) )
+				{
+					return sc;
+				}
+			}
+			return null;
+		}
+
+		private void tReflectScoreCacheInSongList( List<CSongListNode> ノードリスト, Dictionary<string, List<CScore>> songsDBByPath )
 		{
 			using( List<CSongListNode>.Enumerator enumerator = ノードリスト.GetEnumerator() )
 			{
@@ -661,30 +715,16 @@ namespace DTXMania
 					CSongListNode node = enumerator.Current;
 					if( node.eNodeType == CSongListNode.ENodeType.BOX )
 					{
-						this.tReflectScoreCacheInSongList( node.list子リスト );
+						this.tReflectScoreCacheInSongList( node.list子リスト, songsDBByPath );
 					}
 					else if( ( node.eNodeType == CSongListNode.ENodeType.SCORE ) || ( node.eNodeType == CSongListNode.ENodeType.SCORE_MIDI ) )
 					{
-						Predicate<CScore> match = null;
 						for( int lv = 0; lv < 5; lv++ )
 						{
 							if( node.arScore[ lv ] != null )
 							{
-								if( match == null )
-								{
-									match = delegate( CScore sc )
-									{
-										return
-											(
-											( sc.FileInformation.AbsoluteFilePath.Equals( node.arScore[ lv ].FileInformation.AbsoluteFilePath )
-											&& sc.FileInformation.FileSize.Equals( node.arScore[ lv ].FileInformation.FileSize ) )
-											&& ( sc.FileInformation.LastModified.Equals( node.arScore[ lv ].FileInformation.LastModified )
-											&& sc.ScoreIniInformation.FileSize.Equals( node.arScore[ lv ].ScoreIniInformation.FileSize ) ) )
-											&& sc.ScoreIniInformation.LastModified.Equals( node.arScore[ lv ].ScoreIniInformation.LastModified );
-									};
-								}
-								int nMatched = this.listSongsDB.FindIndex( match );
-								if( nMatched == -1 )
+								CScore cachedScore = tFindCachedScore( songsDBByPath, node.arScore[ lv ] );
+								if( cachedScore == null )
 								{
 //Trace.TraceInformation( "songs.db に存在しません。({0})", node.arScore[ lv ].FileInformation.AbsoluteFilePath );
 									if ( CDTXMania.ConfigIni.bLogSongSearch )
@@ -694,14 +734,14 @@ namespace DTXMania
 								}
 								else
 								{
-									node.arScore[ lv ].SongInformation = this.listSongsDB[ nMatched ].SongInformation;
+									node.arScore[ lv ].SongInformation = cachedScore.SongInformation;
 									node.arScore[ lv ].bHadACacheInSongDB = true;
 									if( CDTXMania.ConfigIni.bLogSongSearch )
 									{
 										Trace.TraceInformation( "Transcribing data from songs.db. ({0})", node.arScore[ lv ].FileInformation.AbsoluteFilePath );
 									}
 									this.nNbScoresFromScoreCache++;
-									if( node.arScore[ lv ].ScoreIniInformation.LastModified != this.listSongsDB[ nMatched ].ScoreIniInformation.LastModified )
+									if( node.arScore[ lv ].ScoreIniInformation.LastModified != cachedScore.ScoreIniInformation.LastModified )
 									{
 										string strFileNameScoreIni = node.arScore[ lv ].FileInformation.AbsoluteFilePath + ".score.ini";
 										try
