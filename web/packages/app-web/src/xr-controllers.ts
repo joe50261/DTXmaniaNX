@@ -437,6 +437,9 @@ export class XrControllers {
    * directly.
    */
   pulseHaptic(controllerIdx: number): void {
+    // Master switch (Settings → Controller rumble). Read per-call so
+    // toggling it takes effect live, with no reconnect.
+    if (!getConfig().rumbleEnabled) return;
     const src = this.inputSources[controllerIdx];
     const gp = src?.gamepad as
       | (Gamepad & {
