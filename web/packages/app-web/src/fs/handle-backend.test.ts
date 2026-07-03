@@ -18,19 +18,32 @@ class FakeDirHandle {
     this.name = name;
   }
 
-  async getDirectoryHandle(name: string): Promise<FakeDirHandle> {
+  async getDirectoryHandle(
+    name: string,
+    options?: { create?: boolean }
+  ): Promise<FakeDirHandle> {
     this.getDirectoryHandleCalls++;
-    const child = this.children.get(name);
+    let child = this.children.get(name);
+    if (!child && options?.create) child = this.mkdir(name);
     if (!child || child.kind !== 'directory') {
       throw new Error(`no such directory: ${name}`);
     }
     return child;
   }
 
-  async getFileHandle(name: string): Promise<FakeFileHandle> {
-    const child = this.children.get(name);
+  async getFileHandle(
+    name: string,
+    options?: { create?: boolean }
+  ): Promise<FakeFileHandle> {
+    let child = this.children.get(name);
+    if (!child && options?.create) child = this.mkfile(name, '');
     if (!child || child.kind !== 'file') throw new Error(`no such file: ${name}`);
     return child;
+  }
+
+  async removeEntry(name: string): Promise<void> {
+    if (!this.children.has(name)) throw new Error(`no such entry: ${name}`);
+    this.children.delete(name);
   }
 
   async *values(): AsyncIterable<FakeDirHandle | FakeFileHandle> {
@@ -53,7 +66,7 @@ class FakeDirHandle {
 class FakeFileHandle {
   readonly kind = 'file' as const;
   readonly name: string;
-  private readonly content: string;
+  content: string;
 
   constructor(name: string, content: string) {
     this.name = name;
@@ -67,6 +80,24 @@ class FakeFileHandle {
       bytes.byteOffset + bytes.byteLength
     ) as ArrayBuffer;
     return { arrayBuffer: async () => buf };
+  }
+
+  // Models FileSystemFileHandle.createWritable(): buffers writes and
+  // commits them to `content` on close(), like a real writable truncates
+  // and replaces the file.
+  async createWritable(): Promise<{
+    write(data: string): Promise<void>;
+    close(): Promise<void>;
+  }> {
+    let buffer = '';
+    return {
+      write: async (data: string) => {
+        buffer += data;
+      },
+      close: async () => {
+        this.content = buffer;
+      },
+    };
   }
 }
 
@@ -153,5 +184,52 @@ describe('HandleFileSystemBackend / dir handle cache', () => {
     // cache is empty before the first call.
     const entries = await backend.listDir('alpha');
     expect(entries.map((e) => e.name).sort()).toEqual(['x.dtx']);
+  });
+});
+
+describe('HandleFileSystemBackend / writeText + removeFile', () => {
+  it('writes a root-level file that reads back verbatim (UTF-8)', async () => {
+    const root = new FakeDirHandle('root');
+    const backend = new HandleFileSystemBackend(root as unknown as FileSystemDirectoryHandle);
+
+    const payload = JSON.stringify({ hi: '東京 \u{1F941}' });
+    await backend.writeText('.dtxmania-song-index.json', payload);
+
+    // Present as a real child, and round-trips through readText (utf-8).
+    expect(root.children.has('.dtxmania-song-index.json')).toBe(true);
+    expect(await backend.readText('.dtxmania-song-index.json', 'utf-8')).toBe(payload);
+  });
+
+  it('overwrites an existing file rather than appending', async () => {
+    const root = new FakeDirHandle('root');
+    root.mkfile('.dtxmania-song-index.json', 'STALE-CONTENT');
+    const backend = new HandleFileSystemBackend(root as unknown as FileSystemDirectoryHandle);
+
+    await backend.writeText('.dtxmania-song-index.json', 'fresh');
+    expect(await backend.readText('.dtxmania-song-index.json', 'utf-8')).toBe('fresh');
+  });
+
+  it('creates missing parent directories on write', async () => {
+    const root = new FakeDirHandle('root');
+    const backend = new HandleFileSystemBackend(root as unknown as FileSystemDirectoryHandle);
+
+    await backend.writeText('cache/nested/index.json', '{}');
+    expect(await backend.readText('cache/nested/index.json', 'utf-8')).toBe('{}');
+  });
+
+  it('removeFile deletes the file so a later read throws', async () => {
+    const root = new FakeDirHandle('root');
+    root.mkfile('.dtxmania-song-index.json', '{}');
+    const backend = new HandleFileSystemBackend(root as unknown as FileSystemDirectoryHandle);
+
+    await backend.removeFile('.dtxmania-song-index.json');
+    expect(root.children.has('.dtxmania-song-index.json')).toBe(false);
+    await expect(backend.readText('.dtxmania-song-index.json', 'utf-8')).rejects.toThrow();
+  });
+
+  it('removeFile on an absent file is a silent no-op', async () => {
+    const root = new FakeDirHandle('root');
+    const backend = new HandleFileSystemBackend(root as unknown as FileSystemDirectoryHandle);
+    await expect(backend.removeFile('nope.json')).resolves.toBeUndefined();
   });
 });
