@@ -70,6 +70,48 @@ export class HandleFileSystemBackend implements FileSystemBackend {
     return decodeTextWithBom(buf, encoding);
   }
 
+  /**
+   * Write `text` (encoded UTF-8) to `path`, creating any missing parent
+   * directories and overwriting an existing file. Requires the handle to
+   * have been granted `readwrite` permission — throws otherwise, which the
+   * scan-cache caller swallows so a read-only grant degrades gracefully.
+   * Only used to persist the folder scan cache; the scanner itself never
+   * writes.
+   */
+  async writeText(path: string, text: string): Promise<void> {
+    const segments = split(path);
+    if (segments.length === 0) throw new Error('empty path');
+    let dir = this.root;
+    for (let i = 0; i < segments.length - 1; i++) {
+      dir = await dir.getDirectoryHandle(segments[i]!, { create: true });
+      this.cacheDir(segments.slice(0, i + 1).join('/'), dir);
+    }
+    const fileHandle = await dir.getFileHandle(segments[segments.length - 1]!, {
+      create: true,
+    });
+    const writable = await fileHandle.createWritable();
+    try {
+      await writable.write(text);
+    } finally {
+      await writable.close();
+    }
+  }
+
+  /**
+   * Delete the file at `path` if it exists. Best-effort — a missing file or
+   * a missing parent resolves to a no-op rather than throwing, so callers
+   * can "clear the cache" without first checking whether it is there.
+   */
+  async removeFile(path: string): Promise<void> {
+    const segments = split(path);
+    if (segments.length === 0) return;
+    const parent = await this.resolveDirSegments(segments.slice(0, -1));
+    if (!parent) return;
+    await parent.removeEntry(segments[segments.length - 1]!).catch(() => {
+      /* already gone / not a file — nothing to clear */
+    });
+  }
+
   async exists(path: string): Promise<boolean> {
     const segments = split(path);
     if (segments.length === 0) return true;

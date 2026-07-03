@@ -374,6 +374,39 @@ describe('serialize / deserialize scan cache', () => {
     expect(restored.root.parent).toBe(null);
   });
 
+  it('strips per-chart play records so they never leak into the cache', async () => {
+    const fs = makeFs({
+      'Songs/Rock/a.dtx': '#TITLE A',
+      'Songs/Rock/b.dtx': '#TITLE B',
+    });
+    const live = await new SongScanner(fs, { parseMeta: false }).scan('Songs');
+    // Simulate the app layer attaching a best-of record onto the live tree
+    // (as attachRecordsToIndex does) BEFORE the cache is written.
+    for (const song of live.songs) {
+      for (const chart of song.charts) {
+        (chart as { record?: unknown }).record = { bestScore: 999999, plays: 3 };
+      }
+    }
+
+    const serialized = serializeIndex(live);
+    // The serialized blob — what gets written to IndexedDB and to the
+    // folder JSON file — must carry no `record` on any chart.
+    const json = JSON.stringify(serialized);
+    expect(json).not.toContain('bestScore');
+    expect(json).not.toContain('record');
+
+    // And a device that deserializes it (with an empty record store) sees
+    // no phantom records.
+    const restored = deserializeIndex(JSON.parse(json));
+    for (const song of restored.songs) {
+      for (const chart of song.charts) {
+        expect(chart.record).toBeUndefined();
+      }
+    }
+    // The live tree the UI is using is untouched — stripping is copy-based.
+    expect(live.songs[0]?.charts[0]?.record).toBeDefined();
+  });
+
   it('throws on mismatched cache version so stale shapes get rejected', () => {
     const stale = {
       version: INDEX_CACHE_VERSION + 99,

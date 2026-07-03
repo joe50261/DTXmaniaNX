@@ -584,7 +584,7 @@ function serializeBox(box: BoxNode): SerializedBox {
   const children: SerializedBox['children'] = [];
   for (const child of box.children) {
     if (child.type === 'song') {
-      children.push({ kind: 'song', entry: child.entry });
+      children.push({ kind: 'song', entry: serializeSongEntry(child.entry) });
     } else {
       children.push(serializeBox(child));
     }
@@ -600,6 +600,23 @@ function serializeBox(box: BoxNode): SerializedBox {
   if (box.preimage !== undefined) out.preimage = box.preimage;
   if (box.explicit) out.explicit = true;
   return out;
+}
+
+/**
+ * Copy a SongEntry for persistence, dropping the runtime-only per-chart
+ * `record` (see ChartEntry.record). Best-of play data lives in its own store
+ * keyed by chartPath and must never be baked into the scan cache: without
+ * this copy, serializeBox would share the live ChartEntry objects by
+ * reference, so any record attached to the tree *after* serialization would
+ * still leak into the persisted blob — into IndexedDB and, worse, into the
+ * on-disk cache file that can travel to another device whose record store is
+ * empty (phantom medals). Stripping here keeps every cache copy record-free.
+ */
+function serializeSongEntry(entry: SongEntry): SongEntry {
+  return {
+    ...entry,
+    charts: entry.charts.map(({ record: _record, ...chart }) => chart),
+  };
 }
 
 /**
