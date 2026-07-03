@@ -1218,7 +1218,7 @@ namespace DTXMania
 		#endregion
 		#region [ スコアキャッシュをSongsDBに出力する ]
 		//-----------------
-		public void tスコアキャッシュをSongsDBに出力する( string SongsDBファイル名 )
+		public bool tスコアキャッシュをSongsDBに出力する( string SongsDBファイル名 )
 		{
 			this.nNbScoresForSongsDB = 0;
 			try
@@ -1227,10 +1227,12 @@ namespace DTXMania
 				bw.Write( SONGSDB_VERSION );
 				this.tSongsDBにリストを１つ出力する( bw, this.listSongRoot );
 				bw.Close();
+				return true;
 			}
 			catch
 			{
 				Trace.TraceError( "songs.dbの出力に失敗しました。" );
+				return false;
 			}
 		}
 		private void tSongsDBにノードを１つ出力する( BinaryWriter bw, CSongListNode node )

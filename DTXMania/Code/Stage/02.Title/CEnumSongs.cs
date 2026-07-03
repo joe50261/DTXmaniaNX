@@ -687,9 +687,10 @@ namespace DTXMania
                 Trace.TraceInformation("enum6) Saving song metadata into songs.db.");
                 Trace.Indent();
 
+                bool bSongsDBSaved = false;
                 try
                 {
-                    this.Songs管理.tスコアキャッシュをSongsDBに出力する(strPathSongsDB);
+                    bSongsDBSaved = this.Songs管理.tスコアキャッシュをSongsDBに出力する(strPathSongsDB);
                 }
                 catch (Exception e)
                 {
@@ -716,7 +717,7 @@ namespace DTXMania
                 Trace.TraceInformation("enum7) Saving additional song data into songlist.db.");
                 Trace.Indent();
 
-                SerializeSongList(this.Songs管理, strPathSongList);
+                bool bSongListSaved = SerializeSongList(this.Songs管理, strPathSongList);
                 Trace.TraceInformation("Saving into songlist.db complete. [{0} scores]", this.Songs管理.nNbScoresForSongsDB);
                 Trace.Unindent();
                 TimeSpan span = (TimeSpan)(DateTime.Now - start);
@@ -726,8 +727,13 @@ namespace DTXMania
 
                 // Stamp the cache folder with the current build version so the next launch
                 // can reuse this scan instead of rescanning. This is independent of Config.ini,
-                // so it keeps working even when the install folder is read-only.
-                CScoreCache.UpdateStamp();
+                // so it keeps working even when the install folder is read-only. Only stamp when
+                // both cache files were written in full, so a valid stamp always implies a
+                // complete cache on disk (a failed/partial save falls through to a rescan).
+                if (bSongsDBSaved && bSongListSaved)
+                {
+                    CScoreCache.UpdateStamp();
+                }
                 //				}
 
             }
@@ -749,7 +755,7 @@ namespace DTXMania
         /// <summary>
         /// 曲リストのserialize
         /// </summary>
-        private static void SerializeSongList(CSongManager cs, string strPathSongList)
+        private static bool SerializeSongList(CSongManager cs, string strPathSongList)
         {
             bool bSucceededSerialize = true;
             Stream output = null;
@@ -768,7 +774,8 @@ namespace DTXMania
             }
             finally
             {
-                output.Close();
+                if (output != null)
+                    output.Close();
                 if (!bSucceededSerialize)
                 {
                     try
@@ -781,6 +788,7 @@ namespace DTXMania
                     }
                 }
             }
+            return bSucceededSerialize;
         }
 
         /// <summary>

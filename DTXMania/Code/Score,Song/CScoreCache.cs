@@ -25,7 +25,7 @@ namespace DTXMania
 		private const string CACHE_STAMP_FILENAME = "songcache.version";
 		private const string APPDATA_SUBFOLDER = "DTXManiaNX";
 
-		private static string strCacheFolder = null;
+		private static volatile string strCacheFolder = null;
 		private static readonly object lockObj = new object();
 
 		/// <summary>
