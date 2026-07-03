@@ -20,14 +20,14 @@
     "eslint": "^10.2.1",
     "eslint-plugin-check-file": "^3.3.1",
     "typescript": "^5.4.0",
-    "vitest": "^3.2.6"
+    "vitest": "^4.1.9"
   },
   "engines": {
-    "node": ">=22.0.0",
+    "node": ">=22.12.0",
     "pnpm": ">=9.0.0"
   },
   "volta": {
-    "node": "22.11.0",
+    "node": "22.23.1",
     "pnpm": "9.15.0"
   },
   "packageManager": "pnpm@9.15.0"

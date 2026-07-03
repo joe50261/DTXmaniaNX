@@ -51,6 +51,22 @@ import { loadSkin } from './skin.js';
 import type { SkinTextures } from './renderer.js';
 import { runCalibration } from './calibrate.js';
 import { loadAudioOffsetMs, saveAudioOffsetMs } from './calibrate-model.js';
+import { createReplayCapture } from './replay/capture-glue.js';
+import { ReplaysPanel } from './replay/replays-panel.js';
+import {
+  renderReplayToBlob,
+  suggestFilename,
+  triggerDownload,
+} from './replay/render.js';
+import {
+  endJob,
+  idleJobState,
+  isCurrentJob,
+  isJobRunning,
+  startJob,
+} from './replay/render-job-model.js';
+import { RenderWakeLock } from './replay/wake-lock.js';
+import { loadReplay } from './replay/storage.js';
 import { activeToast, showToast } from './hud-toast.js';
 
 // Test hook for the Playwright e2e suite. Toast is painted onto the
@@ -93,6 +109,7 @@ const forgetBtn = requireEl<HTMLButtonElement>('forget-folder');
 const rescanBtn = requireEl<HTMLButtonElement>('rescan-folder');
 const calibrateBtn = requireEl<HTMLButtonElement>('calibrate');
 const configBtn = requireEl<HTMLButtonElement>('config-btn');
+const replaysBtn = requireEl<HTMLButtonElement>('replays-btn');
 const xrBtn = requireEl<HTMLButtonElement>('enter-xr');
 const songSelectMount = requireEl<HTMLDivElement>('song-select-mount');
 const scanErrorsEl = requireEl<HTMLDivElement>('scan-errors');
@@ -473,6 +490,132 @@ const configPanel = new ConfigPanel({
 });
 configBtn.addEventListener('click', () => configPanel.open());
 
+// Replays browser — desktop-only entry. The Render button drives the
+// WebCodecs pipeline in `replay/render.ts`; the panel surfaces
+// phase-aware progress + a log scrollback so a long silent render
+// doesn't look like a hang.
+//
+// Job management (see replay/render-job-model.ts for the rationale):
+// exactly one render at a time. The typical workflow is click Render →
+// take the headset off → device sleeps → page freezes mid-render →
+// thaws on wake with the job still running. A second Render click in
+// that state must surface the live job's progress, NOT start a
+// competing render that interleaves writes into the same progress bar.
+let renderJobState = idleJobState();
+let renderAbort: AbortController | null = null;
+const renderWakeLock = new RenderWakeLock();
+
+const replaysPanel = new ReplaysPanel({
+  onRender: (id) => {
+    // Single-flight guard, synchronously BEFORE the first await — two
+    // clicks in the same frame must not both pass an async check.
+    if (isJobRunning(renderJobState)) {
+      replaysPanel.resumeRenderView();
+      setStatus('A render is already in progress — showing it.');
+      return;
+    }
+    if (!library) {
+      setStatus('Pick your songs folder first — render needs WAV access.');
+      return;
+    }
+    const lib = library;
+    const started = startJob(renderJobState, id)!;
+    renderJobState = started.state;
+    const token = started.token;
+    const controller = new AbortController();
+    renderAbort = controller;
+    // Reset the render pane to THIS job synchronously — a re-click
+    // landing during the loads below resumes into the new job's
+    // (empty) pane, never the previous job's finished one.
+    replaysPanel.showRender('…');
+    run(async () => {
+      try {
+        const replay = await loadReplay(id);
+        if (!replay) {
+          replaysPanel.hideRender();
+          setStatus('Replay not found (it may have been deleted).');
+          return;
+        }
+        let chartText: string;
+        try {
+          chartText = await lib.backend.readText(replay.meta.chartPath);
+        } catch (e) {
+          replaysPanel.hideRender();
+          setStatus(
+            `Render failed: chart not in current folder (${replay.meta.chartPath}).`,
+          );
+          console.warn('[render] readText failed', e);
+          return;
+        }
+        const rowTitle = replay.meta.title ?? replay.meta.chartPath;
+        replaysPanel.showRender(rowTitle);
+        replaysPanel.appendRenderLog(`Source: ${replay.meta.chartPath}`);
+        setStatus('Rendering replay… see the panel for progress.');
+        // Keep the device awake for the duration where the platform
+        // allows it — the render otherwise freezes with the page when
+        // the screen sleeps and only resumes on the next wake.
+        await renderWakeLock.acquire((line) => replaysPanel.appendRenderLog(line));
+        // Stale-callback fence: once this job is no longer current
+        // (cancelled and a new one started), its late progress/log
+        // emits must not repaint the newer job's panel.
+        const ifCurrent = (fn: () => void): void => {
+          if (isCurrentJob(renderJobState, token)) fn();
+        };
+        try {
+          const skin = await skinPromise.catch(() => undefined);
+          const result = await renderReplayToBlob(replay, chartText, {
+            fs: { backend: lib.backend, folder: dirname(replay.meta.chartPath) },
+            ...(skin ? { skin } : {}),
+            signal: controller.signal,
+            onProgress: (p) => ifCurrent(() => replaysPanel.updateRenderProgress(p)),
+            onLog: (line) => ifCurrent(() => replaysPanel.appendRenderLog(line)),
+          });
+          const filename = suggestFilename(replay, result.ext);
+          // Surface "Save video" BEFORE the automatic download attempt:
+          // if the tab is hidden right now (headset set down), browsers
+          // drop the programmatic click and the button is the only way
+          // the user can still reach the finished file.
+          replaysPanel.finishRender(() => triggerDownload(result.blob, filename));
+          triggerDownload(result.blob, filename);
+          if (document.hidden) {
+            replaysPanel.appendRenderLog(
+              'Finished while the tab was hidden — use "Save video" if no download started.',
+            );
+          }
+          replaysPanel.appendRenderLog('Download triggered.');
+          setStatus(`Render done — saved as ${result.ext.toUpperCase()}.`);
+        } catch (e) {
+          replaysPanel.finishRender(null);
+          if (controller.signal.aborted) {
+            replaysPanel.appendRenderLog('Render cancelled.');
+            setStatus('Render cancelled.');
+            return;
+          }
+          const msg = e instanceof Error ? e.message : String(e);
+          replaysPanel.appendRenderLog(`ERROR: ${msg}`);
+          setStatus(`Render failed: ${msg}`);
+          console.warn('[render] renderReplayToBlob failed', e);
+        }
+        // Render overlay stays visible after completion (success or
+        // failure) so the user can read the final log line + size.
+        // They dismiss via "Back to replays" or the modal ✕.
+      } finally {
+        void renderWakeLock.release();
+        renderAbort = null;
+        renderJobState = endJob(renderJobState, token);
+      }
+    });
+  },
+  onCancelRender: () => {
+    if (!renderAbort) return;
+    replaysPanel.appendRenderLog('Cancel requested…');
+    renderAbort.abort();
+  },
+});
+replaysBtn.addEventListener('click', () => {
+  replaysPanel.open().catch((e) => console.warn('[replays] open failed', e));
+});
+
 // Live config → Game / Renderer. The renderer reads scrollSpeed /
 // judgeLineY / reverseScroll fields per frame, so a slider drag
 // updates the falling chips and judgment line in real time. Auto-kick
@@ -850,6 +993,13 @@ async function launchGame(
     setStatus('Game not initialised — reload the page.');
     return;
   }
+  // Replay capture is sidecar — only attached for scanner-backed charts
+  // (the bundled demo has no stable chartPath, so a saved replay
+  // wouldn't bind back to anything). The lanes set is captured by
+  // value here so a config change mid-run doesn't retroactively
+  // mutate the capture's autoplay set.
+  const autoLanes = new Set<LaneValue>(autoPlayToLanes(getConfig().autoPlay));
+  const capture = chart ? createReplayCapture(autoLanes) : null;
   const startOpts: Parameters<Game['loadAndStart']>[1] = {
     onRestart: () => {
       // Same call on desktop and VR — Game.showSongSelect both (a)
@@ -876,11 +1026,25 @@ async function launchGame(
             snap: ScoreSnapshot,
             didLoop: boolean,
           ) => {
-            if (isPracticeRun(getConfig(), didLoop)) {
+            const practice = isPracticeRun(getConfig(), didLoop);
+            if (practice) {
               console.info('[result] practice run — skipping best-score write');
-              return;
+            } else {
+              persistChartResult(chart, chartPath, snap);
             }
-            persistChartResult(chart, chartPath, snap);
+            // Replay capture mirrors the practice gate: practice runs
+            // (loop or non-1 rate) are dropped; real runs persist via
+            // saveReplay. Errors are swallowed with a console log —
+            // a failed replay save shouldn't block the result-screen
+            // transition the player is waiting on.
+            if (capture) {
+              if (practice) capture.discard();
+              else {
+                capture.finish(snap).catch((e) =>
+                  console.warn('[replay] saveReplay failed', e),
+                );
+              }
+            }
           },
         }
       : {}),
@@ -892,7 +1056,13 @@ async function launchGame(
       // / VR).
       commitLoopCapture(which, measure);
     },
-    autoPlayLanes: autoPlayToLanes(getConfig().autoPlay),
+    autoPlayLanes: autoLanes,
+    ...(capture
+      ? {
+          onHitProcessed: capture.onHit,
+          onTickPose: capture.onPose,
+        }
+      : {}),
   };
   if (fs) {
     setStatus('Loading samples…');
@@ -915,6 +1085,27 @@ async function launchGame(
     await game.loadAndStart(dtxText, startOpts);
     overlay.style.display = 'none';
     refreshXrButton();
+    // Replay capture must start AFTER loadAndStart resolves so the
+    // chart's parsed title / artist / durationMs are available via
+    // `game.chartMeta()`. Pre-start emissions (auto-fire on the very
+    // first tick, etc.) are silently dropped by the Recorder.
+    if (capture && chart) {
+      const meta = game.chartMeta();
+      if (meta) {
+        capture.start(
+          {
+            chartPath: chart.chartPath,
+            title: meta.title,
+            artist: meta.artist,
+            durationMs: meta.durationMs,
+          },
+          {
+            audioOffsetMs: loadAudioOffsetMs(),
+            autoPlayLanes: [...autoLanes],
+          },
+        );
+      }
+    }
   } catch (e) {
     setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
     throw e;

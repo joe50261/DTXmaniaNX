@@ -29,7 +29,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: web/package.json
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
@@ -72,7 +72,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: web/package.json
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 

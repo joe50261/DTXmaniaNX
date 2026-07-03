@@ -69,6 +69,12 @@ export interface RenderState {
   excellent: boolean;
   /** performance.now() of the playing → finished transition. null while playing. */
   finishedAtMs: number | null;
+  /** Optional animation clock (ms) on the SAME axis as `finishedAtMs` /
+   * `lastPadHitMs`. Live play leaves this undefined and the renderer uses
+   * `performance.now()`. The offline replay render (faster-than-realtime)
+   * sets it to `songTimeMs` so time-based fades (result overlay, pad
+   * flush) advance on song time instead of an unusable wall clock. */
+  animClockMs?: number;
   /** True when the session runs inside a WebXR headset. Changes the result-screen footer hint. */
   inXR: boolean;
   /** Active mid-play toast text + expiry. Null when nothing to show.
@@ -408,8 +414,16 @@ export class Renderer {
    * when the matching lane was just struck. Both relax back to rest over
    * ~200 ms so rapid successive hits still read as distinct bounces.
    */
-  private animatePadHits(): void {
-    const now = performance.now();
+  /** Drive the 3D pad bounce + flush overlay with an explicit clock.
+   * The live loop reaches `animatePadHits()` via `renderFrame()` (wall
+   * clock); the offline replay render calls this with `songTimeMs` so the
+   * bounce/flush fade at the right rate instead of wall-clock-tied. Pair
+   * with `submitPadHits()` so the per-lane hit times share the same axis. */
+  animatePads(nowMs: number): void {
+    this.animatePadHits(nowMs);
+  }
+
+  private animatePadHits(now: number = performance.now()): void {
     const bounceDurMs = 120;
     const flushDurMs = 200;
     const bounceAmount = 12; // px in the virtual 1280×720 space
@@ -681,7 +695,10 @@ export class Renderer {
 
   private drawResult(state: RenderState): void {
     const ctx = this.ctx;
-    const now = performance.now();
+    // Offline render drives this on song time via animClockMs; live play
+    // (animClockMs undefined) falls back to the wall clock, matching the
+    // wall-clock finishedAtMs that Game stamps once on finish.
+    const now = state.animClockMs ?? performance.now();
     const age = state.finishedAtMs !== null ? now - state.finishedAtMs : 0;
     const alpha = linearFadeIn(age, 400);
     ctx.save();
