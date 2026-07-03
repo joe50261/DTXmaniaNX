@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { loadConfig, updateConfig } from './config.js';
 import { XrControllers } from './xr-controllers.js';
 
 /**
@@ -117,6 +118,14 @@ function makeStarted(): { xr: XrControllers; gl: FakeWebGL; scene: THREE.Scene }
 }
 
 describe('XrControllers — input source tracking', () => {
+  beforeEach(() => {
+    // pulseHaptic reads the config singleton (rumbleEnabled gate); reset
+    // it between cases so one test's updateConfig can't leak into the
+    // next. Mirrors vr-config-class.test.ts's reset pattern.
+    localStorage.clear();
+    updateConfig(loadConfig());
+  });
+
   it('starts with both slots null (no controllers connected yet)', () => {
     const { xr } = makeStarted();
     expect(Array.from(xr.currentInputSources)).toEqual([null, null]);
@@ -334,6 +343,53 @@ describe('XrControllers — input source tracking', () => {
     await Promise.resolve();
     expect(rightCalls.length).toBe(1);
     expect(leftCalls.length).toBe(1);
+  });
+
+  // Settings → Controller rumble = OFF must silence BOTH actuator paths
+  // (standard vibrationActuator and legacy hapticActuators fallback),
+  // and flipping it back on must resume with no reconnect (the gate
+  // reads getConfig() per call).
+  it('pulseHaptic is fully silenced while rumbleEnabled is off, and resumes when re-enabled', async () => {
+    const { xr, gl } = makeStarted();
+    const playEffectCalls: Array<['dual-rumble', PlayEffectParams]> = [];
+    const pulseCalls: Array<[number, number]> = [];
+    const src = {
+      handedness: 'right',
+      gamepad: {
+        vibrationActuator: {
+          playEffect: async (type: 'dual-rumble', params: PlayEffectParams) => {
+            playEffectCalls.push([type, params]);
+            return 'complete';
+          },
+        },
+        hapticActuators: [
+          {
+            pulse: async (intensity: number, durationMs: number) => {
+              pulseCalls.push([intensity, durationMs]);
+              return true;
+            },
+          },
+        ],
+      },
+    } as unknown as XRInputSource;
+    dispatchConnected(gl.controllers[1]!, src);
+    const pulseHaptic = (xr as unknown as { pulseHaptic: (i: number) => void }).pulseHaptic.bind(xr);
+
+    updateConfig({ rumbleEnabled: false });
+    pulseHaptic(1);
+    await Promise.resolve();
+    expect(playEffectCalls).toEqual([]);
+    expect(pulseCalls).toEqual([]);
+
+    // Live re-enable: the gate reads getConfig() per call, so flipping
+    // the toggle back on restores the buzz without any reconnect.
+    updateConfig({ rumbleEnabled: true });
+    pulseHaptic(1);
+    await Promise.resolve();
+    expect(playEffectCalls).toEqual([
+      ['dual-rumble', { duration: 40, strongMagnitude: 0.6, weakMagnitude: 0.6 }],
+    ]);
+    expect(pulseCalls).toEqual([]);
   });
 
   it('pulseHaptic no-ops silently when the slot is null (no double-buzz, no crash)', () => {

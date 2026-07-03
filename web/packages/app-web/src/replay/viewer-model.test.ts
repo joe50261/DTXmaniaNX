@@ -6,7 +6,7 @@ import {
   JUDGMENT_FLASH_LIFE_MS,
   lerpPoseSample,
   replayActiveHitFlashes,
-  replayActiveJudgmentFlash,
+  replayActiveJudgmentFlashes,
   replayHitsInRange,
   replayScoreSnapshotAt,
   replayStatus,
@@ -225,53 +225,76 @@ describe('replayActiveHitFlashes', () => {
   });
 });
 
-describe('replayActiveJudgmentFlash', () => {
-  it('empty replay → null', () => {
-    expect(replayActiveJudgmentFlash(makeReplay(), 0)).toBeNull();
+describe('replayActiveJudgmentFlashes', () => {
+  it('empty replay → no flashes', () => {
+    expect(replayActiveJudgmentFlashes(makeReplay(), 0)).toEqual([]);
   });
 
-  it('returns the most recent matched hit within lifeMs', () => {
+  it('a chord surfaces one flash per lane at once', () => {
+    // The regression #34 fixed: simultaneous hits on different lanes must
+    // each show a judgment pop, not just the single latest one.
     const replay = makeReplay([
-      hit({ songTimeMs: 100, judgment: Judgment.PERFECT, lagMs: 5 }),
-      hit({ songTimeMs: 200, judgment: Judgment.GREAT, lagMs: -40 }),
+      hit({ songTimeMs: 200, lane: Lane.SD, judgment: Judgment.PERFECT, lagMs: 3 }),
+      hit({ songTimeMs: 200, lane: Lane.HH, judgment: Judgment.GREAT, lagMs: -20 }),
+      hit({ songTimeMs: 200, lane: Lane.BD, judgment: Judgment.GOOD, lagMs: 10 }),
     ]);
-    const out = replayActiveJudgmentFlash(replay, 250);
-    expect(out?.judgment).toBe(Judgment.GREAT);
-    expect(out?.deltaMs).toBe(-40);
-    expect(out?.spawnedMs).toBe(200);
+    const out = replayActiveJudgmentFlashes(replay, 250);
+    expect(out).toHaveLength(3);
+    expect(new Set(out.map((f) => f.lane))).toEqual(
+      new Set([Lane.SD, Lane.HH, Lane.BD]),
+    );
+    const sd = out.find((f) => f.lane === Lane.SD)!;
+    expect(sd.judgment).toBe(Judgment.PERFECT);
+    expect(sd.deltaMs).toBe(3);
   });
 
-  it('returns null when last hit is older than lifeMs', () => {
+  it('keeps only the most recent hit per lane within lifeMs', () => {
+    const replay = makeReplay([
+      hit({ songTimeMs: 100, lane: Lane.SD, judgment: Judgment.PERFECT, lagMs: 5 }),
+      hit({ songTimeMs: 200, lane: Lane.SD, judgment: Judgment.GREAT, lagMs: -40 }),
+    ]);
+    const out = replayActiveJudgmentFlashes(replay, 250);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.judgment).toBe(Judgment.GREAT);
+    expect(out[0]?.deltaMs).toBe(-40);
+    expect(out[0]?.spawnedMs).toBe(200);
+  });
+
+  it('drops a lane whose last hit is older than lifeMs', () => {
     const replay = makeReplay([
       hit({ songTimeMs: 100, judgment: Judgment.PERFECT }),
     ]);
-    expect(replayActiveJudgmentFlash(replay, 100 + JUDGMENT_FLASH_LIFE_MS + 1)).toBeNull();
+    expect(
+      replayActiveJudgmentFlashes(replay, 100 + JUDGMENT_FLASH_LIFE_MS + 1),
+    ).toEqual([]);
   });
 
-  it('strays are skipped — falls back to previous matched hit', () => {
+  it('strays are skipped — falls back to previous matched hit on that lane', () => {
     const replay = makeReplay([
-      hit({ songTimeMs: 100, judgment: Judgment.PERFECT, lagMs: 5 }),
+      hit({ songTimeMs: 100, lane: Lane.SD, judgment: Judgment.PERFECT, lagMs: 5 }),
       hit({
         songTimeMs: 200,
+        lane: Lane.SD,
         chipIndex: -1,
         lagMs: null,
         judgment: Judgment.MISS,
       }),
     ]);
-    const out = replayActiveJudgmentFlash(replay, 250);
-    expect(out?.judgment).toBe(Judgment.PERFECT);
-    expect(out?.spawnedMs).toBe(100);
+    const out = replayActiveJudgmentFlashes(replay, 250);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.judgment).toBe(Judgment.PERFECT);
+    expect(out[0]?.spawnedMs).toBe(100);
   });
 
   it('future hits are not surfaced', () => {
     const replay = makeReplay([hit({ songTimeMs: 500 })]);
-    expect(replayActiveJudgmentFlash(replay, 100)).toBeNull();
+    expect(replayActiveJudgmentFlashes(replay, 100)).toEqual([]);
   });
 
   it('custom lifeMs override is respected', () => {
     const replay = makeReplay([hit({ songTimeMs: 100 })]);
-    expect(replayActiveJudgmentFlash(replay, 1000, 50)).toBeNull();
-    expect(replayActiveJudgmentFlash(replay, 1000, 5000)).not.toBeNull();
+    expect(replayActiveJudgmentFlashes(replay, 1000, 50)).toEqual([]);
+    expect(replayActiveJudgmentFlashes(replay, 1000, 5000)).toHaveLength(1);
   });
 });
 

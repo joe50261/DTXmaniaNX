@@ -5,8 +5,14 @@ import { PAD_ATLAS, PAD_SIZE, padRect } from './pad-atlas.js';
 import { CHIP_ATLAS_Y, CHIP_ATLAS_H, chipRect } from './chip-atlas.js';
 import { JUDGE_ROWS, JUDGE_SPRITE_W, JUDGE_SPRITE_H } from './judge-atlas.js';
 import { linearFadeIn, linearFadeOut, padBounceOffset } from './renderer-math.js';
+import {
+  type JudgmentFlash,
+  JUDGMENT_FLASH_LIFE_MS,
+} from './judgment-flash-model.js';
 import type { JudgmentKind, Rank } from '@dtxmania/dtx-core';
 import type { LaneValue } from '@dtxmania/input';
+
+export type { JudgmentFlash } from './judgment-flash-model.js';
 
 export const CANVAS_W = 1280;
 export const CANVAS_H = 720;
@@ -23,18 +29,6 @@ function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 1) + '…';
 }
 
-export interface JudgmentFlash {
-  text: string;
-  /** Raw judgment kind, used to look up the sprite in JUDGE_ROWS. */
-  judgment?: JudgmentKind;
-  color: string;
-  lane: LaneValue;
-  spawnedMs: number;
-  /** Hit-time delta in ms. Negative = player pressed early (FAST),
-   * positive = late (SLOW). `undefined` for MISS (no user press). */
-  deltaMs?: number;
-}
-
 export interface HitFlash {
   lane: LaneValue;
   spawnedMs: number;
@@ -46,7 +40,9 @@ export interface RenderState {
   combo: number;
   score: number;
   maxCombo: number;
-  judgmentFlash: JudgmentFlash | null;
+  /** Active per-lane judgment pops. One entry per lane (a chord shows
+   * several at once); expired entries are pruned by the writer. */
+  judgmentFlashes: JudgmentFlash[];
   hitFlashes: HitFlash[];
   status: 'idle' | 'playing' | 'finished';
   titleLine: string;
@@ -154,7 +150,7 @@ export class Renderer {
   private judgeLineY = DEFAULT_JUDGE_LINE_Y;
   /** False = chips fall top→bottom (DTX default). True = chips rise. */
   private reverseScroll = false;
-  /** When true, drawJudgmentFlash surfaces a small "FAST" / "SLOW"
+  /** When true, drawJudgmentFlashes surfaces a small "FAST" / "SLOW"
    * label on top of the judgment text. Controlled by config.showFastSlow. */
   private showFastSlow = false;
   /** Symmetric dead-band in ms; abs(delta) ≤ this → no label even
@@ -502,7 +498,7 @@ export class Renderer {
     this.drawPedalFlash(state);   // wide red bar — sits behind per-lane radial
     this.drawHitFlashes(state);
     this.drawHUD(state);
-    this.drawJudgmentFlash(state);
+    this.drawJudgmentFlashes(state);
     this.drawToast(state);        // highest z — pinned top-center, both desktop & VR
     ctx.restore();
   }
@@ -802,19 +798,28 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawJudgmentFlash(state: RenderState): void {
-    if (!state.judgmentFlash) return;
+  /** Paint every active per-lane judgment pop. Each lane is independent,
+   * so a chord (multiple lanes hit in the same frame) shows one pop per
+   * lane at once — the old single-slot field could only ever surface the
+   * last lane written that frame. */
+  private drawJudgmentFlashes(state: RenderState): void {
+    for (const flash of state.judgmentFlashes) {
+      this.drawOneJudgmentFlash(state.songTimeMs, flash);
+    }
+  }
+
+  private drawOneJudgmentFlash(songTimeMs: number, flash: JudgmentFlash): void {
     const ctx = this.ctx;
-    const age = state.songTimeMs - state.judgmentFlash.spawnedMs;
-    const life = 400;
+    const age = songTimeMs - flash.spawnedMs;
+    const life = JUDGMENT_FLASH_LIFE_MS;
     if (age < 0 || age > life) return;
-    const lane = LANE_LAYOUT.find((l) => l.lane === state.judgmentFlash!.lane);
+    const lane = LANE_LAYOUT.find((l) => l.lane === flash.lane);
     if (!lane) return;
     const alpha = linearFadeOut(age, life);
     const floatUp = linearFadeIn(age, life) * 20;
     const y = this.judgeLineY + 36 - floatUp;
 
-    const judgment = state.judgmentFlash.judgment;
+    const judgment = flash.judgment;
     const row = judgment !== undefined ? JUDGE_ROWS[judgment] : undefined;
     if (this.judgeImage && this.judgeImage.complete && row) {
       // Sprite path: draw the PERFECT / GREAT / etc. image + optional tint
@@ -844,12 +849,12 @@ export class Renderer {
 
     // Fallback text if the skin didn't load.
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = state.judgmentFlash.color;
+    ctx.fillStyle = flash.color;
     ctx.font = 'bold 20px ui-monospace, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(state.judgmentFlash.text, lane.x + lane.width / 2, y);
+    ctx.fillText(flash.text, lane.x + lane.width / 2, y);
     ctx.globalAlpha = 1;
-    this.drawFastSlowLabel(state, lane, y, alpha);
+    this.drawFastSlowLabel(flash, lane, y, alpha);
   }
 
   /**
@@ -913,17 +918,16 @@ export class Renderer {
    * Paint a compact "FAST" / "SLOW" tag above the judgment text when
    * the hit was outside the symmetric dead-band. Applies to both the
    * sprite path and the text fallback — called at the end of
-   * drawJudgmentFlash so it always sits on top.
+   * drawOneJudgmentFlash so it always sits on top.
    */
   private drawFastSlowLabel(
-    state: RenderState,
+    flash: JudgmentFlash,
     lane: LaneSpec,
     y: number,
     alpha: number
   ): void {
     if (!this.showFastSlow) return;
-    const flash = state.judgmentFlash;
-    if (!flash || flash.deltaMs === undefined) return;
+    if (flash.deltaMs === undefined) return;
     const absDelta = Math.abs(flash.deltaMs);
     if (absDelta <= this.fastSlowDeadMs) return;
     const early = flash.deltaMs < 0;

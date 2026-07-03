@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Judgment } from '@dtxmania/dtx-core';
+import { Lane } from '@dtxmania/input';
 import {
   applyGaugeDelta,
   gaugeDeltaFor,
@@ -13,6 +14,8 @@ import {
   shouldLoopFire,
   snapSongMsToMeasure,
   SONG_END_TAIL_MS,
+  stepTriggerKick,
+  TRIGGER_KICK_LANE_BY_HAND,
   updateCancelEdgeState,
   VR_AUTO_RETURN_DWELL_MS,
   type VrAutoReturnInput,
@@ -348,5 +351,229 @@ describe('updateCancelEdgeState — VR face-button edge detect', () => {
     const out = updateCancelEdgeState({ prev: [true, false], pressed: [true, true], active: true });
     expect(out.firedBy).toBe(1);
     expect(out.next).toEqual([true, true]);
+  });
+});
+
+describe('stepTriggerKick — VR trigger → kick-pedal edge detect', () => {
+  it('constants: left hand drives LP, right hand drives BD', () => {
+    // Pin the lane routing — swapping these would silently invert the
+    // player's feet. The left-foot LBD chips are projected onto BD by
+    // channelToLane, so after projection BD carries both feet's bass
+    // notes and the right trigger plays them all.
+    expect(TRIGGER_KICK_LANE_BY_HAND.left).toBe(Lane.LP);
+    expect(TRIGGER_KICK_LANE_BY_HAND.right).toBe(Lane.BD);
+  });
+
+  it('inactive → latches track raw pressed state, no fires', () => {
+    // Not playing (menu / result screen). Unlike updateCancelEdgeState
+    // (which resets latches), the latch follows the physical trigger so
+    // a pull that started while inactive can't edge-fire later.
+    expect(
+      stepTriggerKick({
+        prev: [false, false],
+        prevConnected: [true, true],
+        pressed: [true, false],
+        handedness: ['left', 'right'],
+        active: false,
+      })
+    ).toEqual({ next: [true, false], fires: [] });
+    expect(
+      stepTriggerKick({
+        prev: [true, true],
+        prevConnected: [true, true],
+        pressed: [false, false],
+        handedness: ['left', 'right'],
+        active: false,
+      })
+    ).toEqual({ next: [false, false], fires: [] });
+  });
+
+  it('trigger held across the menu → play transition does not fire', () => {
+    // The VR menu confirms the song pick with the SAME trigger. If the
+    // player is still holding it on the first 'playing' frame, that
+    // stale pull must not register as a kick — they release and
+    // re-pull to play the pedal.
+    const menuFrame = stepTriggerKick({
+      prev: [false, false],
+      prevConnected: [true, true],
+      pressed: [true, false], // pulling "play song" in the menu
+      handedness: ['left', 'right'],
+      active: false,
+    });
+    const firstPlayingFrame = stepTriggerKick({
+      prev: menuFrame.next,
+      prevConnected: [true, true],
+      pressed: [true, false], // still holding
+      handedness: ['left', 'right'],
+      active: true,
+    });
+    expect(firstPlayingFrame.fires).toEqual([]);
+    // Release, then a fresh pull fires normally.
+    const released = stepTriggerKick({
+      prev: firstPlayingFrame.next,
+      prevConnected: [true, true],
+      pressed: [false, false],
+      handedness: ['left', 'right'],
+      active: true,
+    });
+    const freshPull = stepTriggerKick({
+      prev: released.next,
+      prevConnected: [true, true],
+      pressed: [true, false],
+      handedness: ['left', 'right'],
+      active: true,
+    });
+    expect(freshPull.fires).toEqual([{ slot: 0, lane: Lane.LP, key: 'xr-trigger-left' }]);
+  });
+
+  it('left-hand rising edge → LP fire with that slot + debug key', () => {
+    const out = stepTriggerKick({
+      prev: [false, false],
+      prevConnected: [true, true],
+      pressed: [true, false],
+      handedness: ['left', 'right'],
+      active: true,
+    });
+    expect(out.next).toEqual([true, false]);
+    expect(out.fires).toEqual([{ slot: 0, lane: Lane.LP, key: 'xr-trigger-left' }]);
+  });
+
+  it('right-hand rising edge → BD fire', () => {
+    const out = stepTriggerKick({
+      prev: [false, false],
+      prevConnected: [true, true],
+      pressed: [false, true],
+      handedness: ['left', 'right'],
+      active: true,
+    });
+    expect(out.next).toEqual([false, true]);
+    expect(out.fires).toEqual([{ slot: 1, lane: Lane.BD, key: 'xr-trigger-right' }]);
+  });
+
+  it('lane follows handedness, not slot order (swapped connect order)', () => {
+    // WebXR does not guarantee slot 0 = left hand. With the right hand
+    // in slot 0, its trigger must still play BD.
+    const out = stepTriggerKick({
+      prev: [false, false],
+      prevConnected: [true, true],
+      pressed: [true, false],
+      handedness: ['right', 'left'],
+      active: true,
+    });
+    expect(out.fires).toEqual([{ slot: 0, lane: Lane.BD, key: 'xr-trigger-right' }]);
+  });
+
+  it('held trigger → no re-fire; release re-arms', () => {
+    const held = stepTriggerKick({
+      prev: [true, false],
+      prevConnected: [true, true],
+      pressed: [true, false],
+      handedness: ['left', 'right'],
+      active: true,
+    });
+    expect(held.fires).toEqual([]);
+    expect(held.next).toEqual([true, false]);
+
+    const released = stepTriggerKick({
+      prev: held.next,
+      prevConnected: [true, true],
+      pressed: [false, false],
+      handedness: ['left', 'right'],
+      active: true,
+    });
+    expect(released.fires).toEqual([]);
+    expect(released.next).toEqual([false, false]);
+
+    const pressAgain = stepTriggerKick({
+      prev: released.next,
+      prevConnected: [true, true],
+      pressed: [true, false],
+      handedness: ['left', 'right'],
+      active: true,
+    });
+    expect(pressAgain.fires).toEqual([{ slot: 0, lane: Lane.LP, key: 'xr-trigger-left' }]);
+  });
+
+  it('simultaneous double-kick → BOTH triggers fire in one frame', () => {
+    // Unlike the cancel edge (first-press wins), a double-kick is two
+    // independent pedal hits and must produce two lane events.
+    const out = stepTriggerKick({
+      prev: [false, false],
+      prevConnected: [true, true],
+      pressed: [true, true],
+      handedness: ['left', 'right'],
+      active: true,
+    });
+    expect(out.next).toEqual([true, true]);
+    expect(out.fires).toHaveLength(2);
+    expect(out.fires).toContainEqual({ slot: 0, lane: Lane.LP, key: 'xr-trigger-left' });
+    expect(out.fires).toContainEqual({ slot: 1, lane: Lane.BD, key: 'xr-trigger-right' });
+  });
+
+  it("handedness 'none' (trackers) → latches but never fires", () => {
+    const out = stepTriggerKick({
+      prev: [false, false],
+      prevConnected: [true, true],
+      pressed: [true, true],
+      handedness: ['none', 'none'],
+      active: true,
+    });
+    expect(out.fires).toEqual([]);
+    // Still latched: if handedness resolves while the trigger stays
+    // held, the press must not retro-fire on a later frame.
+    expect(out.next).toEqual([true, true]);
+
+    const laterWithHands = stepTriggerKick({
+      prev: out.next,
+      prevConnected: [true, true],
+      pressed: [true, true],
+      handedness: ['left', 'right'],
+      active: true,
+    });
+    expect(laterWithHands.fires).toEqual([]);
+  });
+
+  it('trigger already squeezed when a source (re)connects → seeds, no phantom fire', () => {
+    // Re-entering VR mid-song (or a controller reconnecting after a
+    // battery drop) delivers a slot that was pressed=false (masked by
+    // the null source) and is suddenly pressed=true. The first
+    // observed frame adopts the state without firing — the pull
+    // predates observation, so it isn't a kick.
+    const firstObserved = stepTriggerKick({
+      prev: [false, false],
+      prevConnected: [false, false],
+      pressed: [true, true],
+      handedness: ['left', 'right'],
+      active: true,
+    });
+    expect(firstObserved.fires).toEqual([]);
+    expect(firstObserved.next).toEqual([true, true]);
+
+    // Still holding on the next (now-connected) frame: latched, silent.
+    const stillHeld = stepTriggerKick({
+      prev: firstObserved.next,
+      prevConnected: [true, true],
+      pressed: [true, true],
+      handedness: ['left', 'right'],
+      active: true,
+    });
+    expect(stillHeld.fires).toEqual([]);
+
+    // Release then a fresh pull fires normally.
+    const released = stepTriggerKick({
+      prev: stillHeld.next,
+      prevConnected: [true, true],
+      pressed: [false, false],
+      handedness: ['left', 'right'],
+      active: true,
+    });
+    const freshPull = stepTriggerKick({
+      prev: released.next,
+      prevConnected: [true, true],
+      pressed: [true, false],
+      handedness: ['left', 'right'],
+      active: true,
+    });
+    expect(freshPull.fires).toEqual([{ slot: 0, lane: Lane.LP, key: 'xr-trigger-left' }]);
   });
 });

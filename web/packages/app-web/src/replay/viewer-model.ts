@@ -57,7 +57,7 @@ export interface ActiveJudgmentFlash {
   judgment: JudgmentKind;
   spawnedMs: number;
   /** ms offset from chip's playbackTimeMs. Null only for strays, but
-   * `replayActiveJudgmentFlash` filters strays so non-null in practice;
+   * `replayActiveJudgmentFlashes` filters strays so non-null in practice;
    * typed as `number | null` to match `HitEvent.lagMs`. */
   deltaMs: number | null;
 }
@@ -117,31 +117,38 @@ export function replayActiveHitFlashes(
   return out;
 }
 
-/** The most recent matched-chip hit at or before `currentSongTimeMs`, if
- *  still within `lifeMs` (defaults to `JUDGMENT_FLASH_LIFE_MS`).
- *  Strays are skipped — live play doesn't paint a judgment flash for
- *  strays, just the pad flash. Returns null when no eligible hit. */
-export function replayActiveJudgmentFlash(
+/** One judgment flash per lane, each the most recent matched-chip hit on
+ *  that lane still within `lifeMs` (defaults to `JUDGMENT_FLASH_LIFE_MS`).
+ *  Mirrors the live game's per-lane judgment model (`upsertLaneFlash`): a
+ *  chord across lanes shows one pop per lane at once, not just the single
+ *  latest hit. Strays (`chipIndex === -1`) are skipped — live play paints
+ *  no judgment flash for them, only the pad flash. Empty when no eligible
+ *  hit; callers treat the result as an unordered set. */
+export function replayActiveJudgmentFlashes(
   replay: Replay,
   currentSongTimeMs: number,
   lifeMs: number = JUDGMENT_FLASH_LIFE_MS,
-): ActiveJudgmentFlash | null {
-  let latest: HitEvent | null = null;
+): ActiveJudgmentFlash[] {
+  const latestByLane = new Map<LaneValue, HitEvent>();
   for (const h of replay.hits) {
     if (h.chipIndex === -1) continue;
     if (h.songTimeMs > currentSongTimeMs) continue;
     if (currentSongTimeMs - h.songTimeMs > lifeMs) continue;
-    if (latest === null || h.songTimeMs >= latest.songTimeMs) {
-      latest = h;
+    const prev = latestByLane.get(h.lane);
+    if (prev === undefined || h.songTimeMs >= prev.songTimeMs) {
+      latestByLane.set(h.lane, h);
     }
   }
-  if (latest === null) return null;
-  return {
-    lane: latest.lane,
-    judgment: latest.judgment,
-    spawnedMs: latest.songTimeMs,
-    deltaMs: latest.lagMs,
-  };
+  const out: ActiveJudgmentFlash[] = [];
+  for (const h of latestByLane.values()) {
+    out.push({
+      lane: h.lane,
+      judgment: h.judgment,
+      spawnedMs: h.songTimeMs,
+      deltaMs: h.lagMs,
+    });
+  }
+  return out;
 }
 
 /** Hits whose `songTimeMs` falls in `(fromMs, toMs]` — exclusive low,

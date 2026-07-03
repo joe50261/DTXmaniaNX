@@ -15,6 +15,7 @@ import {
   type ChartRecord,
   type LibraryNode,
   type ScoreSnapshot,
+  type SerializedIndex,
   type SongEntry,
   type SongIndex,
 } from '@dtxmania/dtx-core';
@@ -41,6 +42,11 @@ import {
   saveRootHandle,
   saveScanCache,
 } from './fs/handle-store.js';
+import {
+  clearFolderCache,
+  loadFolderCache,
+  saveFolderCache,
+} from './fs/folder-cache.js';
 import { loadSkin } from './skin.js';
 import type { SkinTextures } from './renderer.js';
 import { runCalibration } from './calibrate.js';
@@ -353,6 +359,11 @@ pickBtn.addEventListener('click', () => run(onPick));
 demoBtn.addEventListener('click', () => run(playDemo));
 forgetBtn.addEventListener('click', () =>
   run(async () => {
+    // Remove the on-disk cache we wrote into the folder before we let go of
+    // the handle — "Forget" should clean up our own artifact, not leave an
+    // orphaned file behind. Best-effort (needs write permission + a live
+    // backend); a read-only grant just leaves the inert JSON in place.
+    if (library) await clearFolderCache(library.backend);
     await clearRootHandle();
     await clearScanCache().catch(() => {});
     // Medals belong to the library the player is switching away from;
@@ -373,7 +384,10 @@ forgetBtn.addEventListener('click', () =>
 rescanBtn.addEventListener('click', () =>
   run(async () => {
     if (!library) return;
+    // Drop both cache copies so a stale index can't be read back before the
+    // fresh scan below overwrites them.
     await clearScanCache().catch(() => {});
+    await clearFolderCache(library.backend);
     await scanIntoLibrary(library.handle, { forceRescan: true });
   })
 );
@@ -671,6 +685,13 @@ function refreshCalibrateLabel(): void {
 }
 
 async function init(): Promise<void> {
+  // Ask for persistent storage up front. Our IndexedDB holds the picked
+  // directory handle AND the scan cache; if it stays "best-effort" the Quest
+  // browser evicts it between sessions, losing both and forcing a full
+  // re-pick + rescan every launch. This is the root cause of the "cache
+  // keeps getting invalidated" bug. Best-effort + idempotent.
+  void requestPersistentStorage();
+
   if (!('showDirectoryPicker' in window)) {
     pickBtn.disabled = true;
     setStatus(
@@ -682,6 +703,11 @@ async function init(): Promise<void> {
   const stored = await loadRootHandle().catch(() => null);
   if (!stored) return;
 
+  // Gate the auto-scan on READ — that's all the app needs to serve the
+  // library, so a user who granted only read (or whose install persisted a
+  // read grant) still boots straight into their songs without a forced
+  // reconnect. Write access for the folder cache is pursued separately, on a
+  // gesture, and is never required.
   const perm = await safeQueryPermission(stored);
   forgetBtn.style.display = 'inline-block';
 
@@ -693,7 +719,7 @@ async function init(): Promise<void> {
       `Saved folder: "${stored.name}". Click Reconnect (a user gesture is required to re-grant access).`
     );
     onPick = async () => {
-      const granted = await safeRequestPermission(stored);
+      const granted = await regrantFolderAccess(stored);
       if (granted !== 'granted') {
         setStatus('Permission denied. Pick the folder again to continue.');
         pickBtn.textContent = 'Pick folder';
@@ -709,16 +735,25 @@ async function init(): Promise<void> {
 async function pickAndScan(): Promise<void> {
   let handle: FileSystemDirectoryHandle;
   try {
-    handle = await window.showDirectoryPicker({ mode: 'read', id: 'dtxmania-songs' });
+    // 'readwrite' so we can drop the durable scan-cache file into the folder.
+    handle = await window.showDirectoryPicker({ mode: 'readwrite', id: 'dtxmania-songs' });
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') return;
     throw e;
   }
+  // We're inside a user gesture here — the best moment to (re)request a
+  // persistent-storage grant, which the browser is far likelier to allow
+  // after engagement than on a cold boot.
+  void requestPersistentStorage();
   await saveRootHandle(handle).catch((e) => console.warn('failed to persist handle', e));
-  // A freshly picked folder always deserves a fresh scan — the cache
-  // belongs to whatever directory we had before.
+  // Drop the IndexedDB cache — its single slot belonged to whatever folder we
+  // had before. We deliberately do NOT force a rescan: the folder we just
+  // picked carries its own durable cache file, so if this folder was scanned
+  // before (this device or another, even after an IDB eviction) we load it
+  // instantly instead of re-walking. A genuinely new folder has no cache file
+  // and falls through to a full scan.
   await clearScanCache().catch(() => {});
-  await scanIntoLibrary(handle, { forceRescan: true });
+  await scanIntoLibrary(handle);
 }
 
 async function scanIntoLibrary(
@@ -728,30 +763,25 @@ async function scanIntoLibrary(
   const backend = new HandleFileSystemBackend(handle);
 
   // Cache path: SongScanner.scan() on Quest 3 is slow enough (~50s/30
-  // songs observed in playtest) to warrant boot-time persistence. We
-  // save the whole SerializedIndex after each successful scan; on
-  // subsequent boots we try the cache first and only fall through to a
-  // fresh walk when the cache is missing, corrupt, or the user hit
-  // "Rescan". Validity isn't mtime-checked — expecting the user to
-  // press Rescan after adding songs keeps the cache simple and the
-  // boot instantaneous.
+  // songs observed in playtest) to warrant boot-time persistence. We save
+  // the SerializedIndex after each successful scan into TWO stores — the
+  // fast IndexedDB slot and a durable JSON file in the Songs folder — and
+  // on subsequent boots load whichever survived, only falling through to a
+  // fresh walk when both are missing/corrupt or the user hit "Rescan".
+  // Validity isn't mtime-checked — expecting the user to press Rescan after
+  // adding songs keeps the cache simple and the boot instantaneous.
   if (!opts.forceRescan) {
-    try {
-      const cached = await loadScanCache();
-      if (cached) {
-        const live = deserializeIndex(cached);
-        await attachRecordsToIndex(live);
-        applyLibrary(handle, backend, live);
-        const ageMin = Math.max(0, Math.round((Date.now() - cached.scannedAtMs) / 60000));
-        setStatus(
-          `Loaded ${live.songs.length} song(s) from cache (scan was ${ageMin} min ago). ` +
-            `Hit Rescan if you changed the folder.`
-        );
-        return;
-      }
-    } catch (e) {
-      console.info('[scan-cache] invalid or incompatible, falling through to full scan', e);
-      await clearScanCache().catch(() => {});
+    const hit = await loadCachedIndex(backend);
+    if (hit) {
+      await attachRecordsToIndex(hit.index);
+      applyLibrary(handle, backend, hit.index);
+      const ageMin = Math.max(0, Math.round((Date.now() - hit.serialized.scannedAtMs) / 60000));
+      const where = hit.source === 'folder' ? 'folder cache' : 'cache';
+      setStatus(
+        `Loaded ${hit.index.songs.length} song(s) from ${where} (scan was ${ageMin} min ago). ` +
+          `Hit Rescan if you changed the folder.`
+      );
+      return;
     }
   }
 
@@ -779,9 +809,64 @@ async function scanIntoLibrary(
   await attachRecordsToIndex(index);
   applyLibrary(handle, backend, index);
   setStatus(`Scanned ${index.songs.length} song(s) in "${handle.name}".`);
-  await saveScanCache(serializeIndex(index)).catch((e) =>
-    console.warn('[scan-cache] failed to persist', e)
+  // serializeIndex strips the per-chart play records that attachRecordsToIndex
+  // just wrote onto the tree (see serializeSongEntry), so both cache copies
+  // stay record-free — the folder file must never carry medals earned on this
+  // device to another whose record store is empty.
+  const serialized = serializeIndex(index);
+  await saveScanCache(serialized).catch((e) =>
+    console.warn('[scan-cache] failed to persist to IndexedDB', e)
   );
+  // Durable copy inside the folder — survives IndexedDB eviction (the Quest
+  // browser evicts best-effort storage between sessions) and travels with a
+  // copied Songs folder. Best-effort: a read-only grant just skips it and
+  // the app keeps working off the IndexedDB cache.
+  const wroteFolder = await saveFolderCache(backend, serialized);
+  if (!wroteFolder) {
+    console.info('[scan-cache] folder copy skipped (folder not writable)');
+  }
+}
+
+/**
+ * Resolve a usable cached index without walking the folder. Tries the
+ * durable folder-resident cache first (tied to this exact folder, survives
+ * IndexedDB eviction and travels with the folder), then the fast IndexedDB
+ * slot. On a hit from one store the other is healed in the background, so a
+ * future eviction — or the same folder opened on another device — is still
+ * covered. Returns null when neither store holds a valid, version-compatible
+ * cache. deserializeIndex throws only on a version mismatch; that's caught
+ * per-store so an incompatible copy is dropped rather than crashing boot.
+ */
+async function loadCachedIndex(
+  backend: HandleFileSystemBackend
+): Promise<{ index: SongIndex; serialized: SerializedIndex; source: 'folder' | 'idb' } | null> {
+  try {
+    const folder = await loadFolderCache(backend);
+    if (folder) {
+      const index = deserializeIndex(folder);
+      // Warm the fast path so the next boot skips even the file read.
+      void saveScanCache(folder).catch(() => {});
+      return { index, serialized: folder, source: 'folder' };
+    }
+  } catch (e) {
+    console.info('[scan-cache] folder copy invalid/incompatible, ignoring', e);
+    await clearFolderCache(backend);
+  }
+
+  try {
+    const idb = await loadScanCache();
+    if (idb) {
+      const index = deserializeIndex(idb);
+      // Persist a durable copy so the next IndexedDB eviction is survivable.
+      void saveFolderCache(backend, idb);
+      return { index, serialized: idb, source: 'idb' };
+    }
+  } catch (e) {
+    console.info('[scan-cache] IndexedDB copy invalid/incompatible, ignoring', e);
+    await clearScanCache().catch(() => {});
+  }
+
+  return null;
 }
 
 /** Shared "the library is now X" commit step used by both cache-hit and
@@ -820,14 +905,21 @@ async function attachRecordsToIndex(index: SongIndex): Promise<void> {
     records = await loadAllChartRecords();
   } catch (e) {
     console.warn('[records] load failed — rendering without medals', e);
-    return;
+    // Fall through with an empty map so the loop below CLEARS any records,
+    // rather than leaving stale ones in place.
+    records = new Map();
   }
-  if (records.size === 0) return;
+  // Authoritative pass: set each chart's record to the store's value, or
+  // clear it when the store has none. The clear matters because a scan cache
+  // — especially the folder file copied from another device — can carry
+  // records this device never earned; the source serializer strips them, but
+  // clearing here is a belt-and-suspenders guard against a legacy cache blob.
   const visit = (node: LibraryNode): void => {
     if (node.type === 'song') {
       for (const chart of node.entry.charts) {
         const rec = records.get(chart.chartPath);
         if (rec) chart.record = rec;
+        else delete chart.record;
       }
     } else {
       for (const c of node.children) visit(c);
@@ -1181,18 +1273,62 @@ function requireEl<T extends HTMLElement>(id: string): T {
   return el;
 }
 
-async function safeQueryPermission(h: FileSystemHandle): Promise<PermissionState | 'unknown'> {
+async function safeQueryPermission(
+  h: FileSystemHandle,
+  mode: 'read' | 'readwrite' = 'read'
+): Promise<PermissionState | 'unknown'> {
   try {
-    return await h.queryPermission({ mode: 'read' });
+    return await h.queryPermission({ mode });
   } catch {
     return 'unknown';
   }
 }
 
-async function safeRequestPermission(h: FileSystemHandle): Promise<PermissionState | 'unknown'> {
+async function safeRequestPermission(
+  h: FileSystemHandle,
+  mode: 'read' | 'readwrite' = 'read'
+): Promise<PermissionState | 'unknown'> {
   try {
-    return await h.requestPermission({ mode: 'read' });
+    return await h.requestPermission({ mode });
   } catch {
     return 'unknown';
+  }
+}
+
+/**
+ * Re-grant access to a saved folder on a user gesture. The app only *needs*
+ * read (the scanner never writes); 'readwrite' is preferred so we can also
+ * persist the durable folder-cache file. So: ask for readwrite first, and if
+ * the user declines the write upgrade, fall back to a read grant rather than
+ * locking them out of a library we can serve read-only. Returns 'granted'
+ * when at least read access is available.
+ */
+async function regrantFolderAccess(h: FileSystemHandle): Promise<PermissionState | 'unknown'> {
+  const rw = await safeRequestPermission(h, 'readwrite');
+  if (rw === 'granted') return 'granted';
+  // Write declined/unavailable — an existing read grant (returning user) is
+  // enough and needs no second prompt; otherwise ask specifically for read.
+  const read = await safeQueryPermission(h, 'read');
+  if (read === 'granted') return 'granted';
+  return safeRequestPermission(h, 'read');
+}
+
+/**
+ * Ask the browser to keep our IndexedDB origin data as *persistent* rather
+ * than *best-effort* storage. Best-effort data (the default) is evicted by
+ * the Quest / Chromium-Android browser under storage pressure or after
+ * inactivity, which wipes the directory handle + scan cache and is the
+ * dominant cause of the "it rescans every session" bug. Idempotent and
+ * best-effort — a denied or unavailable request changes nothing.
+ */
+async function requestPersistentStorage(): Promise<void> {
+  try {
+    const storage = navigator.storage;
+    if (!storage?.persist) return;
+    if (await storage.persisted()) return;
+    const granted = await storage.persist();
+    console.info(`[storage] persistent storage ${granted ? 'granted' : 'not granted'}`);
+  } catch {
+    /* Storage API unavailable — IDB stays best-effort, folder cache still helps. */
   }
 }

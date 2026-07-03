@@ -260,6 +260,38 @@ describe('SongSelectCanvas — canvas-2D panel wiring', () => {
     expect(exitCount).toBe(1);
   });
 
+  it('show() seeds trigger/squeeze latches from buttons already held', () => {
+    // The trigger doubles as a kick pedal during play (stepTriggerKick
+    // in game.ts), so landing on the menu mid-pull — quit, result
+    // return — is routine. While hidden, tick() early-returns and the
+    // latches freeze at stale values; show() must adopt the LIVE
+    // button state so the still-held pull reads as "already handled"
+    // instead of a rising edge that free-aim-activates the focused
+    // chart on the first visible tick.
+    const gl = makeFakeWebGL();
+    const scene = new THREE.Scene();
+    const menu = new SongSelectCanvas(gl as unknown as THREE.WebGLRenderer, scene);
+    const heldSource = {
+      handedness: 'left',
+      gamepad: { buttons: [{ pressed: true }, { pressed: true }] },
+    };
+    (gl.xr.getController(0) as unknown as {
+      dispatchEvent(e: { type: string; data?: unknown }): void;
+    }).dispatchEvent({ type: 'connected', data: heldSource });
+
+    menu.show(
+      makeLibrary(),
+      () => {},
+      () => {},
+      makeDeps(),
+    );
+    const latches = menu.__testButtonLatches();
+    // Slot 0 (held source): both latches seeded pressed. Slot 1 (no
+    // source): seeded released.
+    expect(latches.pressed).toEqual([true, false]);
+    expect(latches.squeezed).toEqual([true, false]);
+  });
+
   it('cycleSortMode walks title→artist→bpm→level→title and reorders entries', () => {
     const gl = makeFakeWebGL();
     const scene = new THREE.Scene();

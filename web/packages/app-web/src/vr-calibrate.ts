@@ -167,6 +167,14 @@ export class VrCalibrate {
     this.beatTimes = [];
     this.result = null;
     this.lastBeatIdx = -1;
+    // Seed the trigger latches from the live button state: the panel is
+    // opened BY a trigger pull (menu footer button), and while hidden
+    // tick() early-returns so the latches are stale. Without seeding,
+    // that same still-held pull would edge-fire on the first visible
+    // tick and click whatever the laser lands on.
+    for (let i = 0; i < 2; i++) {
+      this.wasPressed[i] = this.inputSources[i]?.gamepad?.buttons[0]?.pressed ?? false;
+    }
     this.dirty = true;
     this.paint();
   }

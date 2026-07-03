@@ -48,12 +48,17 @@ import {
   ScoreTracker,
 } from '@dtxmania/dtx-core';
 import { type LaneValue } from '@dtxmania/input';
-import { Renderer, type RenderState, type SkinTextures } from '../renderer.js';
+import {
+  Renderer,
+  type RenderState,
+  type SkinTextures,
+  type JudgmentFlash,
+} from '../renderer.js';
 import { XrControllers, type XrPose } from '../xr-controllers.js';
 import {
   lerpPoseSample,
   replayActiveHitFlashes,
-  replayActiveJudgmentFlash,
+  replayActiveJudgmentFlashes,
 } from './viewer-model.js';
 import { renderReplayAudioOffline } from './render-audio-offline.js';
 import { clampToPoseRange, stampFinishedAtSongMs } from './render-timeline-model.js';
@@ -437,7 +442,18 @@ export async function renderReplayToBlob(
       const snap = tracker.snapshot();
       const rate = finished ? computeAchievementRate(snap) : 0;
       const rank = finished ? computeRank(rate, snap.totalNotes) : 'E';
-      const judgmentFlash = replayActiveJudgmentFlash(replay, songTime);
+      // Per-lane judgment flashes so a chord shows one pop per lane in the
+      // rendered video, matching the live game's `judgmentFlashes` model.
+      const judgmentFlashes = replayActiveJudgmentFlashes(replay, songTime).map(
+        (f): JudgmentFlash => ({
+          text: f.judgment,
+          judgment: f.judgment,
+          color: '#fff',
+          lane: f.lane,
+          spawnedMs: f.spawnedMs,
+          ...(f.deltaMs !== null ? { deltaMs: f.deltaMs } : {}),
+        }),
+      );
       const hitFlashes = replayActiveHitFlashes(replay, songTime);
       const state: RenderState = {
         songTimeMs: songTime,
@@ -445,18 +461,7 @@ export async function renderReplayToBlob(
         combo: snap.combo,
         score: snap.score,
         maxCombo: snap.maxCombo,
-        judgmentFlash: judgmentFlash
-          ? {
-              text: judgmentFlash.judgment,
-              judgment: judgmentFlash.judgment,
-              color: '#fff',
-              lane: judgmentFlash.lane,
-              spawnedMs: judgmentFlash.spawnedMs,
-              ...(judgmentFlash.deltaMs !== null
-                ? { deltaMs: judgmentFlash.deltaMs }
-                : {}),
-            }
-          : null,
+        judgmentFlashes,
         hitFlashes,
         status: finished ? 'finished' : 'playing',
         titleLine: `${song.title} / BPM ${song.baseBpm} / Notes ${snap.totalNotes}`,

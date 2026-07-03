@@ -121,6 +121,7 @@ class ConfigForm {
   private readonly previewVolVal: HTMLSpanElement;
   private readonly gamepadInput: HTMLInputElement;
   private readonly gamepadStatus: HTMLSpanElement;
+  private readonly rumbleInput: HTMLInputElement;
   private readonly midiInput: HTMLInputElement;
   private readonly midiPortSelect: HTMLSelectElement;
   private readonly midiStatusEl: HTMLSpanElement;
@@ -261,6 +262,20 @@ class ConfigForm {
       window.addEventListener('gamepadconnected', () => this.refreshGamepadStatus());
       window.addEventListener('gamepaddisconnected', () => this.refreshGamepadStatus());
     }
+
+    // Master switch for controller vibration on hits.
+    const rm = checkboxRow('Controller rumble (VR haptics)');
+    this.rumbleInput = rm.input;
+    rm.input.addEventListener('change', () => {
+      updateConfig({ rumbleEnabled: rm.input.checked });
+    });
+    inputs.body.appendChild(rm.row);
+
+    const rumbleHint = document.createElement('div');
+    rumbleHint.className = 'config-note';
+    rumbleHint.textContent =
+      'Vibrate the controllers on drum hits. Turn off if the rumble feels wrong or mis-sided.';
+    inputs.body.appendChild(rumbleHint);
 
     const mi = checkboxRow('Enable MIDI drum input');
     this.midiInput = mi.input;
@@ -461,6 +476,7 @@ class ConfigForm {
     this.previewVolVal.textContent = cfg.volumePreview.toFixed(2);
     this.gamepadInput.checked = cfg.gamepadEnabled;
     this.refreshGamepadStatus();
+    this.rumbleInput.checked = cfg.rumbleEnabled;
     this.midiInput.checked = cfg.midiEnabled;
     this.midiPortSelect.value = cfg.midiInputId ?? '';
     this.practiceRateInput.value = String(cfg.practiceRate);

@@ -29,10 +29,14 @@ import {
   CANVAS_W,
   CANVAS_H,
   type RenderState,
-  type JudgmentFlash,
   type HitFlash,
   type SkinTextures,
 } from './renderer.js';
+import {
+  type JudgmentFlash,
+  upsertLaneFlash,
+  pruneJudgmentFlashes,
+} from './judgment-flash-model.js';
 import { applyAutoFire } from './autofire.js';
 import { detectMisses, matchLaneHit } from './matcher.js';
 import { channelToLane, LANE_LAYOUT, laneSpec } from './lane-layout.js';
@@ -47,6 +51,7 @@ import {
   shouldFireVrAutoReturn,
   shouldLoopFire,
   snapSongMsToMeasure,
+  stepTriggerKick,
   updateCancelEdgeState,
   type ResolvedLoopWindow,
 } from './tick-state.js';
@@ -150,7 +155,18 @@ export class Game {
    * because a held button should neither re-fire nor block a press on
    * the other button. Reset whenever play is not active. */
   private loopMarkerPressed: [boolean, boolean] = [false, false];
-  private judgmentFlash: JudgmentFlash | null = null;
+  /** Rising-edge latches for the trigger → kick-pedal mapping, indexed
+   * by controller slot. Kept in Game (not XrControllers) because the
+   * trigger's meaning depends on Game's status — during play it's a
+   * kick pedal, in the VR menu / panels it's the activate button
+   * (handled by SongSelectCanvas / VrConfig / VrCalibrate themselves). */
+  private triggerKickPressed: [boolean, boolean] = [false, false];
+  /** Last frame's "slot has a connected input source" per controller
+   * slot — feeds stepTriggerKick's first-observation seeding so a
+   * trigger already squeezed when a controller (re)connects mid-song
+   * doesn't edge-fire a phantom kick. */
+  private triggerKickConnected: [boolean, boolean] = [false, false];
+  private judgmentFlashes: JudgmentFlash[] = [];
   private hitFlashes: HitFlash[] = [];
   /** Life / skill gauge, 0..1. Filled by hits, drained by misses. Starts at 0.5 so the player has headroom. */
   private gauge = 0.5;
@@ -475,7 +491,7 @@ export class Game {
     this.status = empty.status;
     this.finishedAtMs = empty.finishedAtMs;
     this.finishedReturnHandled = empty.finishedReturnHandled;
-    this.judgmentFlash = empty.judgmentFlash;
+    this.judgmentFlashes = [...empty.judgmentFlashes];
     this.hitFlashes = [...empty.hitFlashes];
     this.playables = [...empty.playables];
     this.measureStartMs = [...empty.measureStartMs];
@@ -626,7 +642,7 @@ export class Game {
     }
     this.engine.seekSongClock(songMs);
     this.scheduleBgm(this.song);
-    this.judgmentFlash = null;
+    this.judgmentFlashes.length = 0;
     this.hitFlashes.length = 0;
     this.loopedAtLeastOnce = true;
   }
@@ -801,6 +817,36 @@ export class Game {
       }
     }
     this.loopMarkerPressed = [rightA, rightB];
+
+    // VR trigger → kick pedals during play. Quest has no foot tracking,
+    // so the index-finger triggers stand in for the feet: left trigger
+    // plays the LP (left pedal) lane, right trigger plays BD (bass
+    // drum; the left-foot LBD chips are projected onto BD too, so the
+    // right trigger covers all of a double-bass chart's kick notes).
+    // Complements the stick-strike BD abstraction and makes
+    // pedal-heavy charts physically playable.
+    //
+    // Sources are read per SLOT (not per hand) because the haptic pulse
+    // must route slot-indexed (see XrControllers.pulseHaptic); the pure
+    // helper resolves each slot's lane from its current handedness.
+    const sources = this.xrControllers.currentInputSources;
+    const kick = stepTriggerKick({
+      prev: this.triggerKickPressed,
+      prevConnected: this.triggerKickConnected,
+      pressed: [
+        sources[0]?.gamepad?.buttons?.[0]?.pressed ?? false,
+        sources[1]?.gamepad?.buttons?.[0]?.pressed ?? false,
+      ],
+      handedness: [sources[0]?.handedness ?? null, sources[1]?.handedness ?? null],
+      active: this.status === 'playing' && this.renderer.inXR,
+    });
+    this.triggerKickPressed = kick.next;
+    this.triggerKickConnected = [sources[0] != null, sources[1] != null];
+    for (const f of kick.fires) {
+      this.xrControllers.pulseHaptic(f.slot);
+      this.handleLaneHit({ lane: f.lane, timestampMs: performance.now(), key: f.key });
+    }
+
     if (!this.song) return;
     const songTime = this.engine.songTimeMs();
 
@@ -814,19 +860,19 @@ export class Game {
     // Miss detection via matcher.ts — pure helper flips `missed = true`
     // on each chip whose POOR window has passed and returns the events
     // so we can apply the tracker / gauge / flash side effects here.
-    // Only the newest miss wins the on-screen judgment flash; tracker
-    // and gauge take every one.
+    // Each lane keeps its own judgment flash, so simultaneous misses on
+    // different lanes all surface; tracker and gauge take every one.
     const missEvents = detectMisses(this.playables, songTime);
     for (const m of missEvents) {
       this.tracker.record(Judgment.MISS);
       this.applyGaugeDelta(Judgment.MISS);
-      this.judgmentFlash = {
+      this.judgmentFlashes = upsertLaneFlash(this.judgmentFlashes, {
         text: 'MISS',
         judgment: Judgment.MISS,
         color: '#ef4444',
         lane: m.lane,
         spawnedMs: songTime,
-      };
+      });
       this.onHitProcessed?.({
         lane: m.lane,
         songTimeMs: songTime,
@@ -898,6 +944,7 @@ export class Game {
     }
 
     this.hitFlashes = this.hitFlashes.filter((f) => songTime - f.spawnedMs < 400);
+    this.judgmentFlashes = pruneJudgmentFlashes(this.judgmentFlashes, songTime);
 
     // Single snapshot — cheap, but avoids fan-out when we add more derived
     // metrics. Derived rank / rate fields are only meaningful on the result
@@ -912,7 +959,7 @@ export class Game {
       combo: snap.combo,
       score: snap.score,
       maxCombo: snap.maxCombo,
-      judgmentFlash: this.judgmentFlash,
+      judgmentFlashes: this.judgmentFlashes,
       hitFlashes: this.hitFlashes,
       status: this.status,
       titleLine: `${this.song.title} / BPM ${this.song.baseBpm} / Notes ${this.playables.length}`,
@@ -1033,7 +1080,9 @@ export class Game {
     const p = this.playables[match.idx]!;
     this.tracker.record(match.judgment);
     this.applyGaugeDelta(match.judgment);
-    this.judgmentFlash = {
+    // Per-lane store: a chord hit across several lanes in the same frame
+    // now shows one judgment pop per lane instead of only the last one.
+    this.judgmentFlashes = upsertLaneFlash(this.judgmentFlashes, {
       text: match.judgment,
       judgment: match.judgment,
       color: judgmentColor(match.judgment),
@@ -1043,7 +1092,7 @@ export class Game {
       // the target (FAST), positive = after (SLOW). Renderer only
       // surfaces the arrow when config.showFastSlow is on.
       deltaMs: match.deltaMs,
-    };
+    });
     this.hitFlashes.push({ lane: event.lane, spawnedMs: songTime });
     this.lastPadHitMs.set(event.lane, performance.now());
 

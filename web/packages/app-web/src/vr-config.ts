@@ -39,14 +39,16 @@ import {
  */
 
 const PANEL_W_PX = 1024;
-// 1024×1260 (world ≈1.6m × 1.97m) fits Audio + Gameplay + Drum kit +
+// 1024×1320 (world ≈1.6m × 2.06m) fits Audio + Gameplay + Drum kit +
 // Auto-play (11-lane grid) + Practice + Diagnostics + Footer without
 // overflow. Drum kit picker adds ~140 px (preset bar + description +
-// seat slider + Sit/Stand quick buttons); panel height grew to
-// match. The previous 1120 px clipped the auto-play grid's last row
-// once the Drum kit section landed above it; the unit-test sweep
+// seat slider + Sit/Stand quick buttons); the Controller rumble
+// toggle adds another 44 px row to Gameplay. The previous 1120 px
+// clipped the auto-play grid's last row once the Drum kit section
+// landed above it, and 1260 px would push the Diagnostics row into
+// the footer strip with the rumble row added; the unit-test sweep
 // over `__testHits()` catches further drift.
-const PANEL_H_PX = 1260;
+const PANEL_H_PX = 1320;
 const PANEL_WORLD_W = 1.6;
 const PANEL_WORLD_H = (PANEL_WORLD_W * PANEL_H_PX) / PANEL_W_PX;
 const PANEL_POS = new THREE.Vector3(0, 1.55, -1.5);
@@ -112,7 +114,7 @@ export const VR_CONFIG_FOOTER_HINTS = Object.freeze({
   line1:
     'Hit the − / + buttons to step a slider. Toggles flip on click. Changes persist instantly.',
   line2:
-    'Loop A / B capture lives on the right controller face buttons during play.',
+    'In-song: triggers play the pedals (left = LP, right = BD); right face buttons capture Loop A / B.',
 });
 
 interface ButtonHit {
@@ -220,6 +222,14 @@ export class VrConfig {
     this.shown = true;
     this.mesh.visible = true;
     for (const l of this.lasers) l.visible = true;
+    // Seed the trigger latches from the live button state: the panel is
+    // opened BY a trigger pull (menu footer button), and while hidden
+    // tick() early-returns so the latches are stale. Without seeding,
+    // that same still-held pull would edge-fire on the first visible
+    // tick and click whatever the laser lands on.
+    for (let i = 0; i < 2; i++) {
+      this.wasPressed[i] = this.inputSources[i]?.gamepad?.buttons[0]?.pressed ?? false;
+    }
     // Repaint on any config change (hotkey-driven loop capture, desktop
     // DOM panel touching the same settings, etc.). Flag dirty; the next
     // tick coalesces into a single paint even if multiple state changes
@@ -252,6 +262,12 @@ export class VrConfig {
    * (e.g. `paintLoopRange` adds no hits on a valid range). */
   __testHits(): ReadonlyArray<{ x: number; y: number; w: number; h: number }> {
     return this.hits.map(({ x, y, w, h }) => ({ x, y, w, h }));
+  }
+
+  /** Test-only: snapshot of the trigger edge latches, so tests can pin
+   * the show()-time seeding without faking an XR session. */
+  __testWasPressed(): boolean[] {
+    return [...this.wasPressed];
   }
 
   hide(): void {
@@ -380,6 +396,9 @@ export class VrConfig {
     );
     y = this.paintToggle(y, 'FAST / SLOW indicator', cfg.showFastSlow, (v) =>
       updateConfig({ showFastSlow: v })
+    );
+    y = this.paintToggle(y, 'Controller rumble', cfg.rumbleEnabled, (v) =>
+      updateConfig({ rumbleEnabled: v })
     );
 
     y += SECTION_GAP;
