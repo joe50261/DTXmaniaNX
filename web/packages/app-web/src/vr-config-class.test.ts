@@ -114,9 +114,10 @@ function autoPlayCellPoint(
 ): { px: number; py: number } {
   // The auto-play cells are emitted in AUTO_PLAY_LANES order, starting
   // AFTER the 3 Audio sliders' step buttons (3 × 2 = 6 hits) and the
-  // Gameplay section's 2 slider-step-pairs + 2 toggles (4 + 2 = 6
-  // hits), plus whatever sections come before. Rather than hard-code
-  // that offset, locate the grid by its 4-column geometry: cells are
+  // Gameplay section's 2 slider-step-pairs + 3 toggles (4 + 3 = 7
+  // hits — Reverse, FAST/SLOW, Controller rumble), plus whatever
+  // sections come before. Rather than hard-code that offset, locate
+  // the grid by its 4-column geometry: cells are
   // ~225 wide + 8 gap, vs the 100 wide toggles / 56 wide step
   // buttons, so the first 4-column cluster is the auto-play grid.
   // This keeps the test robust against section reordering.
@@ -361,6 +362,68 @@ describe('VrConfig — canvas-2D panel wiring', () => {
     panel.__testClickAt(stand.x + stand.w / 2, stand.y + stand.h / 2);
     expect(getConfig().seatYOffset).toBe(SEAT_Y_OFFSET_STAND);
   });
+
+  it('clicking the Controller rumble toggle flips config.rumbleEnabled (issue #16 mitigation)', () => {
+    const { panel } = makeConfigPanel();
+    panel.show(() => {});
+    expect(getConfig().rumbleEnabled).toBe(true);
+
+    // Toggle buttons are the only 100×36 hit-rects (TOGGLE_W × STEP_H).
+    // Paint order: Reverse scroll, FAST/SLOW, Controller rumble,
+    // Preserve pitch, A–B loop, In-VR console log → rumble is index 2.
+    const toggles = panel.__testHits().filter((h) => h.w === 100 && h.h === 36);
+    expect(toggles.length).toBe(6);
+    const rumble = toggles[2]!;
+    const fired = panel.__testClickAt(rumble.x + rumble.w / 2, rumble.y + rumble.h / 2);
+    expect(fired).toBe(true);
+    expect(getConfig().rumbleEnabled).toBe(false);
+    // Neighbouring toggles untouched.
+    expect(getConfig().showFastSlow).toBe(false);
+    expect(getConfig().preservePitch).toBe(true);
+
+    // Symmetric: repaint (hit actions capture the painted value) and
+    // click again → rumble back on.
+    panel.show(() => {});
+    const again = panel.__testHits().filter((h) => h.w === 100 && h.h === 36)[2]!;
+    panel.__testClickAt(again.x + again.w / 2, again.y + again.h / 2);
+    expect(getConfig().rumbleEnabled).toBe(true);
+  });
+
+  it.each([
+    {
+      name: 'valid loop range',
+      cfg: { practiceLoopStartMeasure: 0, practiceLoopEndMeasure: null },
+    },
+    {
+      // Worst case for content height: paintLoopRange's invalid-range
+      // branch renders a second warning line (+22 px vs the valid
+      // branch), pushing the Diagnostics section closest to the footer.
+      // If any layout ever overflows, it overflows here first — so the
+      // guard has to drive this branch, not just the default valid one.
+      name: 'invalid loop range (B ≤ A) — the taller worst case',
+      cfg: { practiceLoopStartMeasure: 4, practiceLoopEndMeasure: 2 },
+    },
+  ])(
+    'content hit-rects stay above the footer strip with %s; only the Back button lives inside it',
+    ({ cfg }) => {
+      // The rumble toggle grew the Gameplay section by one 44 px row; at
+      // the old 1260 px panel height that pushed the Diagnostics toggle
+      // into the footer band where it would sit under the divider line
+      // and hint text. Pin the invariant so the next section growth bumps
+      // PANEL_H_PX instead of silently overlapping.
+      updateConfig(cfg);
+      const { panel } = makeConfigPanel();
+      panel.show(() => {});
+      const hits = panel.__testHits();
+      const inFooter = hits.filter((h) => h.y >= VR_CONFIG_LAYOUT.FOOTER_TOP);
+      expect(inFooter.length).toBe(1);
+      expect(inFooter[0]!.w).toBe(VR_CONFIG_LAYOUT.BACK_BTN_W);
+      for (const h of hits) {
+        if (h === inFooter[0]) continue;
+        expect(h.y + h.h).toBeLessThanOrEqual(VR_CONFIG_LAYOUT.FOOTER_TOP);
+      }
+    },
+  );
 
   it('the Back-to-menu button fires the onClose callback exactly once', () => {
     const { panel } = makeConfigPanel();

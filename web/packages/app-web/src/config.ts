@@ -127,6 +127,14 @@ export interface Config {
    * scene. Off by default — the panel adds visual clutter; players only
    * turn it on when actively diagnosing a VR-only issue. */
   vrLogEnabled: boolean;
+  /** Master switch for controller vibration on drum-pad hits. On by
+   * default. Shipped as a player-facing mitigation for the Quest
+   * Browser WebXR haptic L/R routing bug (#16): with the upstream bug
+   * buzzing the wrong hand, no rumble at all beats wrong-hand rumble —
+   * the mis-sided buzz reads as "I hit the wrong pad" and wrecks the
+   * player's proprioception. Gates every haptic path (pad hits and
+   * trigger-kicks both route through XrControllers.pulseHaptic). */
+  rumbleEnabled: boolean;
   /** Identifier of the active drum-kit preset (see kit-preset.ts).
    * Defaults to the GITADORA Galaxy Wave arcade kit so muscle memory
    * transfers between the sim and a real cabinet. Unknown / removed ids
@@ -174,6 +182,7 @@ export const DEFAULT_CONFIG: Config = Object.freeze({
   practiceLoopStartMeasure: 0,
   practiceLoopEndMeasure: null,
   vrLogEnabled: false,
+  rumbleEnabled: true,
   kitPresetId: DEFAULT_KIT_PRESET_ID,
   seatYOffset: 0,
 });
