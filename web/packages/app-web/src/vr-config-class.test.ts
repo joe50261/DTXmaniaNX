@@ -175,6 +175,25 @@ describe('VrConfig — canvas-2D panel wiring', () => {
     expect(panelMesh.visible).toBe(false);
   });
 
+  it('show() seeds the trigger latches from buttons already held', () => {
+    // The panel is opened BY a trigger pull on the menu's Settings
+    // button; while hidden, tick() early-returns and the latches
+    // freeze. show() must adopt the live pressed state so that same
+    // still-held pull can't edge-fire and click whatever the laser
+    // lands on in the first visible tick.
+    const { panel, gl } = makeConfigPanel();
+    const heldSource = {
+      handedness: 'right',
+      gamepad: { buttons: [{ pressed: true }] },
+    };
+    (gl.controllers[1] as unknown as {
+      dispatchEvent(e: { type: string; data?: unknown }): void;
+    }).dispatchEvent({ type: 'connected', data: heldSource });
+
+    panel.show(() => {});
+    expect(panel.__testWasPressed()).toEqual([false, true]);
+  });
+
   it('paint emits exactly 11 auto-play cells, one per AUTO_PLAY_LANES entry', () => {
     // Count the 4-column cluster of same-width, same-y rects. If a
     // refactor drops a lane or duplicates one, this catches it before
