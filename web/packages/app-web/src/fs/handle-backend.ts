@@ -1,6 +1,19 @@
 import { decodeTextWithBom, type DirEntry, type FileSystemBackend } from '@dtxmania/dtx-core';
 
 /**
+ * The app-side backend contract: the pure `FileSystemBackend` plus the two
+ * write operations the durable folder scan cache needs (`writeText` /
+ * `removeFile`). Both `HandleFileSystemBackend` and the zip-aware wrapper
+ * satisfy it, so `Library.backend` and the scan helpers can be typed against
+ * this instead of a concrete class — the wrapper is not nominally a
+ * `HandleFileSystemBackend` (private fields make TS classes nominal).
+ */
+export interface AppFileSystemBackend extends FileSystemBackend {
+  writeText(path: string, text: string): Promise<void>;
+  removeFile(path: string): Promise<void>;
+}
+
+/**
  * FileSystemBackend implementation backed by a FileSystemDirectoryHandle
  * (the File System Access API). Used for the PWA bootstrap where the user
  * picks their Songs folder via showDirectoryPicker().
@@ -21,7 +34,7 @@ import { decodeTextWithBom, type DirEntry, type FileSystemBackend } from '@dtxma
  */
 const DIR_HANDLE_CACHE_SIZE = 256;
 
-export class HandleFileSystemBackend implements FileSystemBackend {
+export class HandleFileSystemBackend implements AppFileSystemBackend {
   /**
    * POSIX path → resolved DirHandle. Insertion-order Map used as an LRU:
    * on hit we re-insert to move-to-front; when over capacity we evict
@@ -179,6 +192,15 @@ export class HandleFileSystemBackend implements FileSystemBackend {
       if (oldest !== undefined) this.dirCache.delete(oldest);
     }
     this.dirCache.set(key, handle);
+  }
+
+  /**
+   * Resolve `path` to its underlying `File` (a `Blob`). The zip-aware backend
+   * uses this to `slice()` a song-pack archive for ranged reads instead of
+   * pulling the whole (potentially hundreds-of-MB) file through `readFile`.
+   */
+  async openFile(path: string): Promise<File> {
+    return this.getFile(path);
   }
 
   private async getFile(path: string): Promise<File> {

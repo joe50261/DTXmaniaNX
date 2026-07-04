@@ -52,7 +52,9 @@ Two paths:
   `DTXmaniaNX/Songs/` (or any folder with `.dtx` charts / `set.def` song groups).
   The directory handle is persisted in IndexedDB, so revisits only need a
   one-click permission re-grant. Requires Chromium-based browsers (Chrome, Edge,
-  Quest Browser).
+  Quest Browser). A song pack shipped as a `.zip` is read **in place** — the
+  scanner, index cache, and playback all pull charts/audio straight out of the
+  archive, so you can drop a pack zip into `Songs/` without unzipping it.
 - **Play bundled demo** — plays the built-in 4-measure chart at
   `packages/app-web/public/demo.dtx` (mid-song BPM change). Works in any
   browser.
@@ -76,6 +78,7 @@ registered.
 - ✅ Timing (mid-measure BPM changes, multi-measure gaps)
 - ✅ Scoring (judgment windows + 1M-point simplified score)
 - ✅ Scanner + FS Access API backend + IndexedDB handle persistence
+- ✅ Zip song packs — scan / index / play charts + audio straight from a `.zip`, no extraction
 - ✅ Three.js renderer with 2D CanvasTexture overlay (desktop ortho + WebXR)
 - ✅ WAV sample playback via SampleBank (synth is the fallback when #WAV is unbound)
 - ✅ XR session + Touch-controller drum kit + in-headset song picker

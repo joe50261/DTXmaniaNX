@@ -98,6 +98,29 @@ assertions are satisfied by any implementation that compiles. If the
 mock is longer than the code it's testing, do it in Playwright
 instead.
 
+## Zip song packs are a backend view, not a scanner feature
+
+A `.zip` song pack is read in place — never extracted. The mechanism is a
+wrapper backend (`fs/zip-backend.ts` → `ZipAwareBackend`) that layers a
+directory *view* over the real one: a `foo.zip` file is presented to callers
+as a directory (`isDirectory: true`, display name with `.zip` stripped, **path
+kept as `foo.zip`**), and any path descending through a `.zip` segment is
+served from the archive's central directory.
+
+Because the archive looks like a plain directory tree, **`SongScanner` is
+unchanged** — it walks the zip, finds `set.def`/`box.def`/`.dtx`, and builds +
+caches the index exactly as for loose folders. Playback, preview audio, and
+cover art also flow through the backend's `readFile`, so they inflate on demand
+from the same archive.
+
+The zip *format* logic lives in dtx-core (`scanner/zip.ts`) and is pure: it
+takes an injected `ByteSource` (ranged reads) and `Inflate` function, so it
+carries no platform API and is unit-tested against hand-built archives. The
+app layer supplies `Blob.slice()` for genuine ranged reads (a hundreds-of-MB
+pack is never loaded whole) and `DecompressionStream('deflate-raw')` for
+inflation. When you touch either file, keep that seam: no `Blob`/stream types
+in dtx-core.
+
 ## Lint — `pnpm lint`
 
 Two tools enforce the architecture rules above so they don't drift:
