@@ -117,9 +117,10 @@ Dev-dep advisories are caught by two independent layers:
    pnpm run audit:high   # high+ only, useful for noisy baselines
    ```
 
-There are no runtime third-party deps today (all workspace packages are
-`workspace:*`), so the attack surface is limited to the build toolchain
-(`vite`, `vitest`, `typescript`). Upgrades that resolve advisories should
+Runtime third-party deps are deliberately few and vetted — `three` (renderer),
+the `mp4-muxer` / `webm-muxer` replay encoders, and `@zip.js/zip.js` (song-pack
+reader, zero transitive deps). The rest of the attack surface is the build
+toolchain (`vite`, `vitest`, `typescript`). Upgrades that resolve advisories should
 preserve the Volta pin in root `package.json` — bump both together. Check the
 new toolchain version's own `engines.node` floor (e.g. `vite`'s bundler,
 `rolldown`, requires Node `^20.19.0 || >=22.12.0`) and bump the Volta pin to

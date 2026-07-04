@@ -5,15 +5,6 @@ export type { SetDefBlock } from './setdef.js';
 export { parseBoxDef } from './boxdef.js';
 export type { BoxDefMeta } from './boxdef.js';
 export {
-  readZipDirectory,
-  readZipEntry,
-  listZipDir,
-  zipEntryExists,
-  byteSourceFromBytes,
-  normalizeZipPath,
-} from './zip.js';
-export type { ByteSource, Inflate, ZipEntry, ZipDirectory } from './zip.js';
-export {
   SongScanner,
   flattenSongs,
   serializeIndex,

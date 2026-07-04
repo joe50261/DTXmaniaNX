@@ -113,13 +113,21 @@ caches the index exactly as for loose folders. Playback, preview audio, and
 cover art also flow through the backend's `readFile`, so they inflate on demand
 from the same archive.
 
-The zip *format* logic lives in dtx-core (`scanner/zip.ts`) and is pure: it
-takes an injected `ByteSource` (ranged reads) and `Inflate` function, so it
-carries no platform API and is unit-tested against hand-built archives. The
-app layer supplies `Blob.slice()` for genuine ranged reads (a hundreds-of-MB
-pack is never loaded whole) and `DecompressionStream('deflate-raw')` for
-inflation. When you touch either file, keep that seam: no `Blob`/stream types
-in dtx-core.
+Zip parsing + inflation is delegated to **`@zip.js/zip.js`** (don't hand-roll a
+ZIP reader). We import its *native* build (`@zip.js/zip.js/index-native.js`)
+and `configure({ useWebWorkers: false })`, so decompression is the platform
+`DecompressionStream` — no bundled WASM codec, no worker/asset URLs for Vite to
+juggle. Its `BlobReader` does genuine **ranged** reads (`Blob.slice()`):
+opening a pack reads only the central directory, and each member is inflated on
+demand, so a hundreds-of-MB pack is never loaded whole (this is the load-bearing
+reason we use zip.js over `fflate`/`unzipSync`, which need the whole buffer in
+memory). Non-UTF-8 member names are decoded as Shift_JIS to match the DTX
+ecosystem's legacy `set.def` references.
+
+The only zip code we own is the *virtual-filesystem glue* in `fs/zip-tree.ts`
+(flat member list → directory-tree semantics: children-of-prefix, exists,
+path split/normalise) — pure and unit-tested. `dtx-core` knows nothing about
+zip; it just walks what looks like a directory tree.
 
 ## Lint — `pnpm lint`
 
