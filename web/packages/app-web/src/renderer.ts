@@ -297,7 +297,7 @@ export class Renderer {
         });
         const mesh = new THREE.Mesh(new THREE.PlaneGeometry(PAD_SIZE, PAD_SIZE), mat);
         const centerX = spec.x + spec.width / 2;
-        const baseY = -(this.judgeLineY - CANVAS_H / 2);
+        const baseY = this.padRestY(this.judgeLineY);
         mesh.position.set(centerX - CANVAS_W / 2, baseY, 0.5);
         mesh.renderOrder = 2;
         this.playfield.add(mesh);
@@ -354,14 +354,27 @@ export class Renderer {
     this.scrollSpeed = v;
   }
 
-  /** Live setter for the judgment line. The pad meshes are pinned to
+  /**
+   * Rest Y (1280×720 playfield space, Three's +Y-up convention) for a pad
+   * sprite: its TOP edge meets the judgment line so the whole pad hangs
+   * BELOW it. Pads used to be centred on the line, which pushed their top
+   * halves up into the lane where descending chips overlapped them
+   * ("判定線要在圖標上面，不然落下過程就被重疊干擾"). Keeping the pads under
+   * the line leaves the chip fall-path clean; the line stays the fixed hit
+   * reference above the icons.
+   */
+  private padRestY(judgeLineY: number): number {
+    return -(judgeLineY - CANVAS_H / 2) - PAD_SIZE / 2;
+  }
+
+  /** Live setter for the judgment line. The pad meshes are pinned below
    * this line in 3D, so we recompute their baseY + reset position on
    * every change so the visual line and the physical pads track
    * together. Bounce animation works off baseY so it falls through. */
   setJudgeLineY(y: number): void {
     if (this.judgeLineY === y) return;
     this.judgeLineY = y;
-    const baseY = -(y - CANVAS_H / 2);
+    const baseY = this.padRestY(y);
     for (let i = 0; i < this.padMeshes.length; i++) {
       this.padBaseY[i] = baseY;
       const mesh = this.padMeshes[i]!;
@@ -495,41 +508,11 @@ export class Renderer {
     this.drawLanes();
     this.drawJudgmentLine();
     this.drawChips(state);
-    this.drawPedalFlash(state);   // wide red bar — sits behind per-lane radial
     this.drawHitFlashes(state);
     this.drawHUD(state);
     this.drawJudgmentFlashes(state);
     this.drawToast(state);        // highest z — pinned top-center, both desktop & VR
     ctx.restore();
-  }
-
-  /**
-   * BD + LBD strikes paint a full-width red horizontal bar across the
-   * entire drum region at the judgment line, on top of the per-lane
-   * radial flash. Mirrors the canonical DTXmania "腳腳" effect — every
-   * kick punctuates the whole playfield, not just its column.
-   *
-   * Reuses state.hitFlashes (which already records lane + spawnedMs
-   * for every drum strike including kicks) so no new state plumbing.
-   */
-  private drawPedalFlash(state: RenderState): void {
-    const ctx = this.ctx;
-    const life = 200;
-    const first = LANE_LAYOUT[0]!;
-    const last = LANE_LAYOUT[LANE_LAYOUT.length - 1]!;
-    const x = first.x - 8;
-    const w = last.x + last.width - first.x + 16;
-    const barH = 36;
-    const y = this.judgeLineY - barH / 2;
-    for (const flash of state.hitFlashes) {
-      // Only kick lanes contribute to the wide bar.
-      if (flash.lane !== 0x13 /* BD */ && flash.lane !== 0x1c /* LBD */) continue;
-      const age = state.songTimeMs - flash.spawnedMs;
-      if (age < 0 || age > life) continue;
-      const alpha = linearFadeOut(age, life) * 0.55;
-      ctx.fillStyle = `rgba(239, 68, 68, ${alpha})`;
-      ctx.fillRect(x, y, w, barH);
-    }
   }
 
   private drawLanes(): void {
