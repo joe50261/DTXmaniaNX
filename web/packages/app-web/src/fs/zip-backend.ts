@@ -1,9 +1,5 @@
-import {
-  BlobReader,
-  configure,
-  ZipReader,
-  type Entry,
-} from '@zip.js/zip.js/index-native.js';
+import { configure, ZipReader, type Entry } from '@zip.js/zip.js/index-native.js';
+import { ChunkedReader } from './chunked-reader.js';
 import { decodeTextWithBom, type DirEntry } from '@dtxmania/dtx-core';
 import type { AppFileSystemBackend } from './handle-backend.js';
 import {
@@ -36,12 +32,15 @@ import {
  *
  * ## Zip handling is zip.js, not hand-rolled
  *
- * All archive parsing + inflation is delegated to `@zip.js/zip.js`. Its
- * `BlobReader` does genuine **ranged** reads (`Blob.slice()`): opening a pack
- * reads only the end-of-central-directory tail + central directory, and each
- * member's bytes are pulled on demand. A multi-hundred-MB pack is never
- * materialised whole, which matters on a Quest 3. We use the *native* build,
- * so decompression is the platform `DecompressionStream` (every target
+ * All archive parsing + inflation is delegated to `@zip.js/zip.js`. Reads are
+ * **ranged** (`Blob.slice()`): opening a pack reads only the
+ * end-of-central-directory tail + central directory, and each member's bytes
+ * are pulled on demand — a multi-hundred-MB pack is never materialised whole,
+ * which matters on a Quest 3. We back zip.js with a {@link ChunkedReader}
+ * rather than the stock `BlobReader` so its many small per-member reads
+ * coalesce into a few cached chunk fetches instead of hundreds of serialized
+ * File System Access round-trips (see chunked-reader.ts). We use the *native*
+ * build, so decompression is the platform `DecompressionStream` (every target
  * Chromium + Node ≥ 21.2 for tests) — no bundled WASM codec, no web workers.
  *
  * Non-`.zip` paths and the write operations (`writeText` / `removeFile`, used
@@ -56,25 +55,6 @@ configure({ useWebWorkers: false });
 // convention — so in-archive names match the Shift_JIS `set.def` references
 // that point at them. Names flagged UTF-8 (bit 11) still decode as UTF-8.
 const FILENAME_ENCODING = 'shift_jis';
-
-// Background pre-parse (`warmZips`) tuning. `getEntries()` is a CPU-bound,
-// non-yielding parse of the whole central directory (≈20–55 µs/entry — on a
-// Quest 3 a big pack is hundreds of ms), so warming trades a little idle work
-// now for an instant first hover/play later.
-//
-// - CONCURRENCY: how many archives to open at once. Small — the parse itself
-//   is single-threaded JS, so the only thing to overlap is each archive's
-//   ranged central-directory *read* latency; a big pool would just pile blobs
-//   into memory. A per-archive `setTimeout(0)` yield keeps back-to-back parses
-//   from monopolising the frame loop while the wheel is being scrolled.
-// - MEMBER_BUDGET: stop opening *new* archives once this many members are
-//   cached. Each warmed archive holds its entry list for the whole session
-//   (same footprint a lazy first-read would incur, just sooner); the budget
-//   bounds that on a memory-constrained headset when a library has an
-//   unusual number of huge packs. Archives past the budget simply stay cold
-//   and pay their parse lazily on first real read.
-const WARM_CONCURRENCY = 3;
-const WARM_MEMBER_BUDGET = 250_000;
 
 /** The inner backend a `ZipAwareBackend` wraps: the app backend contract plus
  * the ability to hand out a `Blob` for ranged reads. `HandleFileSystemBackend`
@@ -99,66 +79,6 @@ export class ZipAwareBackend implements AppFileSystemBackend {
   private readonly zips = new Map<string, Promise<ZipHandle>>();
 
   constructor(private readonly inner: ZipInnerBackend) {}
-
-  /**
-   * Parse + cache the central directory of every archive referenced by the
-   * given paths *ahead* of the first real read, so the one-time
-   * `getEntries()` cost is paid off the interaction critical path instead of
-   * stalling the first hover-preview / play of each pack.
-   *
-   * Feed it the song folder paths from the freshly-loaded index (cache hit or
-   * fresh scan); paths that don't descend through a `.zip` are ignored and
-   * each distinct archive is opened at most once (it shares the same `zips`
-   * memo real reads use, so warming a pack the scan already opened is free).
-   *
-   * Fire-and-forget: it never rejects. A pack that fails to open is left cold
-   * and retried lazily on first read; opening stops early once
-   * `WARM_MEMBER_BUDGET` members are cached so a pathological library can't
-   * balloon memory. Safe to call more than once — later calls skip
-   * already-warm archives.
-   */
-  async warmZips(paths: Iterable<string>): Promise<void> {
-    const zipPaths = new Set<string>();
-    for (const path of paths) {
-      const route = splitZipPath(path);
-      if (route) zipPaths.add(route.zipPath);
-    }
-    const queue = Array.from(zipPaths);
-    if (queue.length === 0) return;
-
-    let warmedMembers = 0;
-    let stopped = false;
-    const worker = async (): Promise<void> => {
-      for (;;) {
-        if (stopped) return;
-        const next = queue.shift();
-        if (next === undefined) return;
-        try {
-          const { members } = await this.zipHandle(next);
-          warmedMembers += members.length;
-          if (warmedMembers >= WARM_MEMBER_BUDGET) {
-            stopped = true;
-            if (queue.length > 0) {
-              console.info(
-                `[zip] warm budget reached (${warmedMembers} members); ` +
-                  `${queue.length} archive(s) left cold, will open on first read`
-              );
-            }
-          }
-        } catch {
-          // Leave this archive cold — the first real read reopens it (and its
-          // own error surfaces there, where a caller can react).
-        }
-        // Yield between parses so a run of large central directories doesn't
-        // hold the main thread and jank wheel scrolling right after boot.
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
-    };
-
-    await Promise.all(
-      Array.from({ length: Math.min(WARM_CONCURRENCY, queue.length) }, worker)
-    );
-  }
 
   async listDir(path: string): Promise<DirEntry[]> {
     const route = splitZipPath(path);
@@ -248,7 +168,11 @@ export class ZipAwareBackend implements AppFileSystemBackend {
     if (!handle) {
       handle = (async () => {
         const blob = await this.inner.openFile(zipPath);
-        const reader = new ZipReader(new BlobReader(blob), {
+        // ChunkedReader (not the stock BlobReader) so zip.js's many small
+        // ranged reads — one archive is a single File behind the high-latency
+        // File System Access bridge — coalesce into a few cached chunk fetches
+        // instead of hundreds of serialized round-trips per song load.
+        const reader = new ZipReader(new ChunkedReader(blob), {
           filenameEncoding: FILENAME_ENCODING,
         });
         const entries = await reader.getEntries();
