@@ -297,7 +297,7 @@ export class Renderer {
         });
         const mesh = new THREE.Mesh(new THREE.PlaneGeometry(PAD_SIZE, PAD_SIZE), mat);
         const centerX = spec.x + spec.width / 2;
-        const baseY = -(this.judgeLineY - CANVAS_H / 2);
+        const baseY = this.padRestY(this.judgeLineY);
         mesh.position.set(centerX - CANVAS_W / 2, baseY, 0.5);
         mesh.renderOrder = 2;
         this.playfield.add(mesh);
@@ -354,14 +354,27 @@ export class Renderer {
     this.scrollSpeed = v;
   }
 
-  /** Live setter for the judgment line. The pad meshes are pinned to
+  /**
+   * Rest Y (1280×720 playfield space, Three's +Y-up convention) for a pad
+   * sprite: its TOP edge meets the judgment line so the whole pad hangs
+   * BELOW it. Pads used to be centred on the line, which pushed their top
+   * halves up into the lane where descending chips overlapped them
+   * ("判定線要在圖標上面，不然落下過程就被重疊干擾"). Keeping the pads under
+   * the line leaves the chip fall-path clean; the line stays the fixed hit
+   * reference above the icons.
+   */
+  private padRestY(judgeLineY: number): number {
+    return -(judgeLineY - CANVAS_H / 2) - PAD_SIZE / 2;
+  }
+
+  /** Live setter for the judgment line. The pad meshes are pinned below
    * this line in 3D, so we recompute their baseY + reset position on
    * every change so the visual line and the physical pads track
    * together. Bounce animation works off baseY so it falls through. */
   setJudgeLineY(y: number): void {
     if (this.judgeLineY === y) return;
     this.judgeLineY = y;
-    const baseY = -(y - CANVAS_H / 2);
+    const baseY = this.padRestY(y);
     for (let i = 0; i < this.padMeshes.length; i++) {
       this.padBaseY[i] = baseY;
       const mesh = this.padMeshes[i]!;
@@ -493,13 +506,8 @@ export class Renderer {
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
     this.drawLanes();
-    this.drawChips(state);
-    // Judgment line paints AFTER the chips so falling notes pass *behind* it.
-    // Drawn earlier, a chip sitting on the line covers the very marker the
-    // player is aiming at — the line flickers under the descending chips
-    // ("判定線要在圖標上面，不然落下過程就被重疊干擾"). It stays the fixed
-    // reference; the transient hit feedback below still punches through on top.
     this.drawJudgmentLine();
+    this.drawChips(state);
     this.drawHitFlashes(state);
     this.drawHUD(state);
     this.drawJudgmentFlashes(state);
