@@ -30,7 +30,8 @@ import {
 } from './config.js';
 import { GamepadInput, Lane, MidiInput, type LaneValue, type MidiPortInfo } from '@dtxmania/input';
 import { PreviewPlayer } from '@dtxmania/audio-engine';
-import { HandleFileSystemBackend } from './fs/handle-backend.js';
+import { HandleFileSystemBackend, type AppFileSystemBackend } from './fs/handle-backend.js';
+import { ZipAwareBackend } from './fs/zip-backend.js';
 import {
   clearChartRecords,
   clearRootHandle,
@@ -346,7 +347,7 @@ function schedulePreview(song: SongEntry | null): void {
 
 interface Library {
   handle: FileSystemDirectoryHandle;
-  backend: HandleFileSystemBackend;
+  backend: AppFileSystemBackend;
   root: BoxNode;
   songs: SongEntry[];
 }
@@ -760,7 +761,11 @@ async function scanIntoLibrary(
   handle: FileSystemDirectoryHandle,
   opts: { forceRescan?: boolean } = {}
 ): Promise<void> {
-  const backend = new HandleFileSystemBackend(handle);
+  // Zip-aware wrapper: presents any `foo.zip` in the Songs folder as a
+  // browsable directory so the scanner reads charts/audio straight out of the
+  // archive — no extraction, the folder is never modified. Non-zip paths pass
+  // straight through to the handle backend.
+  const backend = new ZipAwareBackend(new HandleFileSystemBackend(handle));
 
   // Cache path: SongScanner.scan() on Quest 3 is slow enough (~50s/30
   // songs observed in playtest) to warrant boot-time persistence. We save
@@ -838,7 +843,7 @@ async function scanIntoLibrary(
  * per-store so an incompatible copy is dropped rather than crashing boot.
  */
 async function loadCachedIndex(
-  backend: HandleFileSystemBackend
+  backend: AppFileSystemBackend
 ): Promise<{ index: SongIndex; serialized: SerializedIndex; source: 'folder' | 'idb' } | null> {
   try {
     const folder = await loadFolderCache(backend);
@@ -874,7 +879,7 @@ async function loadCachedIndex(
  * wire up. */
 function applyLibrary(
   handle: FileSystemDirectoryHandle,
-  backend: HandleFileSystemBackend,
+  backend: AppFileSystemBackend,
   index: SongIndex
 ): void {
   library = { handle, backend, root: index.root, songs: flattenSongs(index.root) };

@@ -98,6 +98,37 @@ assertions are satisfied by any implementation that compiles. If the
 mock is longer than the code it's testing, do it in Playwright
 instead.
 
+## Zip song packs are a backend view, not a scanner feature
+
+A `.zip` song pack is read in place — never extracted. The mechanism is a
+wrapper backend (`fs/zip-backend.ts` → `ZipAwareBackend`) that layers a
+directory *view* over the real one: a `foo.zip` file is presented to callers
+as a directory (`isDirectory: true`, display name with `.zip` stripped, **path
+kept as `foo.zip`**), and any path descending through a `.zip` segment is
+served from the archive's central directory.
+
+Because the archive looks like a plain directory tree, **`SongScanner` is
+unchanged** — it walks the zip, finds `set.def`/`box.def`/`.dtx`, and builds +
+caches the index exactly as for loose folders. Playback, preview audio, and
+cover art also flow through the backend's `readFile`, so they inflate on demand
+from the same archive.
+
+Zip parsing + inflation is delegated to **`@zip.js/zip.js`** (don't hand-roll a
+ZIP reader). We import its *native* build (`@zip.js/zip.js/index-native.js`)
+and `configure({ useWebWorkers: false })`, so decompression is the platform
+`DecompressionStream` — no bundled WASM codec, no worker/asset URLs for Vite to
+juggle. Its `BlobReader` does genuine **ranged** reads (`Blob.slice()`):
+opening a pack reads only the central directory, and each member is inflated on
+demand, so a hundreds-of-MB pack is never loaded whole (this is the load-bearing
+reason we use zip.js over `fflate`/`unzipSync`, which need the whole buffer in
+memory). Non-UTF-8 member names are decoded as Shift_JIS to match the DTX
+ecosystem's legacy `set.def` references.
+
+The only zip code we own is the *virtual-filesystem glue* in `fs/zip-tree.ts`
+(flat member list → directory-tree semantics: children-of-prefix, exists,
+path split/normalise) — pure and unit-tested. `dtx-core` knows nothing about
+zip; it just walks what looks like a directory tree.
+
 ## Lint — `pnpm lint`
 
 Two tools enforce the architecture rules above so they don't drift:

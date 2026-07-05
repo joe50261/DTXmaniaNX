@@ -17,6 +17,7 @@
     "@dtxmania/audio-engine": "workspace:*",
     "@dtxmania/dtx-core": "workspace:*",
     "@dtxmania/input": "workspace:*",
+    "@zip.js/zip.js": "^2.8.26",
     "mp4-muxer": "^5.2.2",
     "three": "^0.160.0",
     "webm-muxer": "^5.1.4"
