@@ -493,43 +493,18 @@ export class Renderer {
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
     this.drawLanes();
-    this.drawJudgmentLine();
     this.drawChips(state);
-    this.drawPedalFlash(state);   // wide red bar — sits behind per-lane radial
+    // Judgment line paints AFTER the chips so falling notes pass *behind* it.
+    // Drawn earlier, a chip sitting on the line covers the very marker the
+    // player is aiming at — the line flickers under the descending chips
+    // ("判定線要在圖標上面，不然落下過程就被重疊干擾"). It stays the fixed
+    // reference; the transient hit feedback below still punches through on top.
+    this.drawJudgmentLine();
     this.drawHitFlashes(state);
     this.drawHUD(state);
     this.drawJudgmentFlashes(state);
     this.drawToast(state);        // highest z — pinned top-center, both desktop & VR
     ctx.restore();
-  }
-
-  /**
-   * BD + LBD strikes paint a full-width red horizontal bar across the
-   * entire drum region at the judgment line, on top of the per-lane
-   * radial flash. Mirrors the canonical DTXmania "腳腳" effect — every
-   * kick punctuates the whole playfield, not just its column.
-   *
-   * Reuses state.hitFlashes (which already records lane + spawnedMs
-   * for every drum strike including kicks) so no new state plumbing.
-   */
-  private drawPedalFlash(state: RenderState): void {
-    const ctx = this.ctx;
-    const life = 200;
-    const first = LANE_LAYOUT[0]!;
-    const last = LANE_LAYOUT[LANE_LAYOUT.length - 1]!;
-    const x = first.x - 8;
-    const w = last.x + last.width - first.x + 16;
-    const barH = 36;
-    const y = this.judgeLineY - barH / 2;
-    for (const flash of state.hitFlashes) {
-      // Only kick lanes contribute to the wide bar.
-      if (flash.lane !== 0x13 /* BD */ && flash.lane !== 0x1c /* LBD */) continue;
-      const age = state.songTimeMs - flash.spawnedMs;
-      if (age < 0 || age > life) continue;
-      const alpha = linearFadeOut(age, life) * 0.55;
-      ctx.fillStyle = `rgba(239, 68, 68, ${alpha})`;
-      ctx.fillRect(x, y, w, barH);
-    }
   }
 
   private drawLanes(): void {
