@@ -159,6 +159,65 @@ describe('ZipAwareBackend', () => {
   });
 });
 
+describe('ZipAwareBackend.warmZips', () => {
+  it('pre-parses each referenced archive once, off the read path', async () => {
+    const inner = new FakeInner();
+    inner.setFile('pack.zip', await packFixture());
+    inner.setFile('other.zip', await makeZip({ 'song/only.dtx': '#TITLE Solo\n' }));
+    const backend = new ZipAwareBackend(inner);
+    const open = vi.spyOn(inner, 'openFile');
+
+    // Feed the song folder paths an index would carry (both archives + a
+    // loose folder that isn't inside any zip).
+    await backend.warmZips(['pack.zip/song-a', 'other.zip/song', 'loose/song']);
+
+    // Each of the two archives opened exactly once; the loose path opened nothing.
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(open.mock.calls.map((c) => c[0]).sort()).toEqual(['other.zip', 'pack.zip']);
+
+    // A real read now hits the warm handle — no second openFile.
+    open.mockClear();
+    const setdef = await backend.readText('pack.zip/song-a/set.def');
+    expect(setdef).toContain('#L1FILE bas.dtx');
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('de-duplicates many paths that resolve to the same archive', async () => {
+    const inner = new FakeInner();
+    inner.setFile('pack.zip', await packFixture());
+    const backend = new ZipAwareBackend(inner);
+    const open = vi.spyOn(inner, 'openFile');
+
+    await backend.warmZips([
+      'pack.zip/song-a',
+      'pack.zip/song-a/bas.dtx',
+      'pack.zip/song-b',
+      'pack.zip',
+    ]);
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores paths that do not descend through a .zip', async () => {
+    const inner = new FakeInner();
+    const backend = new ZipAwareBackend(inner);
+    const open = vi.spyOn(inner, 'openFile');
+    await backend.warmZips(['loose/a.dtx', 'nested/folder/song', '']);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('never rejects when an archive fails to open, and leaves it lazily retryable', async () => {
+    const inner = new FakeInner();
+    // 'broken.zip' is referenced but was never written to the inner backend,
+    // so openFile throws for it. warmZips must swallow that.
+    const backend = new ZipAwareBackend(inner);
+    await expect(backend.warmZips(['broken.zip/song'])).resolves.toBeUndefined();
+
+    // The failed archive wasn't cached, so a later read still tries again
+    // (and surfaces its own error there rather than silently at warm time).
+    await expect(backend.readText('broken.zip/song/x.dtx')).rejects.toThrow();
+  });
+});
+
 describe('SongScanner over a zip song pack', () => {
   it('scans, indexes, and reads chart metadata straight from the archive', async () => {
     const inner = new FakeInner();

@@ -883,6 +883,14 @@ function applyLibrary(
   index: SongIndex
 ): void {
   library = { handle, backend, root: index.root, songs: flattenSongs(index.root) };
+  // Pre-parse each song-pack `.zip`'s central directory in the background now
+  // that the wheel is up. A cached boot never opened these archives, so
+  // without this the first hover-preview / play of each pack would eat the
+  // one-time `getEntries()` cost (hundreds of ms for a big pack on a Quest 3)
+  // on the interaction critical path. Fire-and-forget: warmZips never rejects.
+  if (backend instanceof ZipAwareBackend) {
+    void backend.warmZips(library.songs.map((s) => s.folderPath));
+  }
   pickBtn.textContent = 'Change folder';
   forgetBtn.style.display = 'inline-block';
   rescanBtn.style.display = 'inline-block';
