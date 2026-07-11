@@ -3,6 +3,7 @@ import { installOnScreenLog } from './on-screen-log.js';
 installOnScreenLog();
 
 import {
+  buildMetaCache,
   deserializeIndex,
   dirname,
   flattenSongs,
@@ -11,6 +12,7 @@ import {
   serializeIndex,
   SongScanner,
   type BoxNode,
+  type CachedChartMeta,
   type ChartEntry,
   type ChartRecord,
   type LibraryNode,
@@ -108,6 +110,7 @@ const pickBtn = requireEl<HTMLButtonElement>('pick-folder');
 const demoBtn = requireEl<HTMLButtonElement>('start-demo');
 const forgetBtn = requireEl<HTMLButtonElement>('forget-folder');
 const rescanBtn = requireEl<HTMLButtonElement>('rescan-folder');
+const fullRescanBtn = requireEl<HTMLButtonElement>('full-rescan-folder');
 const calibrateBtn = requireEl<HTMLButtonElement>('calibrate');
 const configBtn = requireEl<HTMLButtonElement>('config-btn');
 const replaysBtn = requireEl<HTMLButtonElement>('replays-btn');
@@ -375,6 +378,7 @@ forgetBtn.addEventListener('click', () =>
     activeGame?.hideSongSelect();
     forgetBtn.style.display = 'none';
     rescanBtn.style.display = 'none';
+    fullRescanBtn.style.display = 'none';
     pickBtn.textContent = 'Pick folder';
     onPick = pickAndScan;
     setStatus('Pick your Songs folder to begin.');
@@ -384,9 +388,29 @@ forgetBtn.addEventListener('click', () =>
 
 rescanBtn.addEventListener('click', () =>
   run(async () => {
-    if (!library) return;
+    if (!library || scanInFlight) return;
+    // Incremental rescan: re-walk the folder tree (that is how added /
+    // removed songs and set.def edits are discovered) but reuse the
+    // header-derived meta of every chart the current library already knows,
+    // so only NEW charts pay a header read. The snapshot comes from the
+    // in-memory tree — it IS the cache content (loaded from cache or fresh
+    // scan) — so no store read races the clears below. Charts edited
+    // in place keep their cached meta; that's what "Full rescan" is for.
+    const metaCache = buildMetaCache(library.songs);
     // Drop both cache copies so a stale index can't be read back before the
     // fresh scan below overwrites them.
+    await clearScanCache().catch(() => {});
+    await clearFolderCache(library.backend);
+    await scanIntoLibrary(library.handle, { forceRescan: true, metaCache });
+  })
+);
+
+fullRescanBtn.addEventListener('click', () =>
+  run(async () => {
+    if (!library || scanInFlight) return;
+    // Full rescan: no meta reuse — every chart header is re-read. The
+    // escape hatch for charts edited in place, which the incremental
+    // path above deliberately trusts by path (see ScanOptions.metaCache).
     await clearScanCache().catch(() => {});
     await clearFolderCache(library.backend);
     await scanIntoLibrary(library.handle, { forceRescan: true });
@@ -757,9 +781,50 @@ async function pickAndScan(): Promise<void> {
   await scanIntoLibrary(handle);
 }
 
+/**
+ * True while a scanIntoLibrary call is running. Scans take tens of seconds
+ * on the target device, so overlapping triggers are realistic (Rescan
+ * clicked during a Full rescan, or vice versa) — and whichever scan
+ * finished LAST would win applyLibrary + both cache stores, silently
+ * replacing a fresh full-rescan index with a stale incremental one. The
+ * scan buttons are disabled while set; the handlers also early-return on
+ * it so a queued click can't clear the caches out from under a running
+ * scan.
+ */
+let scanInFlight = false;
+
 async function scanIntoLibrary(
   handle: FileSystemDirectoryHandle,
-  opts: { forceRescan?: boolean } = {}
+  opts: {
+    forceRescan?: boolean;
+    /** Chart meta from the previous index — turns the walk below into an
+     * incremental rescan where only unknown charts pay a header read. */
+    metaCache?: ReadonlyMap<string, CachedChartMeta>;
+  } = {}
+): Promise<void> {
+  if (scanInFlight) return;
+  scanInFlight = true;
+  rescanBtn.disabled = true;
+  fullRescanBtn.disabled = true;
+  pickBtn.disabled = true;
+  forgetBtn.disabled = true;
+  try {
+    await scanIntoLibraryInner(handle, opts);
+  } finally {
+    scanInFlight = false;
+    rescanBtn.disabled = false;
+    fullRescanBtn.disabled = false;
+    pickBtn.disabled = false;
+    forgetBtn.disabled = false;
+  }
+}
+
+async function scanIntoLibraryInner(
+  handle: FileSystemDirectoryHandle,
+  opts: {
+    forceRescan?: boolean;
+    metaCache?: ReadonlyMap<string, CachedChartMeta>;
+  }
 ): Promise<void> {
   // Zip-aware wrapper: presents any `foo.zip` in the Songs folder as a
   // browsable directory so the scanner reads charts/audio straight out of the
@@ -774,7 +839,9 @@ async function scanIntoLibrary(
   // on subsequent boots load whichever survived, only falling through to a
   // fresh walk when both are missing/corrupt or the user hit "Rescan".
   // Validity isn't mtime-checked — expecting the user to press Rescan after
-  // adding songs keeps the cache simple and the boot instantaneous.
+  // adding songs keeps the cache simple and the boot instantaneous. Rescan
+  // itself is incremental (opts.metaCache reuses known charts' meta);
+  // "Full rescan" re-reads everything.
   if (!opts.forceRescan) {
     const hit = await loadCachedIndex(backend);
     if (hit) {
@@ -809,11 +876,18 @@ async function scanIntoLibrary(
         setStatus(`Scanning "${handle.name}"… reading headers ${done}/${total}`);
       }
     },
+    ...(opts.metaCache ? { metaCache: opts.metaCache } : {}),
   });
   const index = await scanner.scan('');
   await attachRecordsToIndex(index);
   applyLibrary(handle, backend, index);
-  setStatus(`Scanned ${index.songs.length} song(s) in "${handle.name}".`);
+  const stats = index.metaStats;
+  setStatus(
+    stats && stats.reused > 0
+      ? `Scanned ${index.songs.length} song(s) in "${handle.name}" ` +
+          `(${stats.read} new chart(s) read, ${stats.reused} reused from cache).`
+      : `Scanned ${index.songs.length} song(s) in "${handle.name}".`
+  );
   // serializeIndex strips the per-chart play records that attachRecordsToIndex
   // just wrote onto the tree (see serializeSongEntry), so both cache copies
   // stay record-free — the folder file must never carry medals earned on this
@@ -886,6 +960,7 @@ function applyLibrary(
   pickBtn.textContent = 'Change folder';
   forgetBtn.style.display = 'inline-block';
   rescanBtn.style.display = 'inline-block';
+  fullRescanBtn.style.display = 'inline-block';
   // Drive the canvas: setRoot updates the entry list in place; show()
   // (via showSongSelectForActive) lights up the panel and hooks up
   // the preview-audio + chart-launch callbacks. Skip the show() if a
