@@ -388,7 +388,7 @@ forgetBtn.addEventListener('click', () =>
 
 rescanBtn.addEventListener('click', () =>
   run(async () => {
-    if (!library) return;
+    if (!library || scanInFlight) return;
     // Incremental rescan: re-walk the folder tree (that is how added /
     // removed songs and set.def edits are discovered) but reuse the
     // header-derived meta of every chart the current library already knows,
@@ -407,7 +407,7 @@ rescanBtn.addEventListener('click', () =>
 
 fullRescanBtn.addEventListener('click', () =>
   run(async () => {
-    if (!library) return;
+    if (!library || scanInFlight) return;
     // Full rescan: no meta reuse — every chart header is re-read. The
     // escape hatch for charts edited in place, which the incremental
     // path above deliberately trusts by path (see ScanOptions.metaCache).
@@ -781,6 +781,18 @@ async function pickAndScan(): Promise<void> {
   await scanIntoLibrary(handle);
 }
 
+/**
+ * True while a scanIntoLibrary call is running. Scans take tens of seconds
+ * on the target device, so overlapping triggers are realistic (Rescan
+ * clicked during a Full rescan, or vice versa) — and whichever scan
+ * finished LAST would win applyLibrary + both cache stores, silently
+ * replacing a fresh full-rescan index with a stale incremental one. The
+ * scan buttons are disabled while set; the handlers also early-return on
+ * it so a queued click can't clear the caches out from under a running
+ * scan.
+ */
+let scanInFlight = false;
+
 async function scanIntoLibrary(
   handle: FileSystemDirectoryHandle,
   opts: {
@@ -789,6 +801,30 @@ async function scanIntoLibrary(
      * incremental rescan where only unknown charts pay a header read. */
     metaCache?: ReadonlyMap<string, CachedChartMeta>;
   } = {}
+): Promise<void> {
+  if (scanInFlight) return;
+  scanInFlight = true;
+  rescanBtn.disabled = true;
+  fullRescanBtn.disabled = true;
+  pickBtn.disabled = true;
+  forgetBtn.disabled = true;
+  try {
+    await scanIntoLibraryInner(handle, opts);
+  } finally {
+    scanInFlight = false;
+    rescanBtn.disabled = false;
+    fullRescanBtn.disabled = false;
+    pickBtn.disabled = false;
+    forgetBtn.disabled = false;
+  }
+}
+
+async function scanIntoLibraryInner(
+  handle: FileSystemDirectoryHandle,
+  opts: {
+    forceRescan?: boolean;
+    metaCache?: ReadonlyMap<string, CachedChartMeta>;
+  }
 ): Promise<void> {
   // Zip-aware wrapper: presents any `foo.zip` in the Songs folder as a
   // browsable directory so the scanner reads charts/audio straight out of the

@@ -4,7 +4,7 @@ import {
   ZipWriter,
   configure,
 } from '@zip.js/zip.js/index-native.js';
-import { SongScanner, type DirEntry } from '@dtxmania/dtx-core';
+import { buildMetaCache, SongScanner, type DirEntry } from '@dtxmania/dtx-core';
 import { describe, expect, it, vi } from 'vitest';
 import { ZipAwareBackend, type ZipInnerBackend } from './zip-backend.js';
 
@@ -187,5 +187,39 @@ describe('SongScanner over a zip song pack', () => {
     expect(box).toBeDefined();
 
     expect(index.errors).toEqual([]);
+  });
+
+  it('incremental rescan reuses zip-backed charts without inflating them, incl. non-ASCII paths', async () => {
+    // chartPath is the meta-cache key, so it must be byte-identical across
+    // two independently constructed ZipAwareBackend instances (main.ts
+    // builds a fresh one per scanIntoLibrary call). The Japanese directory
+    // name pins non-ASCII member-name decoding: if it ever drifted, every
+    // "incremental" rescan of such a pack would silently re-inflate every
+    // chart — the exact cost this feature exists to remove.
+    const inner = new FakeInner();
+    inner.setFile(
+      'pack.zip',
+      await makeZip({
+        'box.def': '#TITLE My Pack\n',
+        '曲データ/set.def': '#TITLE Nihon Song\n#L1FILE base.dtx\n',
+        '曲データ/base.dtx': '#TITLE Nihon Song\n#ARTIST Alice\n#DLEVEL: 33\n',
+        'song-b/set.def': '#TITLE Song B\n#L1FILE only.dtx\n',
+        'song-b/only.dtx': '#TITLE Song B\n#ARTIST Bob\n#DLEVEL: 42\n',
+      })
+    );
+    const cold = await new SongScanner(new ZipAwareBackend(inner)).scan('');
+    const cache = buildMetaCache(cold.songs);
+    expect(cache.has('pack.zip/曲データ/base.dtx')).toBe(true);
+
+    const backend2 = new ZipAwareBackend(inner); // fresh instance, as on every real rescan
+    const reads = vi.spyOn(backend2, 'readText');
+    const warm = await new SongScanner(backend2, { metaCache: cache }).scan('');
+
+    const chartReads = reads.mock.calls.filter(([p]) => p.endsWith('.dtx'));
+    expect(chartReads).toEqual([]);
+    expect(warm.metaStats).toEqual({ reused: 2, read: 0 });
+    const nihon = warm.songs.find((s) => s.title === 'Nihon Song')!;
+    expect(nihon.artist).toBe('Alice');
+    expect(nihon.charts[0]!.drumLevel).toBe(33);
   });
 });
