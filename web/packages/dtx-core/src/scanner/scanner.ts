@@ -106,6 +106,19 @@ export interface SongIndex {
    * a pre-order DFS of `root`. */
   songs: SongEntry[];
   errors: ScanError[];
+  /** Meta-phase tally for the scan that produced this index: how many chart
+   * headers were served from `ScanOptions.metaCache` vs. actually read from
+   * the backend. Runtime-only (never serialized) — lets the UI report
+   * "N new chart(s) read, M reused" after an incremental rescan. Absent
+   * when the scan ran with `parseMeta: false`. */
+  metaStats?: MetaStats;
+}
+
+export interface MetaStats {
+  /** Charts whose meta came from the cache — no header read. */
+  reused: number;
+  /** Charts whose header was read from the backend (including failed reads). */
+  read: number;
 }
 
 export interface ScanError {
@@ -150,6 +163,20 @@ export interface ScanOptions {
    * backend queueing up. Set to 1 to restore fully sequential behaviour.
    */
   concurrency?: number;
+  /**
+   * Previously-scanned chart meta keyed by chartPath (build one with
+   * `buildMetaCache`). During the meta phase a chart found here skips its
+   * header read and reuses the cached fields — the incremental-rescan fast
+   * path. The directory walk itself still runs in full (it is how added /
+   * removed songs and set.def edits are discovered), so a stale cache can
+   * only ever affect header-derived meta, never which songs exist. Charts
+   * not in the map (new files, or files whose last parse yielded nothing)
+   * are read as usual. Note: entries are trusted by path alone — a chart
+   * *edited in place* keeps its cached meta until a full rescan; per-file
+   * mtime probes on the File System Access API cost about as much as the
+   * read they would save, so validation is deliberately skipped.
+   */
+  metaCache?: ReadonlyMap<string, CachedChartMeta>;
 }
 
 const DEFAULT_SKIP_DIRS = new Set(['system', '$recycle.bin', 'node_modules', '.git']);
@@ -162,9 +189,12 @@ export class SongScanner {
   private readonly onWalkProgress:
     | ((dirsScanned: number, songsFound: number) => void)
     | undefined;
+  private readonly metaCache: ReadonlyMap<string, CachedChartMeta> | undefined;
   private readonly sem: Semaphore;
   private dirsScanned = 0;
   private songsFound = 0;
+  private metaReused = 0;
+  private metaRead = 0;
 
   constructor(private readonly fs: FileSystemBackend, options: ScanOptions = {}) {
     this.skipDirs = new Set(
@@ -174,6 +204,7 @@ export class SongScanner {
     this.parseMeta = options.parseMeta ?? true;
     this.onMetaProgress = options.onMetaProgress;
     this.onWalkProgress = options.onWalkProgress;
+    this.metaCache = options.metaCache;
     this.sem = new Semaphore(Math.max(1, options.concurrency ?? 6));
   }
 
@@ -190,13 +221,17 @@ export class SongScanner {
     // doesn't accumulate numbers across calls.
     this.dirsScanned = 0;
     this.songsFound = 0;
+    this.metaReused = 0;
+    this.metaRead = 0;
     this.onWalkProgress?.(0, 0);
     await this.walk(root, 0, errors);
     const songs = flattenSongs(root);
+    const index: SongIndex = { rootPath, root, songs, errors };
     if (this.parseMeta) {
       await this.fillAllMeta(songs, errors);
+      index.metaStats = { reused: this.metaReused, read: this.metaRead };
     }
-    return { rootPath, root, songs, errors };
+    return index;
   }
 
   // Gated I/O: only the actual backend call holds a semaphore slot, not
@@ -228,6 +263,26 @@ export class SongScanner {
 
   private async fillSongMeta(song: SongEntry, errors: ScanError[]): Promise<void> {
     for (const chart of song.charts) {
+      // Incremental-rescan fast path: a chart already in the meta cache
+      // reuses its fields instead of paying a header read. Song-level
+      // fields keep the same "first chart that declares wins" rule as the
+      // read path below.
+      const cached = this.metaCache?.get(chart.chartPath);
+      if (cached) {
+        if (cached.drumLevel !== undefined) chart.drumLevel = cached.drumLevel;
+        if (cached.bpm !== undefined) chart.bpm = cached.bpm;
+        if (song.artist === undefined && cached.artist !== undefined) song.artist = cached.artist;
+        if (song.genre === undefined && cached.genre !== undefined) song.genre = cached.genre;
+        if (song.bpm === undefined && cached.songBpm !== undefined) song.bpm = cached.songBpm;
+        if (song.preview === undefined && cached.preview !== undefined) song.preview = cached.preview;
+        if (song.preimage === undefined && cached.preimage !== undefined) {
+          song.preimage = cached.preimage;
+        }
+        if (song.comment === undefined && cached.comment !== undefined) song.comment = cached.comment;
+        this.metaReused++;
+        continue;
+      }
+      this.metaRead++;
       try {
         const text = await this.readText(chart.chartPath);
         const parsed = parseDtx(text);
@@ -490,6 +545,54 @@ export function flattenSongs(root: BoxNode): SongEntry[] {
     }
   }
   return out;
+}
+
+/**
+ * Header-derived meta for one chart, snapshotted from a previous scan.
+ * Keyed by chartPath in the map `buildMetaCache` produces. Chart-level
+ * fields (`drumLevel` / `bpm`) come from the chart itself; the rest are the
+ * owning song's merged fields at snapshot time, carried per-chart so a song
+ * whose chart set changed across rescans still restores whatever song-level
+ * meta its surviving charts contributed.
+ */
+export interface CachedChartMeta {
+  drumLevel?: number;
+  bpm?: number;
+  artist?: string;
+  genre?: string;
+  /** The owning SongEntry's `bpm` (distinct from the chart's own `bpm`). */
+  songBpm?: number;
+  preview?: string;
+  preimage?: string;
+  comment?: string;
+}
+
+/**
+ * Snapshot every chart's header-derived meta from a previous scan, keyed by
+ * chartPath, for `ScanOptions.metaCache`. Charts that carry no meta at all —
+ * their last read failed, or the index was scanned with `parseMeta: false` —
+ * get no entry, so the next scan reads them again instead of "reusing"
+ * nothing. Accepts any SongEntry iterable: a live `SongIndex.songs`, a
+ * deserialized cache, whatever the caller has on hand.
+ */
+export function buildMetaCache(songs: Iterable<SongEntry>): Map<string, CachedChartMeta> {
+  const cache = new Map<string, CachedChartMeta>();
+  for (const song of songs) {
+    for (const chart of song.charts) {
+      const meta: CachedChartMeta = {};
+      if (chart.drumLevel !== undefined) meta.drumLevel = chart.drumLevel;
+      if (chart.bpm !== undefined) meta.bpm = chart.bpm;
+      if (song.artist !== undefined) meta.artist = song.artist;
+      if (song.genre !== undefined) meta.genre = song.genre;
+      if (song.bpm !== undefined) meta.songBpm = song.bpm;
+      if (song.preview !== undefined) meta.preview = song.preview;
+      if (song.preimage !== undefined) meta.preimage = song.preimage;
+      if (song.comment !== undefined) meta.comment = song.comment;
+      if (Object.keys(meta).length === 0) continue;
+      cache.set(chart.chartPath, meta);
+    }
+  }
+  return cache;
 }
 
 function blockToSong(block: SetDefBlock, folderPath: string): SongEntry {

@@ -7,14 +7,17 @@ export type { BoxDefMeta } from './boxdef.js';
 export {
   SongScanner,
   flattenSongs,
+  buildMetaCache,
   serializeIndex,
   deserializeIndex,
   INDEX_CACHE_VERSION,
 } from './scanner.js';
 export type {
   BoxNode,
+  CachedChartMeta,
   ChartEntry,
   LibraryNode,
+  MetaStats,
   ScanError,
   ScanOptions,
   SerializedIndex,
