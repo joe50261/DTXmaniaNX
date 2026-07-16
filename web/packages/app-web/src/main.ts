@@ -53,6 +53,7 @@ import {
 import { loadSkin } from './skin.js';
 import type { SkinTextures } from './renderer.js';
 import { runCalibration } from './calibrate.js';
+import { createXrSupportProbe } from './xr-support.js';
 import { loadAudioOffsetMs, saveAudioOffsetMs } from './calibrate-model.js';
 import { createReplayCapture } from './replay/capture-glue.js';
 import { ReplaysPanel } from './replay/replays-panel.js';
@@ -72,14 +73,26 @@ import { RenderWakeLock } from './replay/wake-lock.js';
 import { loadReplay } from './replay/storage.js';
 import { activeToast, showToast } from './hud-toast.js';
 
-// Test hook for the Playwright e2e suite. Toast is painted onto the
-// HUD canvas rather than a DOM node Playwright can locate, so we
-// expose the module singleton directly. Always-installed (a single
-// function reference on window) because the e2e suite runs against
-// `vite preview` which matches a production build.
+// Test hook for the Playwright e2e suite. Toast and the HUD header are
+// painted onto the offscreen HUD canvas rather than a DOM node
+// Playwright can locate, so we expose the module singleton (and a
+// pixel readback that lazily reaches the Game once it exists — plain
+// arrays because typed arrays don't survive page.evaluate
+// serialization). Always-installed (a couple of function references on
+// window) because the e2e suite runs against `vite preview` which
+// matches a production build.
 (
-  window as unknown as { __dtxmaniaTest?: { activeToast: typeof activeToast } }
-).__dtxmaniaTest = { activeToast };
+  window as unknown as {
+    __dtxmaniaTest?: {
+      activeToast: typeof activeToast;
+      readHudPixels: (x: number, y: number, w: number, h: number) => number[] | null;
+    };
+  }
+).__dtxmaniaTest = {
+  activeToast,
+  readHudPixels: (x, y, w, h) =>
+    activeGame ? Array.from(activeGame.readHudPixels(x, y, w, h)) : null,
+};
 import { AudioEngine } from '@dtxmania/audio-engine';
 
 /**
@@ -1256,30 +1269,32 @@ function showSongSelectForActive(fs?: GameFsContext): void {
   );
 }
 
+// Support can't flip between refreshes (only when a device is plugged in /
+// removed — the devicechange listener below invalidates the cache), so the
+// probe answers from cache and logs only when the value actually changes
+// instead of spamming the console on every scan / chart start / VR exit.
+const xrSupport = createXrSupportProbe(navigator.xr, console);
+if (!navigator.xr) {
+  console.info('[xr] navigator.xr absent — Enter VR stays hidden');
+} else {
+  navigator.xr.addEventListener('devicechange', () => {
+    xrSupport.invalidate();
+    refreshXrButton();
+  });
+}
+
 function refreshXrButton(): void {
   // Show Enter VR as soon as there's a library loaded OR a chart in progress,
   // so players can jump into VR and pick a song from the in-headset menu
   // without having to start one on the desktop first.
   const eligible = Boolean(library || activeGame);
-  if (!navigator.xr) {
-    console.info('[xr] navigator.xr absent — Enter VR stays hidden');
-    xrBtn.style.display = 'none';
-    return;
-  }
   if (!eligible) {
     xrBtn.style.display = 'none';
     return;
   }
-  navigator.xr
-    .isSessionSupported('immersive-vr')
-    .then((supported) => {
-      console.info('[xr] isSessionSupported(immersive-vr) =', supported);
-      xrBtn.style.display = supported ? 'inline-block' : 'none';
-    })
-    .catch((e) => {
-      console.warn('[xr] isSessionSupported threw', e);
-      xrBtn.style.display = 'none';
-    });
+  void xrSupport.query().then((supported) => {
+    xrBtn.style.display = supported ? 'inline-block' : 'none';
+  });
 }
 
 console.info('[boot] attaching Enter VR click handler — xrBtn exists =', !!xrBtn);

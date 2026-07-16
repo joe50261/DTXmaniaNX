@@ -67,6 +67,7 @@ import { getConfig, subscribe as subscribeConfig } from './config.js';
 import type { BoxNode } from '@dtxmania/dtx-core';
 import { loadAudioOffsetMs } from './calibrate-model.js';
 import { activeToast } from './hud-toast.js';
+import { buildMetaLine } from './hud-format.js';
 
 const COUNTDOWN_MS = 2000;
 const BGM_CHANNEL = 0x01;
@@ -367,6 +368,12 @@ export class Game {
 
   get inXR(): boolean {
     return this.renderer.inXR;
+  }
+
+  /** Test-only: forwards to `Renderer.readHudPixels` so e2e specs can
+   * probe HUD regions through the `__dtxmaniaTest` window hook. */
+  readHudPixels(x: number, y: number, w: number, h: number): Uint8ClampedArray {
+    return this.renderer.readHudPixels(x, y, w, h);
   }
 
   /** True if loadAndStart has been called at least once. */
@@ -962,7 +969,8 @@ export class Game {
       judgmentFlashes: this.judgmentFlashes,
       hitFlashes: this.hitFlashes,
       status: this.status,
-      titleLine: `${this.song.title} / BPM ${this.song.baseBpm} / Notes ${this.playables.length}`,
+      title: this.song.title,
+      metaLine: buildMetaLine(this.song.baseBpm, this.playables.length),
       songLengthMs: this.song.durationMs,
       gauge: this.gauge,
       lastPadHitMs: this.lastPadHitMs,
