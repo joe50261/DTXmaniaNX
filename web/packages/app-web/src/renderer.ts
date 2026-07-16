@@ -5,6 +5,8 @@ import { PAD_ATLAS, PAD_SIZE, padRect } from './pad-atlas.js';
 import { CHIP_ATLAS_Y, CHIP_ATLAS_H, chipRect } from './chip-atlas.js';
 import { JUDGE_ROWS, JUDGE_SPRITE_W, JUDGE_SPRITE_H } from './judge-atlas.js';
 import { linearFadeIn, linearFadeOut, padBounceOffset } from './renderer-math.js';
+import { fitTextEnd } from './text-fit.js';
+import { coalesceToFrame } from './frame-coalesce.js';
 import {
   type JudgmentFlash,
   JUDGMENT_FLASH_LIFE_MS,
@@ -24,6 +26,10 @@ export const DEFAULT_JUDGE_LINE_Y = 600;
  * runtime via `Renderer.setScrollSpeed`. */
 export const DEFAULT_SCROLL_SPEED = 0.45;
 export const CHIP_H = 14;
+/** In-play HUD header (title + BPM/Notes) left margin and the width it
+ * may occupy — everything left of the first lane, minus a gap. */
+const HUD_HEADER_X = 20;
+const HUD_HEADER_MAX_W = LANE_LAYOUT[0]!.x - HUD_HEADER_X - 12;
 
 function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 1) + '…';
@@ -45,7 +51,11 @@ export interface RenderState {
   judgmentFlashes: JudgmentFlash[];
   hitFlashes: HitFlash[];
   status: 'idle' | 'playing' | 'finished';
-  titleLine: string;
+  /** Chart title alone — the renderer ellipsizes it to the HUD header
+   * column so it can never run under the lane labels. */
+  title: string;
+  /** Pre-formatted `BPM x / Notes y` line shown under the title. */
+  metaLine: string;
   songLengthMs: number;
   /** 0..1 life / skill gauge. Painted as the DTXMania 7_Gauge sprite. */
   gauge: number;
@@ -212,7 +222,13 @@ export class Renderer {
 
     // Resize observer keeps the WebGL backbuffer sharp when the window / canvas
     // changes size (only relevant in desktop mode; XR owns its own framebuffer).
-    const ro = new ResizeObserver(() => this.handleResize());
+    // The actual setSize is deferred to the next animation frame — resizing the
+    // drawing buffer inside the observer callback re-triggers the observer in
+    // the same cycle, which the browser surfaces as a "ResizeObserver loop
+    // completed with undelivered notifications" window.onerror.
+    const ro = new ResizeObserver(
+      coalesceToFrame((cb) => requestAnimationFrame(cb), () => this.handleResize())
+    );
     ro.observe(canvas);
 
     // Drive the render loop. setAnimationLoop is XR-safe (uses XR frame pacing
@@ -462,7 +478,13 @@ export class Renderer {
     if (this.xrSession) return;
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
-    if (w > 0 && h > 0) this.webgl.setSize(w, h, false);
+    if (w <= 0 || h <= 0) return;
+    // setSize mutates the canvas width/height attributes, which can nudge
+    // layout and re-fire the ResizeObserver — skip when nothing changed so
+    // the feedback settles instead of ping-ponging.
+    const current = this.webgl.getSize(new THREE.Vector2());
+    if (current.x === w && current.y === h) return;
+    this.webgl.setSize(w, h, false);
   }
 
   /**
@@ -494,6 +516,13 @@ export class Renderer {
 
   get inXR(): boolean {
     return this.xrSession !== null;
+  }
+
+  /** Test-only: RGBA readback of a region of the offscreen HUD canvas.
+   * The canvas is never DOM-attached, so e2e specs can't reach its
+   * pixels any other way (exposed via the `__dtxmaniaTest` hook). */
+  readHudPixels(x: number, y: number, w: number, h: number): Uint8ClampedArray {
+    return this.ctx.getImageData(x, y, w, h).data;
   }
 
   // ---- Offscreen HUD painting (ported verbatim from the old Canvas 2D renderer) ----
@@ -637,10 +666,19 @@ export class Renderer {
     // bleed through the overlay (live combo text in particular would read
     // wrong once the song's over).
     if (state.status !== 'finished') {
+      // Header column lives LEFT of the first lane (x=263) — title and
+      // meta are ellipsized to that width so a long chart title can
+      // never run under the lane labels.
+      const measure = (s: string): number => ctx.measureText(s).width;
+      ctx.textAlign = 'left';
       ctx.fillStyle = '#aaa';
       ctx.font = '14px ui-monospace, monospace';
-      ctx.textAlign = 'left';
-      ctx.fillText(state.titleLine, 20, 30);
+      ctx.fillText(fitTextEnd(state.title, HUD_HEADER_MAX_W, measure), HUD_HEADER_X, 26);
+      // Same 14px as the title — this canvas doubles as the VR panel
+      // texture, where a 12px row lands under the comfortable-reading
+      // angular size. Colour alone de-emphasizes the meta line.
+      ctx.fillStyle = '#9ca3af';
+      ctx.fillText(fitTextEnd(state.metaLine, HUD_HEADER_MAX_W, measure), HUD_HEADER_X, 44);
 
       const progress = linearFadeIn(state.songTimeMs, state.songLengthMs);
       ctx.fillStyle = '#1f2937';
@@ -699,7 +737,7 @@ export class Renderer {
 
     ctx.fillStyle = '#94a3b8';
     ctx.font = '20px ui-monospace, monospace';
-    ctx.fillText(truncate(state.titleLine, 70), CANVAS_W / 2, 110);
+    ctx.fillText(truncate(`${state.title} / ${state.metaLine}`, 70), CANVAS_W / 2, 110);
 
     // Giant rank letter.
     const rankColors: Record<Rank, string> = {

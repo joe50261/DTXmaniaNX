@@ -19,6 +19,13 @@ export default defineConfig({
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
+    // Sandboxed dev environments ship a system Chromium instead of the
+    // exact build this @playwright/test version would download. Point
+    // PLAYWRIGHT_CHROMIUM_EXECUTABLE at it to skip the download; CI
+    // installs matching browsers and leaves this unset.
+    ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
+      ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } }
+      : {}),
   },
   projects: [
     {

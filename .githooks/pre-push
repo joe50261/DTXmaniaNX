@@ -19,6 +19,9 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 
 # Run from the repo root regardless of where `git push` was invoked.
+# Routed through the package.json script (scripts/audit-bulk.mjs): the
+# registry retired the endpoint `pnpm audit` calls (HTTP 410, 2026-07),
+# so the raw command fails unconditionally until pnpm catches up.
 repo_root="$(git rev-parse --show-toplevel)"
-echo "[pre-push] pnpm audit --audit-level=high (web/)"
-pnpm --dir "$repo_root/web" audit --audit-level=high
+echo "[pre-push] audit --audit-level=high (web/)"
+pnpm --dir "$repo_root/web" run audit:high

@@ -62,6 +62,7 @@ import {
 } from './viewer-model.js';
 import { renderReplayAudioOffline } from './render-audio-offline.js';
 import { clampToPoseRange, stampFinishedAtSongMs } from './render-timeline-model.js';
+import { buildMetaLine } from '../hud-format.js';
 import { throwIfRenderAborted } from './render-job-model.js';
 import { BROADCAST_CAMERA, PLAYFIELD_PANEL } from './broadcast-camera-model.js';
 import type { Replay } from './recorder-model.js';
@@ -464,7 +465,8 @@ export async function renderReplayToBlob(
         judgmentFlashes,
         hitFlashes,
         status: finished ? 'finished' : 'playing',
-        titleLine: `${song.title} / BPM ${song.baseBpm} / Notes ${snap.totalNotes}`,
+        title: song.title,
+        metaLine: buildMetaLine(song.baseBpm, snap.totalNotes),
         songLengthMs: song.durationMs,
         gauge: 0.5,
         lastPadHitMs,
